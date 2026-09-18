@@ -1437,7 +1437,7 @@ function upgrade_new_sw
 			;;
 		postinstall )
 			loginfo "DO postinstall"
-			sh /usr/cnc/bin/post-install.sh
+			run_logged post-install sh /usr/cnc/bin/post-install.sh
 			loginfo "DONE postinstall"
 			STATE=swidone
 			;;
@@ -1446,7 +1446,7 @@ function upgrade_new_sw
 			# Run DB retrofit pass 3 of 3 if app booted.
 			#
 			doswiretropass3
-			sh /usr/cnc/bin/post-install.sh
+			run_logged post-install sh /usr/cnc/bin/post-install.sh
 			STATE=swidone
 			;;
 		swidone )
