@@ -72,7 +72,7 @@ fi
 #Remote database: no local data directory on this server, skip the check
 if [ "$RDB_LOCATION" = "remote" ]
 then
-        echo "RDB location is remote. Skipping local database directory check."
+        loginfo "RDB location is remote. Skipping local database directory check."
         return 0
 fi
 
@@ -83,10 +83,10 @@ then
         RDB_MACHTYPE=$(${INCROOT}/bin/mach_type | tr -d '[:space:]')
         if [ "$RDB_MACHTYPE" != "NMS" ]
         then
-                echo "RDB location is fep and this is a BEP server. Skipping local database directory check."
+                loginfo "RDB location is fep and this is a BEP server. Skipping local database directory check."
                 return 0
         fi
-        echo "RDB location is fep and this is the FEP server. Checking local database directory."
+        loginfo "RDB location is fep and this is the FEP server. Checking local database directory."
 fi
 
 grep data_directory /usr/cnc/features/rdb >/dev/null 2>&1
@@ -99,17 +99,17 @@ fi
 
 #Check if data directory exists or not
 if [ -d "$PGDATA" ]; then
-    echo "Database Directory Exists at $PGDATA"
+    loginfo "Database Directory Exists at $PGDATA"
 elif [ -f ${INCROOT}/rdb/backup/.RESTORE ]; then
-    echo "RDB Database should be restored from backup"
+    loginfo "RDB Database should be restored from backup"
 else
-    echo " Database directory doesn't exist. Exiting now."
+    loginfo " Database directory doesn't exist. Exiting now."
     exit 1;
 fi
 
 #Get PostgreSQL version
 PG_VERSION=$(/usr/cnc/bin/rcmd cat "$PGDATA/PG_VERSION")
-echo "PostgreSQL version is $PG_VERSION"
+loginfo "PostgreSQL version is $PG_VERSION"
 }
 
 
@@ -124,7 +124,7 @@ case `uname -m` in
         ARCHTYPE="LINUX"
         ;;
     *)
-        echo "ERROR: Unsupported Linux architecture: uname -m"
+        logerror "Unsupported Linux architecture: uname -m"
         fail_upgrade
         ;;
 esac
@@ -147,14 +147,14 @@ function write_web_state
 
 function fail_upgrade
 {
-	printf "Aborting upgrade, try again!\n\n"
+	logfatal "Aborting upgrade"
 	write_state "${STATE} failed"
 	exit 1
 }
 
 function exit_upgrade
 {
-	printf "Aborting upgrade, try again!\n\n"
+	logfatal "Aborting upgrade"
 	exit 1
 }
 
@@ -236,22 +236,22 @@ function calc_stage_space
 	if [ "${ARCHTYPE}" = "LINUX" ] ; then
 		let SPACE_AVAIL=`/usr/bin/df ${LOADROOT} | grep -v Filesystem | awk '{print $4;}'`
 	else
-		printf "ERROR: Unrecognized architecture detected\n"
+		logerror "Unrecognized architecture detected"
 		exit_upgrade
 	fi
 
 	let KSPACE_AVAIL=`expr ${SPACE_AVAIL}/2`
 	let KSPACE_NEEDED=`expr ${SPACE_NEEDED}/2`
 
-	printf "Space available in ${LOADROOT} is ${KSPACE_AVAIL} Kbytes\n"
-	printf "Space needed to stage is ${KSPACE_NEEDED} Kbytes\n"
+	loginfo "Space available in ${LOADROOT} is ${KSPACE_AVAIL} Kbytes"
+	loginfo "Space needed to stage is ${KSPACE_NEEDED} Kbytes"
 
 	#
 	# Check for sufficient available space
 	#
 	if [ ${KSPACE_AVAIL} -lt ${KSPACE_NEEDED} ]
 	then
-		printf "ERROR: Insufficient space to complete staging\n"
+		logerror "Insufficient space to complete staging"
 		fail_upgrade
 	fi
 }
@@ -261,21 +261,21 @@ function calc_retrofit_space
 	if [ "${ARCHTYPE}" = "LINUX" ] ; then
 		let SPACE_AVAIL=`/usr/bin/df ${LOADROOT} | grep -v Filesystem | awk '{print $4;}'`
 	else
-		printf "ERROR: Unrecognized architecture detected\n"
+		logerror "Unrecognized architecture detected"
 		exit_upgrade
 	fi
 	let KSPACE_AVAIL=`expr ${SPACE_AVAIL}/2`
 	KRSPACE_NEEDED=`${STAGEROOT}/bin/stage_retrofit -s -r ${RETRO_GENERIC}`
 
-	printf "Space available in ${LOADROOT} is ${KSPACE_AVAIL} Kbytes\n"
-	printf "Space needed to retrofit is ${KRSPACE_NEEDED} Kbytes\n"
+	loginfo "Space available in ${LOADROOT} is ${KSPACE_AVAIL} Kbytes"
+	loginfo "Space needed to retrofit is ${KRSPACE_NEEDED} Kbytes"
 
 	#
 	# Check for sufficient available space
 	#
 	if [ ${KSPACE_AVAIL} -lt ${KRSPACE_NEEDED} ]
 	then
-		printf "ERROR: Insufficient space to complete retrofit\n"
+		logerror "Insufficient space to complete retrofit"
 		fail_upgrade
 	fi
 }
@@ -286,28 +286,28 @@ function export_gshm
 	let KSPACE_AVAIL=`expr ${SPACE_AVAIL}/2`
 	KESPACE_NEEDED=`${INCROOT}/mbin/shmjson -x`
 
-	printf "Space available in ${LOADROOT} is ${KSPACE_AVAIL} Kbytes\n"
-	printf "Space needed to export GSHM data is ${KESPACE_NEEDED} Kbytes\n"
+	loginfo "Space available in ${LOADROOT} is ${KSPACE_AVAIL} Kbytes"
+	loginfo "Space needed to export GSHM data is ${KESPACE_NEEDED} Kbytes"
 
 	#
 	# Check for sufficient available space
 	#
 	if [ ${KSPACE_AVAIL} -lt ${KESPACE_NEEDED} ]
 	then
-		printf "ERROR: Insufficient space to complete GSHM export\n"
+		logerror "Insufficient space to complete GSHM export"
 		fail_upgrade
 	fi
 
 	#
 	# Export data to new netFLEX directory for future import
 	#
-	printf "Exporting GSHM data to ${EXPORTDIR}\n"
+	loginfo "Exporting GSHM data to ${EXPORTDIR}"
 	if [ ! -d "${EXPORTDIR}" ]
 	then
 		mkdir ${EXPORTDIR}
 		if [ "$?" != "0" ]
 		then
-			printf "ERROR: failed to create data export directory: ${EXPORTDIR}\n"
+			logerror "failed to create data export directory: ${EXPORTDIR}"
 			fail_upgrade
 		fi
 	fi
@@ -318,7 +318,7 @@ function export_gshm
 		mkdir ${SHMDIR}
 		if [ "$?" != "0" ]
 		then
-			printf "ERROR: failed to create data export directory: ${SHMDIR}\n"
+			logerror "failed to create data export directory: ${SHMDIR}"
 			fail_upgrade
 		fi
 	fi
@@ -329,10 +329,10 @@ function export_gshm
 	${INCROOT}/mbin/shmjson -e -f -d ${SHMDIR}
 	if [ "$?" != "0" ]
 	then
-		printf "ERROR: failed to export GSHM data to export directory: ${SHMDIR}\n"
+		logerror "failed to export GSHM data to export directory: ${SHMDIR}"
 		fail_upgrade
 	fi
-	printf "Completed exporting GSHM data to ${SHMDIR}\n"
+	loginfo "Completed exporting GSHM data to ${SHMDIR}"
 	
 }
 
@@ -342,15 +342,15 @@ function export_ctree_db
 	let KSPACE_AVAIL=`expr ${SPACE_AVAIL}/2`
 	KESPACE_NEEDED=`${INCROOT}/mbin/inc_db export --estimate`
 
-	printf "Space available in ${LOADROOT} is ${KSPACE_AVAIL} Kbytes\n"
-	printf "Space needed to export ctree data is ${KESPACE_NEEDED} Kbytes\n"
+	loginfo "Space available in ${LOADROOT} is ${KSPACE_AVAIL} Kbytes"
+	loginfo "Space needed to export ctree data is ${KESPACE_NEEDED} Kbytes"
 
 	#
 	# Check for sufficient available space
 	#
 	if [ ${KSPACE_AVAIL} -lt ${KESPACE_NEEDED} ]
 	then
-		printf "ERROR: Insufficient space to complete ctree export\n"
+		logerror "Insufficient space to complete ctree export"
 		fail_upgrade
 	fi
 
@@ -358,13 +358,13 @@ function export_ctree_db
 	# Export data to new netFLEX directory for future import
 	#
 	EXPORTDIR="${STAGEROOT}/export"
-	printf "Exporting Ctree data to ${EXPORTDIR}\n"
+	loginfo "Exporting Ctree data to ${EXPORTDIR}"
 	if [ ! -d "${EXPORTDIR}" ]
 	then
 		mkdir ${EXPORTDIR}
 		if [ "$?" != "0" ]
 		then
-			printf "ERROR: failed to create data export directory: ${EXPORTDIR}\n"
+			logerror "failed to create data export directory: ${EXPORTDIR}"
 			fail_upgrade
 		fi
 	fi
@@ -375,7 +375,7 @@ function export_ctree_db
 		mkdir ${CTREEDIR}
 		if [ "$?" != "0" ]
 		then
-			printf "ERROR: failed to create data export directory: ${CTREEDIR}\n"
+			logerror "failed to create data export directory: ${CTREEDIR}"
 			fail_upgrade
 		fi
 	fi
@@ -386,20 +386,20 @@ function export_ctree_db
 	${INCROOT}/mbin/inc_db export -D ${CTREEDIR} -C gzip
 	if [ "$?" != "0" ]
 	then
-		printf "ERROR: failed to export ctree data to export directory: ${CTREEDIR}\n"
+		logerror "failed to export ctree data to export directory: ${CTREEDIR}"
 		fail_upgrade
 	fi
 
 	${INCROOT}/bin/cli_migrate > ${EXPORTDIR}/cli.export
 	if [ "$?" != "0" ]
 	then
-		printf "ERROR: failed to export cli data to export directory: ${EXPORTDIR}\n"
+		logerror "failed to export cli data to export directory: ${EXPORTDIR}"
 		fail_upgrade
 	fi
 
 	cp ${INCROOT}/tables/cli.dcs ${EXPORTDIR}/cli.dcs.copy	
 
-	printf "Completed exporting Ctree data to ${CTREEDIR}\n"
+	loginfo "Completed exporting Ctree data to ${CTREEDIR}"
 	
 }
 
@@ -407,7 +407,7 @@ function check_db_export_needed
 {
 	TARGET64="NO"
 	IMPORT_NEEDED="0"
-        printf "Checking if database export is needed...\n"
+        loginfo "Checking if database export is needed..."
 
 	if [ "${MACHTYPE}" = "BEP" ]
 	then
@@ -422,7 +422,7 @@ function check_db_export_needed
         if [ "$?" = "0" ]
         then
                 TARGET64="YES"
-        	printf "64BIT already installed\n"
+        	loginfo "64BIT already installed"
         else
                 file /usr/cnc_stage/bin/dacs | grep "${STR64BIT}" >/dev/null
                 if [ "$?" = "0" ]
@@ -432,8 +432,8 @@ function check_db_export_needed
                 fi
         fi
 
-        printf "64BIT=[${TARGET64}]\n"
-	printf "MACHTYPE=[$MACHTYPE]\n"
+        loginfo "64BIT=[${TARGET64}]"
+	loginfo "MACHTYPE=[$MACHTYPE]"
 	if [ "${TARGET64}" = "YES" -a "${IMPORT_NEEDED}" = "1" -a "${MACHTYPE}" != "BEP" ]
 	then
 
@@ -442,22 +442,22 @@ function check_db_export_needed
 		if [ -f "${SHM_IMPORT_DONE_FILE}" ]
 		then
 			IMPORT_NEEDED="0"
-			printf "GSHM import previously marked done (${SHM_IMPORT_DONE_FILE}). NOT triggering GSHM and ctree import for this upgrade...\n"
+			loginfo "GSHM import previously marked done (${SHM_IMPORT_DONE_FILE}). NOT triggering GSHM and ctree import for this upgrade..."
 		fi
 
 		CTREE_IMPORT_DONE_FILE=${IMPORTDIR}/ctree_import_done
 		if [ -f "${CTREE_IMPORT_DONE_FILE}" ]
 		then
 			IMPORT_NEEDED="0"
-			printf "ctree import previously marked done (${CTREE_IMPORT_DONE_FILE}). NOT triggering GSHM and ctree import for this upgrade...\n"
+			loginfo "ctree import previously marked done (${CTREE_IMPORT_DONE_FILE}). NOT triggering GSHM and ctree import for this upgrade..."
 		fi
 	fi
 
 	if [ "${IMPORT_NEEDED}" = "0" ]
 	then
-		printf "GSHM/ctree export/import NOT needed...\n"
+		loginfo "GSHM/ctree export/import NOT needed..."
 	else
-		printf "GSHM/ctree export/import IS needed...\n"
+		loginfo "GSHM/ctree export/import IS needed..."
 	fi
 
 	# IMPORT_NEEDED by retrofit to not copy ctree files from old dir
@@ -468,40 +468,40 @@ function check_db_export_needed
 
 function export_dbs
 {
-        printf "database export is starting...\n"
+        loginfo "database export is starting..."
 
-	printf "Exporting GSHM...\n"
+	loginfo "Exporting GSHM..."
 	export_gshm
 
-	printf "Exporting ctree databases...\n"
+	loginfo "Exporting ctree databases..."
 	export_ctree_db
 
 	# Create touch file to trigger import
 	IMPORT_NEEDED_FILE="${EXPORTDIR}/import_needed"
-	printf "Creating ${IMPORT_NEEDED_FILE} control file to trigger GSHM and ctree import for this upgrade...\n"
+	loginfo "Creating ${IMPORT_NEEDED_FILE} control file to trigger GSHM and ctree import for this upgrade..."
 	touch ${IMPORT_NEEDED_FILE}
 }
 
 
 function stop_inc
 {
-	printf "Saving equipment info in ${INCROOT}\n"
+	loginfo "Saving equipment info in ${INCROOT}"
 	${INCROOT}/ambin/equdump all > ${INCROOT}/curr_equip.out
 
-	printf "Saving nestat info in ${INCROOT}\n"
+	loginfo "Saving nestat info in ${INCROOT}"
 	${INCROOT}/mbin/nestat -a > ${INCROOT}/curr_nestat.out
 
-	printf "Saving dbcheck info in ${INCROOT}\n"
+	loginfo "Saving dbcheck info in ${INCROOT}"
 	${INCROOT}/bin/dbcheck -AV > ${INCROOT}/curr_dbcheck-AV.out
 
 	touch ${INCROOT}/CNCDISABLE
 
-	printf "Looking for USER procs\n"
+	loginfo "Looking for USER procs"
 	ps -e | grep USER | while read pid b c proc
 	do
 		if [ "$proc" = "USER" ]
 		then
-			printf "Killing USER pid:$pid\n"
+			loginfo "Killing USER pid:$pid"
 			kill -9 $pid
 		fi
 	done
@@ -518,8 +518,8 @@ function stop_inc
 	#
 	NBOPT="-P $$:$PPID"
 
-	printf "Bringing down the application\n"
-	printf "${INCROOT}/bin/new_boot_nms remote_shutdown ${NBOPT}\n"
+	loginfo "Bringing down the application"
+	loginfo "${INCROOT}/bin/new_boot_nms remote_shutdown ${NBOPT}"
 	${INCROOT}/bin/new_boot_nms remote_shutdown ${NBOPT}
 	
 	#
@@ -527,14 +527,14 @@ function stop_inc
 	#  die from new_boot_nms shutdown. We should do
 	#  some cleanup on the known offenders.
 	#
-	printf "Looking for residual procs\n"
+	loginfo "Looking for residual procs"
 	for name in lan nxdi intrfc sdi md_wtr md_rdr
 	do
 		ps -e | grep $name | while read pid b c proc
 		do
 			if [ "$proc" = "$name" ]
 			then
-				printf "Killing $proc pid:$pid\n"
+				loginfo "Killing $proc pid:$pid"
 				kill -9 $pid
 			fi
 		done
@@ -587,17 +587,17 @@ function backup_rdb
 	get_data_dir
 	if [ "$RDB_LOCATION" = "remote" ] || { [ "$RDB_LOCATION" = "fep" ] && [ "$RDB_MACHTYPE" != "NMS" ]; }
 	then
-		printf "RDB is not local to this server. Skipping RDB backup.\n"
+		loginfo "RDB is not local to this server. Skipping RDB backup."
 		return 0
 	fi
 	if [ "${ARCHTYPE}" = "LINUX" -a -d ${INCROOT}/rdb ]
 	then
-		printf "Backing up RDB to ${INCROOT}/rdb/backup\n"
+		loginfo "Backing up RDB to ${INCROOT}/rdb/backup"
 		
                 if /usr/cnc/bin/rcmd sh /usr/cnc_stage/bin/rdb_tar_backup.sh; then
-                        echo "RDB Backup successful"
+                        loginfo "RDB Backup successful"
                 else
-                        echo "Backup failed using tar method. Switching to old backup method. Restore will be manual."
+                        loginfo "Backup failed using tar method. Switching to old backup method. Restore will be manual."
                         systemctl start postgresql-$PG_VERSION
                         ${INCROOT}/bin/rdbpwd set
                         touch ${INCROOT}/rdb/backup/.RESTORE
@@ -622,7 +622,7 @@ function doswsstart
 	#
 	if [ -n "${UNLINKDIR}" -a -d "${UNLINKDIR}" ]
 	then
-	    printf "Removing ${UNLINKDIR} for space\n"
+	    loginfo "Removing ${UNLINKDIR} for space"
 	    set -x
 	    rm -rf ${UNLINKDIR} $(echo ${UNLINKDIR}|cut -c1-10,12-50)
 	    set +x
@@ -650,7 +650,7 @@ function doswspatchinstall
 		then
 			PATCHDEPOTFILE=`ls | grep "${PRODUCT}-CORE-.*PATCH-${NEW_GENERIC}.*-1.${LARCH}.rpm" | tail -1`
 		else
-			printf "ERROR: Unrecognized architecture detected\n"
+			logerror "Unrecognized architecture detected"
 			exit_upgrade
 		fi
 		if [ -n "${PATCHDEPOTFILE}" ]
@@ -677,7 +677,7 @@ function doswspatchinstall
         #
 	if [ -n "${PATCHDEPOTFILE}" -o -n "${ATTEXTPATCHDEPOTFILE}" ]
 	then
-		printf "Upgrading PATCH filesets from depot, please wait...\n"
+		loginfo "Upgrading PATCH filesets from depot, please wait..."
 
 		#
 		#  Back up current GUIs in case they are in the patch.
@@ -687,7 +687,7 @@ function doswspatchinstall
 		do
 			if [ -f "${STAGEROOT}/GUI_REL/${GUI}.tar" ]
 			then
-				printf "Archiving ${GUI} GUI...\n"
+				loginfo "Archiving ${GUI} GUI..."
 				mv ${STAGEROOT}/GUI_REL/${GUI}.tar ${STAGEROOT}/GUI_REL/${GUI}.${NEW_GENERIC}${NEW_LOAD}.tar
 			fi
 		done
@@ -698,7 +698,7 @@ function doswspatchinstall
         #
 	if [ -n "${PATCHDEPOTFILE}" ]
 	then
-		printf "Installing PATCH filesets, please wait...\n"
+		loginfo "Installing PATCH filesets, please wait..."
 		if [ "${ARCHTYPE}" = "LINUX" ]
 		then
 			echo "rpm -e ${RPM}" > ${TRACEFILE}.rpm_patch 2>&1
@@ -707,11 +707,11 @@ function doswspatchinstall
 			rpm -ivh --replacepkgs --replacefiles ${PATCHDEPOTFILE} >> ${TRACEFILE}.rpm_patch 2>&1
 			if [ $? != 0 ]
 			then
-				printf "ERROR: patch software install failed\n"
+				logerror "patch software install failed"
 				fail_upgrade
 			fi
 		else
-			printf "ERROR: Unrecognized architecture detected\n"
+			logerror "Unrecognized architecture detected"
 			exit_upgrade
 		fi
 	fi
@@ -721,7 +721,7 @@ function doswspatchinstall
         #
 	if [ -n "${ATTEXTPATCHDEPOTFILE}" ]
 	then
-		printf "Installing ATT EXT PATCH filesets, please wait...\n"
+		loginfo "Installing ATT EXT PATCH filesets, please wait..."
 		if [ "${ARCHTYPE}" = "LINUX" ]
 		then
 			echo "rpm -e ${RPM}" > ${TRACEFILE}.rpm_patch 2>&1
@@ -730,11 +730,11 @@ function doswspatchinstall
 			rpm -ivh --replacepkgs --replacefiles ${ATTEXTPATCHDEPOTFILE} >> ${TRACEFILE}.rpm_patch 2>&1
 			if [ $? != 0 ]
 			then
-				printf "ERROR: ATT patch software install failed\n"
+				logerror "ATT patch software install failed"
 				fail_upgrade
 			fi
 		else
-			printf "ERROR: Unrecognized architecture detected\n"
+			logerror "Unrecognized architecture detected"
 			exit_upgrade
 		fi
 	fi
@@ -752,14 +752,14 @@ function doswspatchinstall
 		do
 			if [ ! -f "${STAGEROOT}/GUI_REL/${GUI}.tar" ]
 			then
-				printf "${GUI} GUI not patched, restoring ${GUI} GUI...\n"
+				loginfo "${GUI} GUI not patched, restoring ${GUI} GUI..."
 				mv ${STAGEROOT}/GUI_REL/${GUI}.${NEW_GENERIC}${NEW_LOAD}.tar ${STAGEROOT}/GUI_REL/${GUI}.tar
 			else
-				printf "${GUI} GUI was patched...\n"
+				loginfo "${GUI} GUI was patched..."
 			fi
 		done
 	else
-		printf "No PATCH fileset to install... skipping\n"
+		loginfo "No PATCH fileset to install... skipping"
 	fi
 }
 
@@ -775,7 +775,7 @@ function doswscopycnc
 	#  Set up the database.
 	#
 	cd ${INCROOT}/features
-	printf "Copying PASS 1 files from ${COPYCNCLOC}, please wait...\n"
+	loginfo "Copying PASS 1 files from ${COPYCNCLOC}, please wait..."
 
 if [ -f ${INCROOT}/features/atmfr_histpm ]
 then
@@ -793,19 +793,19 @@ fi
 
 	if [ "$?" != "0" ]
         then
-                printf "ERROR: Failed PASS 1 of copy_cnc.\n"
+                logerror "Failed PASS 1 of copy_cnc."
                 fail_upgrade
         fi
-	printf "Copying PASS 1 files from ${COPYCNCLOC} complete\n"
+	loginfo "Copying PASS 1 files from ${COPYCNCLOC} complete"
 
 	#
 	#  Copy over X25 files now, if needed.
 	#
 	if [ -n "${X25_SOURCEDIR}" ]
 	then
-		printf "Copying X25 files from ${X25_SOURCEDIR} to /usr/cnc/x25/bin, please wait...\n"
+		loginfo "Copying X25 files from ${X25_SOURCEDIR} to /usr/cnc/x25/bin, please wait..."
 		cp ${X25_SOURCEDIR}/* /usr/cnc/x25/bin
-		printf "Copying X25 files from ${X25_SOURCEDIR} to /usr/cnc/x25/bin complete\n"
+		loginfo "Copying X25 files from ${X25_SOURCEDIR} to /usr/cnc/x25/bin complete"
 	fi
 
 }
@@ -834,15 +834,15 @@ function doswscoreupgrade
 	else
 		UGL=`echo $UPGRADE_LOAD| cut -c4-10`
 	fi
-	printf "\nUpgrading from ${OLD_GENERIC}${OLD_LOAD} to ${UGL}\n"
-	printf "Linking ${LOADROOT}/${UPGRADE_LOAD} to ${STAGEROOT}\n"
+	loginfo "Upgrading from ${OLD_GENERIC}${OLD_LOAD} to ${UGL}"
+	loginfo "Linking ${LOADROOT}/${UPGRADE_LOAD} to ${STAGEROOT}"
 	mkdir ${LOADROOT}/${UPGRADE_LOAD} 2>/dev/null
 	umask 002
 	rm -f ${STAGEROOT}
 	/usr/bin/ln -s ${LOADROOT}/${UPGRADE_LOAD} ${STAGEROOT}
 	if [ "$?" != "0" ]
         then
-                printf "ERROR: Couldn't create staging link. You must have root permission.\n"
+                logerror "Couldn't create staging link. You must have root permission."
                 fail_upgrade
         fi
 	umask 000
@@ -865,7 +865,7 @@ function doswscoreupgrade
 	printf "${OLD_LOAD}\n" > ${STAGEROOT}/.OLD_LOAD
 
 
-	printf "Staging CORE and GUI filesets from depot [${DEPOTFILE}], please wait...\n"
+	loginfo "Staging CORE and GUI filesets from depot [${DEPOTFILE}], please wait..."
 	if [ "${ARCHTYPE}" = "LINUX" ] ; then
 		PKGV=`rpm -qi netFLEX-CORE  2>/dev/null | grep Version | tail -1 | cut -d':' -f2 | xargs`
 		RPM="netFLEX-CORE-${PKGV}-1.${LARCH}"
@@ -879,13 +879,13 @@ function doswscoreupgrade
 		rpm -ivh --replacepkgs --replacefiles ${DEPOTFILE} >> ${TRACEFILE}.rpm 2>&1
 		if [ $? != 0 ]
 		then
-			printf "ERROR: software install failed\n"
+			logerror "software install failed"
 			rm -f ${STAGEROOT}
 			rm -rf ${LOADROOT}/${UPGRADE_LOAD}
 			fail_upgrade
 		fi
 	else
-		printf "ERROR: Unrecognized architecture detected\n"
+		logerror "Unrecognized architecture detected"
 		exit_upgrade
 	fi
 
@@ -895,14 +895,14 @@ function doswscoreupgrade
         if [ -z "${EXTDEPOTFILE}" ]
         then
 
-		printf "Checking for customer extensions\n"
+		loginfo "Checking for customer extensions"
 		if [ -f "${INCROOT}/features/ATT" ]
 		then
 			if [ "${ARCHTYPE}" = "LINUX" ]
 			then
 				AFILE="INC-ATT-${NEW_GENERIC}.${NEW_LOAD}-1.${LARCH}.rpm"
 			else
-				printf "ERROR: Unrecognized architecture detected\n"
+				logerror "Unrecognized architecture detected"
 				exit_upgrade
 			fi
                 	EXTDEPOTFILE=`ls | grep "${AFILE}" | grep -v PATCH | tail -1`
@@ -910,13 +910,13 @@ function doswscoreupgrade
 			then
 				# in local directory
 				EXTDEPOTFILE="${PWD}/${EXTDEPOTFILE}"
-				printf "Look for ATT depot in local directory [${EXTDEPOTFILE}]\n"
+				loginfo "Look for ATT depot in local directory [${EXTDEPOTFILE}]"
 			fi
 		else
-			printf "No extension configuration found\n"
+			loginfo "No extension configuration found"
 		fi
 	else
-		printf "Using EXTDEPOTFILE define from config file\n"
+		loginfo "Using EXTDEPOTFILE define from config file"
     fi
 
 	#
@@ -924,7 +924,7 @@ function doswscoreupgrade
 	#
 	if [ -f "${EXTDEPOTFILE}" ]
 	then
-		printf "Staging EXTENSION fileset from depot [${EXTDEPOTFILE}], please wait...\n"
+		loginfo "Staging EXTENSION fileset from depot [${EXTDEPOTFILE}], please wait..."
 		#
 		# Only AT&T extensions supported as of now.
 		#
@@ -936,20 +936,20 @@ function doswscoreupgrade
 				rpm -ivh --replacepkgs --replacefiles ${EXTDEPOTFILE} >> ${TRACEFILE}ATTEXT.rpm 2>&1
 				if [ $? != 0 ]
 				then
-					printf "ERROR: ATT software install failed\n"
+					logerror "ATT software install failed"
 					fail_upgrade
 				fi
 			else
-				printf "ERROR: Unrecognized architecture detected\n"
+				logerror "Unrecognized architecture detected"
 				exit_upgrade
 			fi
 		else
-			printf "ERROR: Invalid EXTENSION configuration... software install failed\n"
+			logerror "Invalid EXTENSION configuration... software install failed"
 			fail_upgrade
 		fi
 	elif [ -n "${EXTDEPOTFILE}" ]
 	then
-		printf "ERROR: EXTENSION configuration file [${EXTDEPOTFILE}] not found... software install failed\n"
+		logerror "EXTENSION configuration file [${EXTDEPOTFILE}] not found... software install failed"
 		fail_upgrade
 	fi
 
@@ -960,12 +960,12 @@ function doswsretropass1
 	#
 	#  Run retrofit pre-script.
 	#
-	printf "Running PASS 1 retrofit steps for ${OLD_GENERIC}${OLD_LOAD} -> ${NEW_GENERIC}${NEW_LOAD} database\n"
-	print "${STAGEROOT}/bin/stage_retrofit -r ${RETRO_GENERIC} -b ${OLD_LOAD}\n"
+	loginfo "Running PASS 1 retrofit steps for ${OLD_GENERIC}${OLD_LOAD} -> ${NEW_GENERIC}${NEW_LOAD} database"
+	loginfo "${STAGEROOT}/bin/stage_retrofit -r ${RETRO_GENERIC} -b ${OLD_LOAD}"
 	${STAGEROOT}/bin/stage_retrofit -r ${RETRO_GENERIC} -b ${OLD_LOAD}
 	if [ "$?" != "0" ]
 	then
-		printf "ERROR: pre-retrofit failed\n"
+		logerror "pre-retrofit failed"
 		fail_upgrade
 	fi
 
@@ -975,7 +975,7 @@ function doswsretropass1
 	#  are still at their pre-inc54.0 default values.
 	${STAGEROOT}/bin/update_alarm_blocker_defaults.sh ${STAGEROOT}/features/system_defines
 
-	printf "PASS 1 retrofit steps for ${OLD_GENERIC}${OLD_LOAD} -> ${NEW_GENERIC}${NEW_LOAD} complete\n"
+	loginfo "PASS 1 retrofit steps for ${OLD_GENERIC}${OLD_LOAD} -> ${NEW_GENERIC}${NEW_LOAD} complete"
 }
 
 function doswswebinstall
@@ -988,7 +988,7 @@ function doswswebinstall
 		#
 		#  Upgrade WEB GUI and WEB GUI db
 		#
-		printf "Installing WEB in ${STAGEROOT}, please wait...\n"
+		loginfo "Installing WEB in ${STAGEROOT}, please wait..."
 		if [ "${ARCHTYPE}" = "LINUX" ]
 		then
 			D=""
@@ -999,19 +999,19 @@ function doswswebinstall
 			echo "${D}inc_linux_web_install -t ${STAGEROOT}/GUI_REL -d ${COPYWEBGUIDBLOC} -r ${STAGEROOT} > ${WEBTRACEFILE}" 2>&1
 			${D}inc_linux_web_install -t ${STAGEROOT}/GUI_REL -d ${COPYWEBGUIDBLOC} -r ${STAGEROOT} > ${WEBTRACEFILE} 2>&1
 		else
-			printf "ERROR: Unrecognized architecture detected\n"
+			logerror "Unrecognized architecture detected"
 			exit_upgrade
 		fi
 		if [ $? != 0 ]
 		then
-			printf "WARNING: WEB GUI install failed\n"
+			logwarn "WEB GUI install failed"
 			write_web_state webfailed
 		else
 			write_web_state webdone
-			printf "Installing WEB in ${STAGEROOT} complete\n"
+			loginfo "Installing WEB in ${STAGEROOT} complete"
 		fi
 	else
-		printf "No WEB to install... skipping\n"
+		loginfo "No WEB to install... skipping"
 	fi
 }
 
@@ -1025,7 +1025,7 @@ function stage_new_sw
 
 	while true
 	do
-		printf "\nCurrent staging STATE is ${STATE}\n"
+		loginfo "Current staging STATE is ${STATE}"
 		case ${STATE} in
 		swsstart )
 			#
@@ -1089,19 +1089,19 @@ function stage_new_sw
 			return
 			;;
 		swidone )
-			printf "ERROR: Unsupported state (${STATE}) for staging process.\n"
-			printf "       If this is a new upgrade, please remove the state\n"
-			printf "       file (${STATEFILE}) before\n"
-			printf "       beginning the staging process.\n"
+			logerror "Unsupported state (${STATE}) for staging process."
+			loginfo "       If this is a new upgrade, please remove the state"
+			loginfo "       file (${STATEFILE}) before"
+			loginfo "       beginning the staging process."
 			fail_upgrade
 			;;
 		*failed )
-			printf "ERROR: If you are trying to restart the upgrade following a staging failure you must edit the state file (${STATE}).\n"
-			printf "       Please consult the upgrade manual.\n"
+			logerror "If you are trying to restart the upgrade following a staging failure you must edit the state file (${STATE})."
+			loginfo "       Please consult the upgrade manual."
 			exit_upgrade
 			;;
 		* )
-			printf "ERROR: Unsupported state (${STATE}) for staging process\n"
+			logerror "Unsupported state (${STATE}) for staging process"
 			fail_upgrade
 			;;
 		esac
@@ -1125,18 +1125,18 @@ function doswistart
 	stop_inc
 	backup_rdb
 
-	printf "Cleaning up trace files\n"
+	loginfo "Cleaning up trace files"
 	rm -f ${INCROOT}/trace/*
 
-	printf "Checking if printers enabled\n"
+	loginfo "Checking if printers enabled"
 	lpshut 2> /dev/null
 	LPRESULT="$?"
 	if [ "${LPRESULT}" = 0 ]
 	then
 		# will be turned back on by new_boot_nms
-		printf "Printers shut down\n"
+		loginfo "Printers shut down"
 	else
-		printf "No printers enabled\n"
+		loginfo "No printers enabled"
 	fi
 	printf "${LPRESULT}\n" > ${STAGEROOT}/.LPRESULT
 
@@ -1166,7 +1166,7 @@ function doswistart
 
 	if [ "${FAIL_UPGRADE}" = "1" ]
 	then
-		printf "ERROR: software install failed\n"
+		logerror "software install failed"
 		fail_upgrade
 	fi
 
@@ -1178,7 +1178,7 @@ function doswicopycnc
 	#  Set up the database.
 	#
 	cd ${INCROOT}/features
-	printf "Copying PASS 2 files from ${COPYCNCLOC}, please wait...\n"
+	loginfo "Copying PASS 2 files from ${COPYCNCLOC}, please wait..."
 	rm -rf ${COPYCNCLOC}/GUI_REL
 	rm -rf ${COPYCNCLOC}/floppy
 	rm -f ${COPYCNCLOC}/lib/*:*
@@ -1207,19 +1207,19 @@ y
 EOF
 	if [ "$?" != "0" ]
         then
-                printf "ERROR: Failed PASS 2 of copy_cnc.\n"
+                logerror "Failed PASS 2 of copy_cnc."
                 fail_upgrade
         fi
-	printf "Copying PASS 2 files from ${COPYCNCLOC} complete\n"
+	loginfo "Copying PASS 2 files from ${COPYCNCLOC} complete"
 	ls -la /usr/cnc_stage/backup
 
 
 
-	printf "Managing RDB files...\n"
+	loginfo "Managing RDB files..."
 	# Move the RDB files
 	if [ -d "${STAGEROOT}/rdb/data" ]
 	then
-		printf "ERROR: ${STAGEROOT}/rdb/data directory found!!!\n"
+		logerror "${STAGEROOT}/rdb/data directory found!!!"
 		fail_upgrade
 	fi
 
@@ -1248,13 +1248,13 @@ EOF
 	fi
 
 	if [[ $rdbmove == "FALSE" ]]; then
-		printf "rdb data is external to /usr/cnc. Skipping rdb data move\n"
+		loginfo "rdb data is external to /usr/cnc. Skipping rdb data move"
 	else
-		printf "Moving ${INCROOT}/rdb/data to ${STAGEROOT}/rdb/data\n"
+		loginfo "Moving ${INCROOT}/rdb/data to ${STAGEROOT}/rdb/data"
 		mv ${INCROOT}/rdb/data ${STAGEROOT}/rdb/data
 		if [ "$?" != "0" ]
 		then
-			printf "ERROR: Move ${INCROOT}/rdb/data to ${STAGEROOT}/rdb/data failed!!!\n"
+			logerror "Move ${INCROOT}/rdb/data to ${STAGEROOT}/rdb/data failed!!!"
 			fail_upgrade
 		fi
 	fi
@@ -1263,10 +1263,10 @@ EOF
 	#printf "Copying ${INCROOT}/rdb/backup/* to ${STAGEROOT}/rdb/backup\n"
 	#cp -r $INCROOT/rdb/backup/* ${STAGEROOT}/rdb/backup
 
-	printf "Copying ${INCROOT}/rdb/config/* to ${STAGEROOT}/rdb/config\n"
+	loginfo "Copying ${INCROOT}/rdb/config/* to ${STAGEROOT}/rdb/config"
 	cp -r $INCROOT/rdb/config/* ${STAGEROOT}/rdb/config
 
-	printf "Finished managing RDB files...\n"
+	loginfo "Finished managing RDB files..."
 
 }
 
@@ -1305,24 +1305,24 @@ function doswiretropass2
 	#
 	if [ "${MACHTYPE}" = "BEP" ]
 	then
-		printf "Skipping PASS 2 retrofit steps for ${OLD_GENERIC}${OLD_LOAD} -> ${NEW_GENERIC}${NEW_LOAD} database for BEP\n"
+		loginfo "Skipping PASS 2 retrofit steps for ${OLD_GENERIC}${OLD_LOAD} -> ${NEW_GENERIC}${NEW_LOAD} database for BEP"
 		return 0
 	fi
 
 
 	ls -l /usr/cnc/backup
 	if [ "${ARCHTYPE}" = "LINUX" ] ; then
-		echo "Running ldconfig"
+		loginfo "Running ldconfig"
 		ldconfig
 	fi
-	printf "Running PASS 2 retrofit steps for ${OLD_GENERIC}${OLD_LOAD} -> ${NEW_GENERIC}${NEW_LOAD} database\n"
+	loginfo "Running PASS 2 retrofit steps for ${OLD_GENERIC}${OLD_LOAD} -> ${NEW_GENERIC}${NEW_LOAD} database"
 	${INCROOT}/bin/retrofit -p 2 -r ${RETRO_GENERIC} -b ${OLD_LOAD}
 	if [ "$?" != "0" ]
 	then
-		printf "ERROR: post-retrofit failed\n"
+		logerror "post-retrofit failed"
 		fail_upgrade
 	fi
-	printf "PASS 2 retrofit steps for ${OLD_GENERIC}${OLD_LOAD} -> ${NEW_GENERIC}${NEW_LOAD} complete\n"
+	loginfo "PASS 2 retrofit steps for ${OLD_GENERIC}${OLD_LOAD} -> ${NEW_GENERIC}${NEW_LOAD} complete"
 
 	ls -l /usr/cnc/backup
 }
@@ -1339,16 +1339,16 @@ function doswibootinc
 	#
 	rm -f ${INC_UPGRADE_LOCK}
 	rm -f ${SAVEDROOT}/.UPGRADE_LOCK
-	echo "Running ldconfig"
+	loginfo "Running ldconfig"
 	ldconfig
 	if [ "${RESTARTINC}" != "NO" -a "${APP_WAS_RUNNING}" = "YES" ]
 	then
-		printf "Restarting application\n"
-		printf "${INCROOT}/bin/new_boot_nms remote_autoboot\n"
+		loginfo "Restarting application"
+		loginfo "${INCROOT}/bin/new_boot_nms remote_autoboot"
 		${INCROOT}/bin/new_boot_nms remote_autoboot
 		if [ ! -f "${INCROOT}/.CNC_UP" -a ! -f "${INCROOT}/.MUX_UP" ]
 		then
-			printf "\nERROR: application failed to boot!\n"
+			logerror "application failed to boot!"
 			fail_upgrade
 		fi
 		if [ "${ARCHTYPE}" != "LINUX" ]
@@ -1356,7 +1356,7 @@ function doswibootinc
 			init 4
 		fi
 	else
-		printf "NOT Restarting application\n"
+		loginfo "NOT Restarting application"
 	fi
 
 }
@@ -1365,11 +1365,11 @@ function doswiretropass3
 {
 	if [ "${RESTARTINC}" != "NO" -a "${APP_WAS_RUNNING}" = "YES" ]
 	then
-		printf "Running PASS 3 retrofit steps for ${OLD_GENERIC}${OLD_LOAD} -> ${NEW_GENERIC}${NEW_LOAD} database.\n"
-		printf "Pass 3 retrofit steps are run in the background, status can be found in /usr/cnc/logs.\n"
+		loginfo "Running PASS 3 retrofit steps for ${OLD_GENERIC}${OLD_LOAD} -> ${NEW_GENERIC}${NEW_LOAD} database."
+		loginfo "Pass 3 retrofit steps are run in the background, status can be found in /usr/cnc/logs."
 		${INCROOT}/bin/retrofit -p 3 -r ${RETRO_GENERIC} -b ${OLD_LOAD} &
 	else
-		printf "Retrofit PASS 3 must be run manually after application is started\n"
+		loginfo "Retrofit PASS 3 must be run manually after application is started"
 	fi
 }
 
@@ -1379,10 +1379,10 @@ function upgrade_new_sw
 	STATE=`cat $STATEFILE`
 	while true
 	do
-		printf "\nCurrent upgrade STATE is ${STATE}\n"
+		loginfo "Current upgrade STATE is ${STATE}"
 		case ${STATE} in
 		swscomplete )
-			printf "Staging is complete on ${HOSTNAME}, beginning upgrade to ${NEW_GENERIC}${NEW_LOAD}\n"
+			loginfo "Staging is complete on ${HOSTNAME}, beginning upgrade to ${NEW_GENERIC}${NEW_LOAD}"
 			STATE=swistart
 			;;
 		swistart )
@@ -1436,9 +1436,9 @@ function upgrade_new_sw
 
 			;;
 		postinstall )
-			printf "DO postinstall\n"
+			loginfo "DO postinstall"
 			sh /usr/cnc/bin/post-install.sh
-			printf "DONE postinstall\n"
+			loginfo "DONE postinstall"
 			STATE=swidone
 			;;
 		swiretropass3 )
@@ -1458,12 +1458,12 @@ function upgrade_new_sw
 			return
 			;;
 		*failed )
-			printf "ERROR: If you are trying to restart the upgrade folowing a failure you must edit the state file (${STATE}).\n"
-			printf "       Please consult the upgrade manual.\n"
+			logerror "If you are trying to restart the upgrade folowing a failure you must edit the state file (${STATE})."
+			loginfo "       Please consult the upgrade manual."
 			exit_upgrade
 			;;
 		* )
-			printf "ERROR: Unsupported state (${STATE}) for upgrade process\n"
+			logerror "Unsupported state (${STATE}) for upgrade process"
 			fail_upgrade
 			;;
 		esac
@@ -1502,10 +1502,10 @@ function check_gr_inprogress
 		else
 			WHICH_GR="RESTORE"
 		fi
-		printf "Waiting for Geographic Redundancy ${WHICH_GR} to complete...[$ELAPSED_TIME of $MAX_ELAPSED_GR_WAIT_TIME]\n"
+		loginfo "Waiting for Geographic Redundancy ${WHICH_GR} to complete...[$ELAPSED_TIME of $MAX_ELAPSED_GR_WAIT_TIME]"
 		if [ "${ELAPSED_TIME}" -ge "${MAX_ELAPSED_GR_WAIT_TIME}" ]
 		then
-			printf "Upgrade Error: GR ${WHICH_GR} has gone insane. Elapsed time is ${ELAPSED_TIME}\n"
+			loginfo "Upgrade Error: GR ${WHICH_GR} has gone insane. Elapsed time is ${ELAPSED_TIME}"
 			fail_upgrade
 		fi
 		sleep ${SLEEP_INTRVL}
@@ -1519,7 +1519,7 @@ function check_gr_inprogress
 		fi
 	done
 
-	printf "GR check completed... continuing with install\n"
+	loginfo "GR check completed... continuing with install"
 
 }
 
@@ -1531,13 +1531,13 @@ tool_banner
 if [ -x "/usr/cnc/bin/incinfo" ]
 then
 	if [ "${ARCHTYPE}" = "LINUX" ] ; then
-		printf "Running ldconfig\n"
+		loginfo "Running ldconfig"
 		ldconfig
 		sleep 3
 	fi
 	/usr/cnc/bin/incinfo -e >/dev/null 2>&1
 	eval `/usr/cnc/bin/incinfo -e`
-	printf "MACHTYPE=$MACHTYPE\n"
+	loginfo "MACHTYPE=$MACHTYPE"
 fi
 
 
@@ -1573,7 +1573,7 @@ do case $c in
 	 esac
 done
 
-printf "LARCH=$LARCH\n"
+loginfo "LARCH=$LARCH"
 
 if [ "${LARCH}" != "x86_64" ]
 then
@@ -1581,13 +1581,13 @@ then
 	then
 		if (file /usr/cnc/bin/dacs | grep '64-bit' >/dev/null)
 		then
-			printf "Switching to Using 64bit"
+			loginfo "Switching to Using 64bit"
 			LARCH="x86_64"
 		fi
 	fi
 fi
 
-printf "LARCH=$LARCH\n"
+loginfo "LARCH=$LARCH"
 
 
 shift $((OPTIND-1))
@@ -1595,25 +1595,25 @@ shift $((OPTIND-1))
 # /usr/cnc must be a symbolic link
 if [ -d "$INCROOT" -a ! -L "$INCROOT" ]
 then
-	printf "ERROR: $INCROOT exists as a directory. Confusion at an all time high...\n"
+	logerror "$INCROOT exists as a directory. Confusion at an all time high..."
 	fail_upgrade
 fi
 # /usr/cnc_stage must be a symbolic link
 if [ -d "$STAGEROOT" -a ! -L "$STAGEROOT" ]
 then
-	printf "ERROR: $STAGEROOT exists as a directory. Confusion at an all time high...\n"
+	logerror "$STAGEROOT exists as a directory. Confusion at an all time high..."
 	fail_upgrade
 fi
 # /usr/cnc_saved must be a symbolic link
 if [ -d "$SAVEDROOT" -a ! -L "$SAVEDROOT" ]
 then
-	printf "ERROR: $SAVEDROOT exists as a directory. Confusion at an all time high...\n"
+	logerror "$SAVEDROOT exists as a directory. Confusion at an all time high..."
 	fail_upgrade
 fi
 
 if [ ${RUNOPTS} -ne 1 ]
 then
-	printf "ERROR: Must provide one and only one of -s or -u options\n"
+	logerror "Must provide one and only one of -s or -u options"
 	print_usage
 	fail_upgrade
 fi
@@ -1622,12 +1622,12 @@ if [ -n "${CONFIGFILE}" ]
 then
 	if [ ! -f "${CONFIGFILE}" ]
 	then
-		printf "ERROR: Config file (${CONFIGFILE}) not found.\n"
+		logerror "Config file (${CONFIGFILE}) not found."
 		fail_upgrade
 	fi
 	. ${CONFIGFILE}
 else
-	printf "ERROR: Need config file (-f) option\n"
+	logerror "Need config file (-f) option"
 	fail_upgrade
 fi
 
@@ -1691,30 +1691,30 @@ else
 	fi
 fi
 
-printf "RETRO_GENERIC: [${RETRO_GENERIC}]\n"
+loginfo "RETRO_GENERIC: [${RETRO_GENERIC}]"
 
 check_db_export_needed
 if [ "$?" = "1" ]
 then
-	printf "A 32bit->64bit data migration is needed...\n"
+	loginfo "A 32bit->64bit data migration is needed..."
 	# netFLEX must be booted if export/import needed
 	if [ ! -f "${INCROOT}/.CNC_UP" ]
 	then
-		printf "Application must be booted to continue... \n"
+		loginfo "Application must be booted to continue... "
 		exit_upgrade
 	fi
-	printf "Application is booted\n"
+	loginfo "Application is booted"
 
 	# dbcheck must be clean to continue
 	${INCROOT}/bin/dbcheck -AV
         if [ "$?" != "0" ]
         then
-		printf "dbcheck -AV... failed\n"
-		printf "dbcheck errors must be fixed before continuing...\n"
+		loginfo "dbcheck -AV... failed"
+		loginfo "dbcheck errors must be fixed before continuing..."
 		exit_upgrade
         fi
 
-	printf "dbcheck -AV is clean\n"
+	loginfo "dbcheck -AV is clean"
 
 fi
 
@@ -1723,7 +1723,7 @@ then
 	#
 	# Stage the new software
 	#
-	printf "\nStaging $HOSTNAME with ${UPGRADE_LOAD} (`date`)\n"
+	loginfo "Staging $HOSTNAME with ${UPGRADE_LOAD} (`date`)"
 	if [ ! -f "${STATEFILE}" ]
 	then
 		#
@@ -1731,26 +1731,26 @@ then
 		#
 		if [ -d "${LOADROOT}/${UPGRADE_LOAD}" ]
 		then
-			printf "\nERROR: ${LOADROOT}/${UPGRADE_LOAD} exists\n"
+			logerror "${LOADROOT}/${UPGRADE_LOAD} exists"
 			fail_upgrade
 		fi
 		write_state "swsstart"
 	fi
 	stage_new_sw
-	printf "Staging of ${LOADROOT}/${UPGRADE_LOAD} on ${HOSTNAME} complete (`date`)\n\n"
+	loginfo "Staging of ${LOADROOT}/${UPGRADE_LOAD} on ${HOSTNAME} complete (`date`)"
 else
 	#
 	# Switch to and boot the new software
 	#
-	printf "\nUpgrade $HOSTNAME with ${UPGRADE_LOAD} (`date`)\n"
+	loginfo "Upgrade $HOSTNAME with ${UPGRADE_LOAD} (`date`)"
 	if [ ! -f "${STATEFILE}" ]
 	then
 		#
 		#  Make sure a state file exists.
 		#
-		printf "\nERROR: State file ${STATEFILE} doesn't exist\n"
+		logerror "State file ${STATEFILE} doesn't exist"
 		fail_upgrade
 	fi
 	upgrade_new_sw
-	printf "Upgrade of ${LOADROOT}/${UPGRADE_LOAD} on ${HOSTNAME} complete (`date`)\n\n"
+	loginfo "Upgrade of ${LOADROOT}/${UPGRADE_LOAD} on ${HOSTNAME} complete (`date`)"
 fi
