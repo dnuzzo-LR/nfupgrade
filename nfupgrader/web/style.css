@@ -1,0 +1,13 @@
+body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 900px; }
+h1 { font-size: 1.3rem; }
+section { border: 1px solid #ccc; border-radius: 6px; padding: 1rem; margin: 1rem 0; }
+.bar { background: #eee; height: 18px; border-radius: 9px; overflow: hidden; }
+#bar-fill { background: #2d6a4f; height: 100%; width: 0; transition: width .3s; }
+#counter { font-weight: bold; margin-top: .3rem; }
+button { padding: .5rem 1rem; margin-right: .5rem; cursor: pointer; }
+#log { background: #111; color: #ddd; padding: .75rem; height: 320px;
+       overflow-y: auto; white-space: pre-wrap; font-size: 12px; }
+.sev-WARN { color: #e9c46a; }
+.sev-ERROR { color: #e76f51; }
+.sev-FATAL { color: #ff4d4d; font-weight: bold; }
+.sev-EXEC { color: #888; }
