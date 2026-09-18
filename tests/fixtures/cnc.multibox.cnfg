@@ -1,0 +1,5 @@
+# name num mate matenum type flags
+fep1 1 fep2 2 1 0
+fep2 2 fep1 1 1 0
+bep1 1 bep2 2 0 0
+bep2 2 bep1 1 0 0
