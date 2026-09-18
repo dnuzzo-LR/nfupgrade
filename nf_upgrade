@@ -45,11 +45,11 @@ function process_current_release
 		BASEREV=`rpm -qi netFLEX-CORE  2>/dev/null | grep Version | tail -1 | cut -d':' -f2 | xargs`
 		PATCHREV=`rpm -qi netFLEX-CORE-PATCH 2>/dev/null | grep Version | tail -1 | cut -d':' -f2 | xargs`
 		IPATCHREV=`rpm -qi netFLEX-CORE-IPATCH 2>/dev/null | grep Version | tail -1 | cut -d':' -f2 | xargs`
-		print "BASEREV=$BASEREV\n"
-		print "PATCHREV=$PATCHREV\n"
-		print "IPATCHREV=$IPATCHREV\n"
+		loginfo "BASEREV=$BASEREV"
+		loginfo "PATCHREV=$PATCHREV"
+		loginfo "IPATCHREV=$IPATCHREV"
 	else
-		printf "ERROR: Unrecognized architecture detected\n"
+		logerror "Unrecognized architecture detected"
 		exit_upgrade
 	fi
 
@@ -92,9 +92,9 @@ function run_linux_packages
 {
 	if [ -r ./linux_packages ]
 	then
-		echo "Running Linux Packages"
+		loginfo "Running Linux Packages"
 		/bin/bash ./linux_packages
-		echo "Linux Packages Completed with $?"
+		loginfo "Linux Packages Completed with $?"
 	fi
 }
 
@@ -112,7 +112,7 @@ function process_stage_setup
 	fi
 	if [ -z "${DEPOTFILE}" -o ! -f "${DEPOTFILE}" ]
 	then
-		printf "\nERROR: Invalid DEPOT file [$DEPOTFILE] in config file.\n"
+		logerror "Invalid DEPOT file [$DEPOTFILE] in config file."
 		exit_upgrade
 
 	fi
@@ -131,7 +131,7 @@ function process_upgrade_setup
 {
 	if [ ! -d "${STAGEROOT}" ]
 	then
-		printf "\nERROR: Invalid staging directory [${STAGEROOT}].\n"
+		logerror "Invalid staging directory [${STAGEROOT}]."
 		exit_upgrade
 	fi
 }
@@ -148,7 +148,7 @@ function process_setup
 
 	if [ ! -d "${INCROOT}" ]
 	then
-		printf "\nERROR: Invalid ${PRODUCT} directory [${INCROOT}].\n"
+		logerror "Invalid ${PRODUCT} directory [${INCROOT}]."
 		exit_upgrade
 	fi
 	#
@@ -156,13 +156,13 @@ function process_setup
 	#
 	if [ ! -d "${INCLOGDIR}" -o ! -w ${INCLOGDIR} ]
 	then
-		printf "\nERROR: Invalid ${PRODUCT}LOGDIR [${INCLOGDIR}] in config file.\n"
+		logerror "Invalid ${PRODUCT}LOGDIR [${INCLOGDIR}] in config file."
 		exit_upgrade
 	fi
 	echo "" >> ${TRACEFILE} 2>/dev/null
 	if [ "$?" != "0" ]
 	then
-		printf "\nERROR: Can't write to ${PRODUCT}LOGDIR [${INCLOGDIR}].\n"
+		logerror "Can't write to ${PRODUCT}LOGDIR [${INCLOGDIR}]."
 		exit_upgrade
 	fi
 	#
@@ -170,7 +170,7 @@ function process_setup
 	#
 	if [ -z "${NEW_GENERIC}" -o -z "${NEW_LOAD}" ]
 	then
-		printf "\nERROR: Invalid NEW_GENERIC [${NEW_GENERIC}] or NEW_LOAD [${NEW_LOAD}] in config file.\n"
+		logerror "Invalid NEW_GENERIC [${NEW_GENERIC}] or NEW_LOAD [${NEW_LOAD}] in config file."
 		exit_upgrade
 
 	fi
@@ -179,7 +179,7 @@ function process_setup
 	#
 	if [ -z "${OLD_GENERIC}" -o -z "${OLD_LOAD}" ]
 	then
-		printf "\nERROR: Invalid OLD_GENERIC [${OLD_GENERIC}] or OLD_LOAD [${OLD_LOAD}].\n"
+		logerror "Invalid OLD_GENERIC [${OLD_GENERIC}] or OLD_LOAD [${OLD_LOAD}]."
 		exit_upgrade
 	fi
 	#
@@ -187,7 +187,7 @@ function process_setup
 	#
 	if [ ! -d "${RETROROOT}" ]
 	then
-		printf "\nERROR: Invalid directory [${RETROROOT}].\n"
+		logerror "Invalid directory [${RETROROOT}]."
 		exit_upgrade
 	fi
 
@@ -199,13 +199,13 @@ function process_setup
 
 		if [ "${UNLINKDIR}" = "${RETROROOT}" ]
 		then
-			printf "\nERROR: Can't remove same directory we are upgrading from (${UNLINKDIR})\n"
+			logerror "Can't remove same directory we are upgrading from (${UNLINKDIR})"
 			exit_upgrade
 		fi
 
 		if [ ! -d "${UNLINKDIR}" ]
 		then
-			printf "\nWARNING: Trying to clean up... directory (${UNLINKDIR}) doesn't exist\n"
+			logwarn "Trying to clean up... directory (${UNLINKDIR}) doesn't exist"
 		fi
 
 	fi
@@ -255,11 +255,11 @@ function confirm_setup
 	#
 	#  Validate input.
 	#
-	printf "\nVALIDATE YOUR INPUT:\n"
-	printf   "====================\n"
-	printf "MODE                 : ${MODESTR}\n"
-	printf "UPGRADE TO LOAD      : ${UPGRADE_LOAD}\n"
-	printf "UPGRADE FROM LOAD    : ${RETRO_LOAD}\n"
+	loginfo "VALIDATE YOUR INPUT:"
+	loginfo "===================="
+	loginfo "MODE                 : ${MODESTR}"
+	loginfo "UPGRADE TO LOAD      : ${UPGRADE_LOAD}"
+	loginfo "UPGRADE FROM LOAD    : ${RETRO_LOAD}"
 
 	printf "\nVALIDATE YOUR INPUT:\n" >> ${TRACEFILE}
 	printf   "====================\n" >> ${TRACEFILE}
@@ -269,49 +269,49 @@ function confirm_setup
 
 	if [ "${STAGE}" = "YES" ]
 	then
-		printf "DEPOT FILE           : ${DEPOTFILE}\n"
+		loginfo "DEPOT FILE           : ${DEPOTFILE}"
 		printf "DEPOT FILE           : ${DEPOTFILE}\n" >> ${TRACEFILE}
 		if [ -n "${EXTDEPOTFILE}" ]
 		then
-			printf "EXTENSION DEPOT FILE     : ${EXTDEPOTFILE}\n"
+			loginfo "EXTENSION DEPOT FILE     : ${EXTDEPOTFILE}"
 			printf "EXTENSION DEPOT FILE     : ${EXTDEPOTFILE}\n" >> ${TRACEFILE}
 		fi
 		if [ -n "${PATCHDEPOTFILE}" ]
 		then
-			printf "PATCH DEPOT FILE     : ${PATCHDEPOTFILE}\n"
+			loginfo "PATCH DEPOT FILE     : ${PATCHDEPOTFILE}"
 			printf "PATCH DEPOT FILE     : ${PATCHDEPOTFILE}\n" >> ${TRACEFILE}
 		fi
 		if [ -n "${ATTEXTPATCHDEPOTFILE}" ]
 		then
-			printf "PATCH EXTENSION DEPOT FILE     : ${ATTEXTPATCHDEPOTFILE}\n"
+			loginfo "PATCH EXTENSION DEPOT FILE     : ${ATTEXTPATCHDEPOTFILE}"
 			printf "PATCH EXTENSION DEPOT FILE     : ${ATTEXTPATCHDEPOTFILE}\n" >> ${TRACEFILE}
 		fi
-		printf "CORE DB SETUP        : ${DBSTR}\n"
+		loginfo "CORE DB SETUP        : ${DBSTR}"
 		printf "CORE DB SETUP        : ${DBSTR}\n" >> ${TRACEFILE}
-		printf "INSTALL WEB GUI      : ${INSTALLWEBGUI}\n"
+		loginfo "INSTALL WEB GUI      : ${INSTALLWEBGUI}"
 		printf "INSTALL WEB GUI      : ${INSTALLWEBGUI}\n" >> ${TRACEFILE}
 		if [ "${INSTALLWEBGUI}" = "YES" ]
 		then
-			printf "WEBGUI DB SETUP      : ${DBSTRWEBGUI}\n"
+			loginfo "WEBGUI DB SETUP      : ${DBSTRWEBGUI}"
 			printf "WEBGUI DB SETUP      : ${DBSTRWEBGUI}\n" >> ${TRACEFILE}
 		fi
 		if [ -n "${UNLINKDIR}" ]
 		then
-			printf "REMOVE DIR FOR SPACE : ${UNLINKDIR}\n"
+			loginfo "REMOVE DIR FOR SPACE : ${UNLINKDIR}"
 			printf "REMOVE DIR FOR SPACE : ${UNLINKDIR}\n" >> ${TRACEFILE}
 		fi
 		if [ -n "${STAGENICEVAL}" ]
 		then
-			printf "NICE VAL             : ${STAGENICEVAL}\n"
+			loginfo "NICE VAL             : ${STAGENICEVAL}"
 			printf "NICE VAL             : ${STAGENICEVAL}\n" >> ${TRACEFILE}
 		fi
 	else
 		if [ "${PRODUCT}" = "INC" ]
 		then
-			printf "RESTART ${PRODUCT}          : ${RESTARTINC}\n"
+			loginfo "RESTART ${PRODUCT}          : ${RESTARTINC}"
 			printf "RESTART ${PRODUCT}          : ${RESTARTINC}\n" >> ${TRACEFILE}
 		else
-			printf "RESTART ${PRODUCT}      : ${RESTARTINC}\n"
+			loginfo "RESTART ${PRODUCT}      : ${RESTARTINC}"
 			printf "RESTART ${PRODUCT}      : ${RESTARTINC}\n" >> ${TRACEFILE}
 		fi
 
@@ -321,16 +321,16 @@ function confirm_setup
 			then
 				INIT_CARD_DB="YES"
 			fi
-			printf "INIT CARD/DNO DB     : ${INIT_CARD_DB}\n"
+			loginfo "INIT CARD/DNO DB     : ${INIT_CARD_DB}"
 			printf "INIT CARD/DNO DB     : ${INIT_CARD_DB}\n" >> ${TRACEFILE}
 		fi
 		if [ -n "${UPGRADENICEVAL}" ]
 		then
-			printf "NICE VAL             : ${UPGRADENICEVAL}\n"
+			loginfo "NICE VAL             : ${UPGRADENICEVAL}"
 			printf "NICE VAL             : ${UPGRADENICEVAL}\n" >> ${TRACEFILE}
 		fi
 	fi
-	printf "LOGGING TO           : ${INCLOGDIR}\n\n"
+	loginfo "LOGGING TO           : ${INCLOGDIR}"
 	printf "LOGGING TO           : ${INCLOGDIR}\n\n" >> ${TRACEFILE}
 
 	#
@@ -341,7 +341,7 @@ function confirm_setup
 		read "REPLY?Is your input correct [y|n]? "
 		if [ "${REPLY}" != "y" -a "${REPLY}" != "Y" ]
 		then
-			printf "Aborting upgrade, try again!\n\n"
+			loginfo "Aborting upgrade, try again!"
 			printf "Aborting upgrade, try again!\n\n" >> ${TRACEFILE}
 			exit_upgrade
 		fi
@@ -356,7 +356,7 @@ case `uname -m` in
         ARCHTYPE="LINUX"
         ;;
       *)
-        printf "ERROR: 1- Unsupported Linux architecture\n"
+        logerror "1- Unsupported Linux architecture"
         exit_upgrade
         ;;
 esac
@@ -393,7 +393,7 @@ do case $c in
 	 esac
 done
 
-printf "LARCH=$LARCH\n"
+loginfo "LARCH=$LARCH"
 
 
 if [ "${LARCH}" != "x86_64" ]
@@ -402,18 +402,18 @@ then
 	then
 		if (file /usr/cnc/bin/dacs | grep '64-bit' >/dev/null)
 		then
-			printf "Switching to Using 64bit\n"
+			loginfo "Switching to Using 64bit"
 			LARCH="x86_64"
 		fi
 	fi
 fi
 
-printf "LARCH=$LARCH\n"
+loginfo "LARCH=$LARCH"
 
 
 if [ ${RUNOPTS} -ne 1 ]
 then
-	printf "ERROR: Must provide one and only one of -s or -u options\n"
+	logerror "Must provide one and only one of -s or -u options"
 	print_usage
 	exit_upgrade
 fi
@@ -427,12 +427,12 @@ then
         fi
 	if [ ! -f "${CONFIGFILE}" ]
 	then
-		printf "ERROR: Config file (${CONFIGFILE}) not found.\n"
+		logerror "Config file (${CONFIGFILE}) not found."
 		exit_upgrade
 	fi
-	printf "Gathering configuration information, please wait...\n"
+	loginfo "Gathering configuration information, please wait..."
 
-	printf "CONFIGFILE=$CONFIGFILE\n"
+	loginfo "CONFIGFILE=$CONFIGFILE"
 
 
 	#
@@ -473,15 +473,15 @@ then
 
 	if [ "${NEW_GENERIC}" = "${OLD_GENERIC}" -a "${NEW_LOAD}" = "${OLD_LOAD}" ]
 	then
-		printf "\nWARNING: Reinstalling same ${PRODUCT} software [${OLD_GENERIC}.${OLD_LOAD}] that is currently installed.\n"
-		printf "WARNING: Database retrofits will NOT be run.\n\n"
+		logwarn "Reinstalling same ${PRODUCT} software [${OLD_GENERIC}.${OLD_LOAD}] that is currently installed."
+		logwarn "Database retrofits will NOT be run."
 
 		if [ "${PROMPTFORVALIDATE}" != "NO" ]
 		then
 			read "REPLY?Do you want to continue [y|n]? "
 			if [ "${REPLY}" != "y" -a "${REPLY}" != "Y" ]
 			then
-				printf "Aborting upgrade, try again!\n\n"
+				loginfo "Aborting upgrade, try again!"
 				printf "Aborting upgrade [same software], try again!\n\n" >> ${TRACEFILE}
 				exit_upgrade
 			fi
@@ -489,7 +489,7 @@ then
 
 	fi
 else
-	printf "ERROR: Need config file (-c) option\n"
+	logerror "Need config file (-c) option"
 	exit_upgrade
 fi
 
@@ -533,8 +533,8 @@ then
 fi
 
 LOGFILENAMES=$(basename ${TRACEFILE})
-printf "${PRODUCT} SW upgrade has begun...\n"
-printf "Log files can be found in ${INCLOGDIR} (${LOGFILENAMES}*)\n"
+loginfo "${PRODUCT} SW upgrade has begun..."
+loginfo "Log files can be found in ${INCLOGDIR} (${LOGFILENAMES}*)"
 
 
 
