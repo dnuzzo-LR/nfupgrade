@@ -66,6 +66,15 @@ for f in nf_upgrade nf_upgrader; do
 	else echo "FAIL grammar $f (log call without quoted message):"; echo "$bad" | sed 's/^/       /'; fail=1; fi
 done
 
+# --- 5. Runtime grammar: sourcing the include and emitting really produces
+#        the TIMESTAMP SEVERITY grammar (catches a broken date/format). ------
+line=$(ksh -c '. ./nf_log.ksh; loginfo "smoke test"')
+if echo "$line" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} INFO  smoke test$'; then
+	echo "ok   runtime-grammar"
+else
+	echo "FAIL runtime-grammar: [$line]"; fail=1
+fi
+
 echo "----"
 [ "$fail" -eq 0 ] && echo "VERIFY OK" || echo "VERIFY FAILED"
 exit $fail
