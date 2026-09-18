@@ -42,6 +42,17 @@ def resolve_url_host(bind, url_host_override, hostname):
     return bind
 
 
+def resolve_launch_cwd(env_cwd, user_config):
+    """Directory to run nf_upgrade from (for relative DEPOTFILE/linux_packages
+    lookup): an explicit NFU_LAUNCH_CWD wins, else the user config's directory,
+    else None (inherit the server's cwd)."""
+    if env_cwd:
+        return env_cwd
+    if user_config:
+        return os.path.dirname(user_config)
+    return None
+
+
 def make_handler(ctx):
     class Handler(BaseHTTPRequestHandler):
         def _serve_static(self, path):
@@ -78,7 +89,12 @@ def make_handler(ctx):
             # Perform the launch side effect after a recorded 202.
             if path == "/api/launch" and status == 202:
                 mode = json.loads(body.decode() or "{}").get("mode")
-                launcher.launch(ctx.nf_upgrade_path, ctx.effective_config, mode, cwd=ctx.webdir)
+                # Generate the effective config from the customer's config so
+                # confirm_setup does not block; their file is never edited.
+                if ctx.user_config:
+                    launcher.write_effective_config(ctx.user_config, ctx.effective_config)
+                launcher.launch(ctx.nf_upgrade_path, ctx.effective_config, mode,
+                                cwd=ctx.launch_cwd)
             self.send_response(status)
             for k, v in headers:
                 self.send_header(k, v)
@@ -113,13 +129,16 @@ def main(argv=None):
         "NFU_UPGRADE_PATH", os.path.join(here, "..", "nf_upgrade"))
     effective_config = os.environ.get(
         "NFU_EFFECTIVE_CONFIG", os.path.join(inclogdir, "nfupgrader_effective.cfg"))
+    user_config = os.environ.get("NFU_USER_CONFIG")
+    launch_cwd = resolve_launch_cwd(os.environ.get("NFU_LAUNCH_CWD"), user_config)
 
     ctx = api.Context(
         host=Host(), hostname=hostname, inclogdir=inclogdir, phase=phase,
         tracefile=tracefile, auth=TokenAuth(),
         audit=AuditLog(os.path.join(inclogdir, "nfupgrader_audit.jsonl")),
         webdir=webdir, nf_upgrade_path=nf_upgrade_path,
-        effective_config=effective_config,
+        effective_config=effective_config, user_config=user_config,
+        launch_cwd=launch_cwd,
     )
 
     port = int(os.environ.get("NFU_PORT", "0"))

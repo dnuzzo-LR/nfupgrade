@@ -27,5 +27,17 @@ class TestUrlHost(unittest.TestCase):
         self.assertEqual(httpd.resolve_url_host("127.0.0.1", None, "h"), "127.0.0.1")
 
 
+class TestLaunchCwd(unittest.TestCase):
+    def test_explicit_env_wins(self):
+        self.assertEqual(httpd.resolve_launch_cwd("/opt/depot", "/x/my.cfg"), "/opt/depot")
+
+    def test_defaults_to_user_config_dir(self):
+        self.assertEqual(httpd.resolve_launch_cwd(None, "/opt/apt/upgrade/my.cfg"),
+                         "/opt/apt/upgrade")
+
+    def test_none_when_nothing_known(self):
+        self.assertIsNone(httpd.resolve_launch_cwd(None, None))
+
+
 if __name__ == "__main__":
     unittest.main()

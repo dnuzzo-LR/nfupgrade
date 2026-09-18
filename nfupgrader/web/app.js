@@ -48,6 +48,10 @@ function refreshLog() {
 }
 
 function launch(mode) {
+  if (!window.confirm("Start the " + mode.toUpperCase() +
+      " now? This runs the real upgrade and cannot be paused.")) {
+    return;
+  }
   postJSON("/api/launch", { mode: mode }, function (status, body) {
     document.getElementById("launch-msg").textContent =
       status === 202 ? ("Launched " + mode + "…") : ("Error: " + (body.error || status));

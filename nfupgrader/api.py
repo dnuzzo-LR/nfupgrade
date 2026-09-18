@@ -8,12 +8,13 @@ from nfupgrader import progress, logtail, launcher
 
 Context = collections.namedtuple("Context", [
     "host", "hostname", "inclogdir", "phase", "tracefile",
-    "auth", "audit", "webdir", "nf_upgrade_path", "effective_config",
+    "auth", "audit", "webdir", "nf_upgrade_path",
+    "effective_config", "user_config", "launch_cwd",
 ])
-# effective_config is only used by the httpd launch side effect; default it so
-# api tests and the dispatcher (which never reads it) need not supply it.
-# (namedtuple field defaults via __new__.__defaults__ — Python 3.6 compatible.)
-Context.__new__.__defaults__ = (None,)
+# The last three fields are only used by the httpd launch side effect; default
+# them so api tests and the dispatcher (which never reads them) need not supply
+# them. (namedtuple field defaults via __new__.__defaults__ — Python 3.6 compatible.)
+Context.__new__.__defaults__ = (None, None, None)
 
 
 def _json(status, obj):
