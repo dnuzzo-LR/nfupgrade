@@ -31,6 +31,17 @@ def client_ip_from(client_address):
     return client_address[0]
 
 
+def resolve_url_host(bind, url_host_override, hostname):
+    """Pick the host to print in the access URL. An explicit override wins; a
+    wildcard/empty bind means the server is reachable by name, so use the
+    hostname; otherwise the specific bind address is the reachable host."""
+    if url_host_override:
+        return url_host_override
+    if bind in ("0.0.0.0", "::", ""):
+        return hostname
+    return bind
+
+
 def make_handler(ctx):
     class Handler(BaseHTTPRequestHandler):
         def _serve_static(self, path):
@@ -112,13 +123,20 @@ def main(argv=None):
     )
 
     port = int(os.environ.get("NFU_PORT", "0"))
-    server = HTTPServer(("127.0.0.1", port), make_handler(ctx))
+    bind = os.environ.get("NFU_BIND", "127.0.0.1")
+    url_host = resolve_url_host(bind, os.environ.get("NFU_URL_HOST"), hostname)
+
+    server = HTTPServer((bind, port), make_handler(ctx))
     real_port = server.server_address[1]
-    url = "http://127.0.0.1:{}/auth?token={}".format(real_port, ctx.auth.token)
-    print("nfupgrader listening on 127.0.0.1:{}".format(real_port))
-    print("Open (single-use):\n    {}".format(url))
-    print("From your workstation, tunnel first, e.g.:")
-    print("    ssh -L {p}:127.0.0.1:{p} <this-host>   then browse the URL above".format(p=real_port))
+    url = "http://{}:{}/auth?token={}".format(url_host, real_port, ctx.auth.token)
+    print("nfupgrader listening on {}:{}".format(bind, real_port))
+    if bind in ("127.0.0.1", "localhost"):
+        print("Loopback only. From your workstation, tunnel first, e.g.:")
+        print("    ssh -L {p}:127.0.0.1:{p} <this-host>   then browse:".format(p=real_port))
+        print("    http://127.0.0.1:{}/auth?token={}".format(real_port, ctx.auth.token))
+    else:
+        print("WARNING: bound to {} — the URL/token cross the network in plaintext HTTP.".format(bind))
+        print("Open (single-use):\n    {}".format(url))
     sys.stdout.flush()
     try:
         server.serve_forever()
