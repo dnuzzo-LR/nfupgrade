@@ -1,0 +1,6 @@
+# nfupgrader
+__pycache__/
+*.pyc
+.superpowers/
+*.tmp
+.nfrun.*

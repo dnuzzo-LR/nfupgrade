@@ -1,0 +1,546 @@
+#! /usr/bin/ksh
+
+##############################################################
+#                                                            #
+#  PURPOSE: Upgrade new PRODUCT CORE and GUI(s) on an HP/SUN #
+#                                                            #
+##############################################################
+
+HOSTNAME=`hostname`
+MODE=""
+INCROOT="/usr/cnc"
+STAGEROOT="/usr/cnc_stage"
+RETROROOT=$(ls -l ${INCROOT} | cut -f2 -d'>' | cut -f2 -d' ')
+OLD_GENERIC=""
+OLD_LOAD=""
+OLD_GENERIC_FILE="${STAGEROOT}/.OLD_GENERIC"
+OLD_LOAD_FILE="${STAGEROOT}/.OLD_LOAD"
+export PATH=${PATH}:${PWD}:/usr/sbin
+NF_LOG_LIB="$(dirname "$0")/nf_log.ksh"
+[ -r "${NF_LOG_LIB}" ] && . "${NF_LOG_LIB}"
+
+function exit_upgrade
+{
+	exit 1
+}
+
+#
+# Show options and exit
+#
+function print_usage
+{
+	printf "\nUsage:\n"
+	printf "\n       inc_upgrade -c <config file> [-s|-u] [-h]\n"
+	printf "          -c: config file\n"
+	printf "          -s: stage software\n"
+	printf "          -u: upgrade software\n"
+	printf "          -h: show this help\n"
+	printf "\n\n"
+	exit_upgrade
+}
+
+function process_current_release
+{
+	if [ "${ARCHTYPE}" = "LINUX" ] ; then
+		BASEREV=`rpm -qi netFLEX-CORE  2>/dev/null | grep Version | tail -1 | cut -d':' -f2 | xargs`
+		PATCHREV=`rpm -qi netFLEX-CORE-PATCH 2>/dev/null | grep Version | tail -1 | cut -d':' -f2 | xargs`
+		IPATCHREV=`rpm -qi netFLEX-CORE-IPATCH 2>/dev/null | grep Version | tail -1 | cut -d':' -f2 | xargs`
+		print "BASEREV=$BASEREV\n"
+		print "PATCHREV=$PATCHREV\n"
+		print "IPATCHREV=$IPATCHREV\n"
+	else
+		printf "ERROR: Unrecognized architecture detected\n"
+		exit_upgrade
+	fi
+
+	OLD_GENERIC=0
+	OLD_LOAD=0
+
+	if [ "${PRODUCT}" = "INC" ]
+	then
+		# INC product
+		OLD_GENERIC=`echo ${BASEREV} | cut -c1-4`
+		OLD_LOAD=`echo ${BASEREV} | cut -c6-7`
+	else
+		# netFLEX product
+		OLD_GENERIC=`echo ${BASEREV} | cut -c1-5`
+		OLD_LOAD=`echo ${BASEREV} | cut -c7-8`
+	fi
+
+	for REV in ${PATCHREV} ${IPATCHREV}
+	do
+		if [ "${PRODUCT}" = "INC" ]
+		then
+			REVGEN=`echo $REV | cut -c1-4`
+		else
+			REVGEN=`echo $REV | cut -c1-5`
+		fi
+		if [ "${REVGEN}" = "${OLD_GENERIC}" ] ; then
+			if [ "${PRODUCT}" = "INC" ] ; then
+				REVLOAD=`echo $REV | cut -c6-7`
+			else
+				REVLOAD=`echo $REV | cut -c7-8`
+			fi
+			if [ "${REVLOAD}" -gt "${OLD_LOAD}" ] ; then
+				OLD_LOAD=${REVLOAD}
+			fi
+		fi
+	done
+}
+
+function run_linux_packages
+{
+	if [ -r ./linux_packages ]
+	then
+		echo "Running Linux Packages"
+		/bin/bash ./linux_packages
+		echo "Linux Packages Completed with $?"
+	fi
+}
+
+function process_stage_setup
+{
+	#
+	#
+	#  Error if no depot file.
+	#
+
+	if [ -z "${DEPOTFILE}" ]
+	then
+		DFILE="${PRODUCT}${ARCHTYPE}${NEW_GENERIC}"
+		DEPOTFILE=`ls | grep "${DFILE}" | tail -1`
+	fi
+	if [ -z "${DEPOTFILE}" -o ! -f "${DEPOTFILE}" ]
+	then
+		printf "\nERROR: Invalid DEPOT file [$DEPOTFILE] in config file.\n"
+		exit_upgrade
+
+	fi
+
+	#
+	#  If the PATCHDEPOTFILE is not set in the config file
+	#  then check for a patch depot in the current directory.
+	#
+	if [ -z "${PATCHDEPOTFILE}" ]
+	then
+		PATCHDEPOTFILE=`ls | grep "${PRODUCT}${ARCHTYPE}${NEW_GENERIC}.*PATCH" | tail -1`
+	fi
+}
+
+function process_upgrade_setup
+{
+	if [ ! -d "${STAGEROOT}" ]
+	then
+		printf "\nERROR: Invalid staging directory [${STAGEROOT}].\n"
+		exit_upgrade
+	fi
+}
+
+#
+#  process_setup:
+#
+#       - This function processes the user info provided
+#         in the configuration file. The info is the setup information
+#	  needed to do the upgrade.
+#
+function process_setup
+{
+
+	if [ ! -d "${INCROOT}" ]
+	then
+		printf "\nERROR: Invalid ${PRODUCT} directory [${INCROOT}].\n"
+		exit_upgrade
+	fi
+	#
+	#  Need a place to log to.
+	#
+	if [ ! -d "${INCLOGDIR}" -o ! -w ${INCLOGDIR} ]
+	then
+		printf "\nERROR: Invalid ${PRODUCT}LOGDIR [${INCLOGDIR}] in config file.\n"
+		exit_upgrade
+	fi
+	echo "" >> ${TRACEFILE} 2>/dev/null
+	if [ "$?" != "0" ]
+	then
+		printf "\nERROR: Can't write to ${PRODUCT}LOGDIR [${INCLOGDIR}].\n"
+		exit_upgrade
+	fi
+	#
+	#  Error if no new generic and load.
+	#
+	if [ -z "${NEW_GENERIC}" -o -z "${NEW_LOAD}" ]
+	then
+		printf "\nERROR: Invalid NEW_GENERIC [${NEW_GENERIC}] or NEW_LOAD [${NEW_LOAD}] in config file.\n"
+		exit_upgrade
+
+	fi
+	#
+	#  Error if no old generic and load.
+	#
+	if [ -z "${OLD_GENERIC}" -o -z "${OLD_LOAD}" ]
+	then
+		printf "\nERROR: Invalid OLD_GENERIC [${OLD_GENERIC}] or OLD_LOAD [${OLD_LOAD}].\n"
+		exit_upgrade
+	fi
+	#
+	#  Error if directory we are supposed to upgrade from doesn't exist.
+	#
+	if [ ! -d "${RETROROOT}" ]
+	then
+		printf "\nERROR: Invalid directory [${RETROROOT}].\n"
+		exit_upgrade
+	fi
+
+	#
+	#  Error removing directory we are copying db files from.
+	#
+	if [ "${MODE}" = "stage" -a -n "${UNLINKDIR}" ]
+	then
+
+		if [ "${UNLINKDIR}" = "${RETROROOT}" ]
+		then
+			printf "\nERROR: Can't remove same directory we are upgrading from (${UNLINKDIR})\n"
+			exit_upgrade
+		fi
+
+		if [ ! -d "${UNLINKDIR}" ]
+		then
+			printf "\nWARNING: Trying to clean up... directory (${UNLINKDIR}) doesn't exist\n"
+		fi
+
+	fi
+
+	if [ "${MODE}" = "stage" ]
+	then
+		process_stage_setup
+	else
+		process_upgrade_setup
+	fi
+
+}
+
+#
+#  Validate user input.
+#
+function confirm_setup
+{
+	INCROOT="/usr/cnc"
+	COPYCNCLOC=${INCROOT}
+	COPYWEBGUIDBLOC=${INCROOT}
+	UPGRADE_LOAD="${NEW_GENERIC}.${NEW_LOAD}"
+	RETRO_LOAD="${OLD_GENERIC}.${OLD_LOAD}"
+
+	#
+	#  Have the user confirm their selections.
+	#
+	DBSTR="Copy CORE DB from ${COPYCNCLOC}"
+	DBSTRWEBGUI="Copy WEBGUI DB from ${COPYWEBGUIDBLOC}"
+
+	if [ "${STAGE}" = "YES" ]
+	then
+		MODESTR="Staging new software"
+	else
+		MODESTR="Upgrading new software"
+	fi
+
+	if [ "${RESTARTINC}" != "NO" ]
+	then
+		RESTARTINC="YES"
+	fi
+	if [ "${INSTALLWEBGUI}" != "NO" ]
+	then
+		INSTALLWEBGUI="YES"
+	fi
+
+	#
+	#  Validate input.
+	#
+	printf "\nVALIDATE YOUR INPUT:\n"
+	printf   "====================\n"
+	printf "MODE                 : ${MODESTR}\n"
+	printf "UPGRADE TO LOAD      : ${UPGRADE_LOAD}\n"
+	printf "UPGRADE FROM LOAD    : ${RETRO_LOAD}\n"
+
+	printf "\nVALIDATE YOUR INPUT:\n" >> ${TRACEFILE}
+	printf   "====================\n" >> ${TRACEFILE}
+	printf "MODE                 : ${MODESTR}\n" >> ${TRACEFILE}
+	printf "UPGRADE TO LOAD      : ${UPGRADE_LOAD}\n" >> ${TRACEFILE}
+	printf "UPGRADE FROM LOAD    : ${RETRO_LOAD}\n" >> ${TRACEFILE}
+
+	if [ "${STAGE}" = "YES" ]
+	then
+		printf "DEPOT FILE           : ${DEPOTFILE}\n"
+		printf "DEPOT FILE           : ${DEPOTFILE}\n" >> ${TRACEFILE}
+		if [ -n "${EXTDEPOTFILE}" ]
+		then
+			printf "EXTENSION DEPOT FILE     : ${EXTDEPOTFILE}\n"
+			printf "EXTENSION DEPOT FILE     : ${EXTDEPOTFILE}\n" >> ${TRACEFILE}
+		fi
+		if [ -n "${PATCHDEPOTFILE}" ]
+		then
+			printf "PATCH DEPOT FILE     : ${PATCHDEPOTFILE}\n"
+			printf "PATCH DEPOT FILE     : ${PATCHDEPOTFILE}\n" >> ${TRACEFILE}
+		fi
+		if [ -n "${ATTEXTPATCHDEPOTFILE}" ]
+		then
+			printf "PATCH EXTENSION DEPOT FILE     : ${ATTEXTPATCHDEPOTFILE}\n"
+			printf "PATCH EXTENSION DEPOT FILE     : ${ATTEXTPATCHDEPOTFILE}\n" >> ${TRACEFILE}
+		fi
+		printf "CORE DB SETUP        : ${DBSTR}\n"
+		printf "CORE DB SETUP        : ${DBSTR}\n" >> ${TRACEFILE}
+		printf "INSTALL WEB GUI      : ${INSTALLWEBGUI}\n"
+		printf "INSTALL WEB GUI      : ${INSTALLWEBGUI}\n" >> ${TRACEFILE}
+		if [ "${INSTALLWEBGUI}" = "YES" ]
+		then
+			printf "WEBGUI DB SETUP      : ${DBSTRWEBGUI}\n"
+			printf "WEBGUI DB SETUP      : ${DBSTRWEBGUI}\n" >> ${TRACEFILE}
+		fi
+		if [ -n "${UNLINKDIR}" ]
+		then
+			printf "REMOVE DIR FOR SPACE : ${UNLINKDIR}\n"
+			printf "REMOVE DIR FOR SPACE : ${UNLINKDIR}\n" >> ${TRACEFILE}
+		fi
+		if [ -n "${STAGENICEVAL}" ]
+		then
+			printf "NICE VAL             : ${STAGENICEVAL}\n"
+			printf "NICE VAL             : ${STAGENICEVAL}\n" >> ${TRACEFILE}
+		fi
+	else
+		if [ "${PRODUCT}" = "INC" ]
+		then
+			printf "RESTART ${PRODUCT}          : ${RESTARTINC}\n"
+			printf "RESTART ${PRODUCT}          : ${RESTARTINC}\n" >> ${TRACEFILE}
+		else
+			printf "RESTART ${PRODUCT}      : ${RESTARTINC}\n"
+			printf "RESTART ${PRODUCT}      : ${RESTARTINC}\n" >> ${TRACEFILE}
+		fi
+
+		if [ "${RESTARTINC}" != "NO" ]
+		then
+			if [ "${INIT_CARD_DB}" != "NO" ]
+			then
+				INIT_CARD_DB="YES"
+			fi
+			printf "INIT CARD/DNO DB     : ${INIT_CARD_DB}\n"
+			printf "INIT CARD/DNO DB     : ${INIT_CARD_DB}\n" >> ${TRACEFILE}
+		fi
+		if [ -n "${UPGRADENICEVAL}" ]
+		then
+			printf "NICE VAL             : ${UPGRADENICEVAL}\n"
+			printf "NICE VAL             : ${UPGRADENICEVAL}\n" >> ${TRACEFILE}
+		fi
+	fi
+	printf "LOGGING TO           : ${INCLOGDIR}\n\n"
+	printf "LOGGING TO           : ${INCLOGDIR}\n\n" >> ${TRACEFILE}
+
+	#
+	#  Don't prompt if set in config file
+	#
+	if [ "${PROMPTFORVALIDATE}" != "NO" ]
+	then
+		read "REPLY?Is your input correct [y|n]? "
+		if [ "${REPLY}" != "y" -a "${REPLY}" != "Y" ]
+		then
+			printf "Aborting upgrade, try again!\n\n"
+			printf "Aborting upgrade, try again!\n\n" >> ${TRACEFILE}
+			exit_upgrade
+		fi
+	fi
+}
+
+#
+# Check the machine architecture
+#
+case `uname -m` in
+      x86_64|i686)
+        ARCHTYPE="LINUX"
+        ;;
+      *)
+        printf "ERROR: 1- Unsupported Linux architecture\n"
+        exit_upgrade
+        ;;
+esac
+
+
+#
+#  Process args.
+#
+
+unset VERSION_ID
+eval $(grep VERSION_ID /etc/os-release)
+
+case "${VERSION_ID}" in
+  8*) LARCH=x86_64;;
+  9*) LARCH=x86_64;;
+  7*) LARCH=i686;;
+esac
+unset VERSION_ID
+
+RUNOPTS=0
+PRODUCT="INC"
+while getopts "c:sunmhL" c
+do case $c in
+		c) CONFIGFILE=${OPTARG};;
+		L) LARCH=x86_64;;
+		s) STAGE=YES
+			 MODE="stage"
+			 RUNOPTS=`expr ${RUNOPTS}+1`;;
+		u) UPGRADE=YES
+			 MODE="upgrade"
+			 RUNOPTS=`expr ${RUNOPTS}+1`;;
+		h) print_usage;;
+		*) print_usage;;
+	 esac
+done
+
+printf "LARCH=$LARCH\n"
+
+
+if [ "${LARCH}" != "x86_64" ]
+then
+	if [ -f /usr/cnc/bin/dacs ]
+	then
+		if (file /usr/cnc/bin/dacs | grep '64-bit' >/dev/null)
+		then
+			printf "Switching to Using 64bit\n"
+			LARCH="x86_64"
+		fi
+	fi
+fi
+
+printf "LARCH=$LARCH\n"
+
+
+if [ ${RUNOPTS} -ne 1 ]
+then
+	printf "ERROR: Must provide one and only one of -s or -u options\n"
+	print_usage
+	exit_upgrade
+fi
+
+if [ -n "${CONFIGFILE}" ]
+then
+	CFILE=`basename ${CONFIGFILE}`
+	if [ "${CFILE}" = "${CONFIGFILE}" ]
+        then
+                CONFIGFILE="./${CONFIGFILE}"
+        fi
+	if [ ! -f "${CONFIGFILE}" ]
+	then
+		printf "ERROR: Config file (${CONFIGFILE}) not found.\n"
+		exit_upgrade
+	fi
+	printf "Gathering configuration information, please wait...\n"
+
+	printf "CONFIGFILE=$CONFIGFILE\n"
+
+
+	#
+	# need INCLOGDIR
+	#
+	. ${CONFIGFILE}
+
+
+	NF_FEATURE_FILE="/usr/cnc/features/netFLEX"
+	if [ -f "${NF_FEATURE_FILE}" ]
+	then
+        	PRODUCT="netFLEX";
+	else
+        	PRODUCT="INC";
+	fi
+
+	if [ "${MODE}" = "stage" ]
+	then
+		if [ -f "${OLD_GENERIC_FILE}" -a -f "${OLD_LOAD_FILE}" ]
+		then
+			OLD_GENERIC=`cat ${OLD_GENERIC_FILE}`
+			OLD_LOAD=`cat ${OLD_LOAD_FILE}`
+		else
+			process_current_release
+		fi
+		. ${CONFIGFILE}
+	else
+
+		#
+		#  The new directory may have been linked to /usr/cnc
+		#  if this is a rerun and we were to a certain point
+		#  in the upgrade step.
+		#
+		. ${CONFIGFILE}
+		OLD_GENERIC=`cat ${OLD_GENERIC_FILE}`
+		OLD_LOAD=`cat ${OLD_LOAD_FILE}`
+	fi
+
+	if [ "${NEW_GENERIC}" = "${OLD_GENERIC}" -a "${NEW_LOAD}" = "${OLD_LOAD}" ]
+	then
+		printf "\nWARNING: Reinstalling same ${PRODUCT} software [${OLD_GENERIC}.${OLD_LOAD}] that is currently installed.\n"
+		printf "WARNING: Database retrofits will NOT be run.\n\n"
+
+		if [ "${PROMPTFORVALIDATE}" != "NO" ]
+		then
+			read "REPLY?Do you want to continue [y|n]? "
+			if [ "${REPLY}" != "y" -a "${REPLY}" != "Y" ]
+			then
+				printf "Aborting upgrade, try again!\n\n"
+				printf "Aborting upgrade [same software], try again!\n\n" >> ${TRACEFILE}
+				exit_upgrade
+			fi
+		fi
+
+	fi
+else
+	printf "ERROR: Need config file (-c) option\n"
+	exit_upgrade
+fi
+
+export INCUPGRADEPID=$$
+export OLD_GENERIC OLD_LOAD
+TFILE=${INCLOGDIR}/${MODE}_inc_${HOSTNAME}
+TRACEFILE="${TFILE}.${INCUPGRADEPID}"
+
+run_linux_packages
+
+process_setup
+confirm_setup
+
+BG_MODE="ON"
+if [ "${MODE}" = "stage" ]
+then
+	if [ -z "${STAGENICEVAL}" ]
+	then
+		STAGENICEVAL="39"
+	fi
+	NICEVAL=${STAGENICEVAL}
+	if [ "${CUSTOMER_UPGRADE}" = "NO" ]
+	then
+		BG_MODE="OFF"
+	fi
+else
+	if [ -z "${UPGRADENICEVAL}" ]
+	then
+		UPGRADENICEVAL="-39"
+	fi
+	NICEVAL=${UPGRADENICEVAL}
+fi
+
+#
+# Make sure correct version of nf_upgrader is run.
+#
+EXECDIR=$(dirname ${0})
+if [ "${EXECDIR}" = "." ]
+then
+        EXECDIR="${PWD}"
+fi
+
+LOGFILENAMES=$(basename ${TRACEFILE})
+printf "${PRODUCT} SW upgrade has begun...\n"
+printf "Log files can be found in ${INCLOGDIR} (${LOGFILENAMES}*)\n"
+
+
+
+if [ "${BG_MODE}" = "ON" ]
+then
+	nohup nice -${NICEVAL} ${EXECDIR}/nf_upgrader $* > ${TRACEFILE} 2>&1 &
+else
+	nohup nice -${NICEVAL} ${EXECDIR}/nf_upgrader $* > ${TRACEFILE} 2>&1
+fi
