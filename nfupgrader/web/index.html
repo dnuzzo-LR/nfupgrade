@@ -7,82 +7,107 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <h1>netFLEX Upgrade &mdash; <span id="host">this host</span></h1>
+  <header class="app-header">
+    <h1>netFLEX Upgrade</h1>
+    <span class="host" id="host">this host</span>
+    <span id="app-badge" class="badge unknown">APP ?</span>
+  </header>
 
-  <section id="progress">
-    <h2>Progress</h2>
-    <div id="phase-line">Phase: <b id="phase">-</b> &middot; Status: <b id="status">-</b></div>
+  <div class="progress-strip">
+    <span>Phase: <b id="phase">-</b></span>
+    <span>Status: <b id="status">-</b></span>
     <div class="bar"><div id="bar-fill"></div></div>
-    <div id="counter">0 / 0</div>
-    <div id="current">-</div>
-  </section>
+    <span id="counter">0 / 0</span>
+    <span id="current" style="color:#b9c4cf"></span>
+  </div>
 
-  <section id="site">
-    <h2>Site</h2>
-    <table id="site-table">
-      <thead><tr>
-        <th>Host</th><th>Role</th><th>Reach</th><th>App</th>
-        <th>CORE</th><th>Installed</th><th>Staged</th><th>GR</th>
-      </tr></thead>
-      <tbody></tbody>
-    </table>
-  </section>
+  <nav class="tabs">
+    <button class="tab active" data-tab="overview">Overview</button>
+    <button class="tab" data-tab="upgrade">Upgrade</button>
+    <button class="tab" data-tab="site">Site</button>
+    <button class="tab" data-tab="log">Log</button>
+  </nav>
 
-  <section id="about">
-    <h2>About this host</h2>
-    <div id="about-grid" class="grid"></div>
-    <h3>Multibox links</h3>
-    <pre id="links">-</pre>
-  </section>
+  <main>
+    <!-- OVERVIEW -->
+    <section class="panel active" id="tab-overview">
+      <div class="card">
+        <h2>About this host</h2>
+        <div id="about-grid" class="grid"></div>
+        <h3>Multibox links</h3>
+        <pre id="links">-</pre>
+      </div>
+    </section>
 
-  <section id="config">
-    <h2>Upgrade configuration</h2>
-    <div>
-      <button id="cfg-load-depots">List depots</button>
-      <select id="cfg-depot"><option value="">— choose a CORE RPM —</option></select>
-    </div>
-    <form id="cfg-form"></form>
-    <div>
-      <button type="button" id="cfg-preview">Preview</button>
-      <button type="button" id="cfg-save">Use this config</button>
-      <span id="cfg-msg"></span>
-    </div>
-    <pre id="cfg-rendered"></pre>
-    <div id="cfg-issues"></div>
-  </section>
+    <!-- UPGRADE workflow -->
+    <section class="panel" id="tab-upgrade">
+      <div class="card">
+        <h2>1 &middot; Upgrade configuration</h2>
+        <div style="margin-bottom:.5rem">
+          <button id="cfg-load-depots">List depots</button>
+          <select id="cfg-depot"><option value="">— choose a CORE RPM —</option></select>
+        </div>
+        <form id="cfg-form"></form>
+        <div style="margin:.5rem 0">
+          <button type="button" id="cfg-preview">Preview</button>
+          <button type="button" id="cfg-save" class="primary">Use this config</button>
+          <span id="cfg-msg"></span>
+        </div>
+        <pre id="cfg-rendered"></pre>
+        <div id="cfg-issues"></div>
+      </div>
 
-  <section id="controls">
-    <h2>Launch</h2>
-    <div>
-      <label>Phase:
-        <select id="mode"><option value="stage">Stage</option><option value="upgrade">Upgrade</option></select>
-      </label>
-      <button id="btn-check">Run pre-flight checks</button>
-      <button id="btn-launch" disabled>Launch</button>
-    </div>
-    <div id="preflight"></div>
-    <div id="override-box" style="display:none">
-      <label><input type="checkbox" id="override"> Override blocking checks</label>
-      <input type="text" id="reason" placeholder="reason (required to override)" size="40">
-    </div>
-    <span id="launch-msg"></span>
-    <h3>Post-flight</h3>
-    <div id="postflight">-</div>
-  </section>
+      <div class="card">
+        <h2>2 &middot; Pre-flight checks &amp; launch</h2>
+        <div style="margin-bottom:.5rem">
+          <label>Phase:
+            <select id="mode"><option value="stage">Stage</option><option value="upgrade">Upgrade</option></select>
+          </label>
+          <button id="btn-check">Run pre-flight checks</button>
+          <button id="btn-launch" class="primary" disabled>Launch</button>
+          <span id="launch-msg"></span>
+        </div>
+        <div id="preflight"></div>
+        <div id="override-box" style="display:none">
+          <label><input type="checkbox" id="override"> Override blocking checks</label>
+          <input type="text" id="reason" placeholder="reason (required to override)" size="40">
+        </div>
+        <h3>Post-flight</h3>
+        <div id="postflight">-</div>
+      </div>
+    </section>
 
-  <section id="logs">
-    <h2>Log</h2>
-    <label>Show:
-      <select id="min-sev">
-        <option value="">All</option>
-        <option value="INFO">INFO+</option>
-        <option value="WARN">WARN+</option>
-        <option value="ERROR">ERROR+</option>
-        <option value="FATAL">FATAL only</option>
-      </select>
-    </label>
-    <pre id="log"></pre>
-  </section>
+    <!-- SITE -->
+    <section class="panel" id="tab-site">
+      <div class="card">
+        <h2>Site</h2>
+        <table id="site-table">
+          <thead><tr>
+            <th>Host</th><th>Role</th><th>Reach</th><th>App</th>
+            <th>CORE</th><th>Installed</th><th>Staged</th><th>GR</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- LOG -->
+    <section class="panel" id="tab-log">
+      <div class="card">
+        <h2>Log</h2>
+        <label>Show:
+          <select id="min-sev">
+            <option value="">All</option>
+            <option value="INFO">INFO+</option>
+            <option value="WARN">WARN+</option>
+            <option value="ERROR">ERROR+</option>
+            <option value="FATAL">FATAL only</option>
+          </select>
+        </label>
+        <pre id="log"></pre>
+      </div>
+    </section>
+  </main>
 
   <script src="/app.js"></script>
 </body>
