@@ -15,3 +15,6 @@ button { padding: .5rem 1rem; margin-right: .5rem; cursor: pointer; }
 .grid .k { color: #555; }
 .grid .v { font-family: monospace; }
 #links { background: #111; color: #ddd; padding: .5rem; overflow-x: auto; }
+#site-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+#site-table th, #site-table td { border: 1px solid #ddd; padding: .3rem .5rem; text-align: left; }
+#site-table tr.local { background: #eef7f0; font-weight: bold; }

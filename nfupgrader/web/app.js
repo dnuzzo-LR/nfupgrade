@@ -47,6 +47,28 @@ function refreshLog() {
   });
 }
 
+function cell(v) { return "<td>" + (v === null || v === undefined || v === "" ? "-" : v) + "</td>"; }
+
+function refreshSite() {
+  getJSON("/api/site", function (s) {
+    var tb = document.querySelector("#site-table tbody");
+    tb.innerHTML = "";
+    s.hosts.forEach(function (h) {
+      var i = h.info || {};
+      var v = i.versions || {}, l = i.loads || {}, g = i.gr || {};
+      var tr = document.createElement("tr");
+      if (h.is_local) tr.className = "local";
+      var reach = h.reachable ? "ok" : "unreachable";
+      var app = !h.reachable ? "?" : (i.app_up ? "UP" : "DOWN");
+      tr.innerHTML =
+        cell(h.name + (h.is_local ? " (this)" : "")) + cell(h.role) + cell(reach) +
+        cell(app) + cell(v.core) + cell(l.installed) + cell(l.staged) +
+        cell(g.transfer);
+      tb.appendChild(tr);
+    });
+  });
+}
+
 function row(label, value) {
   return "<div class='k'>" + label + "</div><div class='v'>" +
          (value === null || value === undefined || value === "" ? "-" : value) + "</div>";
@@ -105,6 +127,8 @@ document.getElementById("min-sev").onchange = function () {
 refreshProgress();
 refreshLog();
 refreshInfo();
+refreshSite();
 setInterval(refreshProgress, 2000);
 setInterval(refreshLog, 2000);
 setInterval(refreshInfo, 15000);
+setInterval(refreshSite, 15000);
