@@ -86,15 +86,23 @@ def make_handler(ctx):
             cookies = parse_cookies(self.headers.get("Cookie", ""))
             ip = client_ip_from(self.client_address)
             status, headers, out = api.dispatch(method, path, query, body, cookies, ip, ctx)
-            # Perform the launch side effect after a recorded 202.
+            # Perform the launch side effect after a recorded 202. A spawn
+            # failure (missing/non-executable script, missing config) must not
+            # crash the connection — turn it into a clean 500.
             if path == "/api/launch" and status == 202:
-                mode = json.loads(body.decode() or "{}").get("mode")
-                # Generate the effective config from the customer's config so
-                # confirm_setup does not block; their file is never edited.
-                if ctx.user_config:
-                    launcher.write_effective_config(ctx.user_config, ctx.effective_config)
-                launcher.launch(ctx.nf_upgrade_path, ctx.effective_config, mode,
-                                cwd=ctx.launch_cwd)
+                try:
+                    mode = json.loads(body.decode() or "{}").get("mode")
+                    # Generate the effective config from the customer's config so
+                    # confirm_setup does not block; their file is never edited.
+                    if ctx.user_config:
+                        launcher.write_effective_config(ctx.user_config, ctx.effective_config)
+                    launcher.launch(ctx.nf_upgrade_path, ctx.effective_config, mode,
+                                    cwd=ctx.launch_cwd)
+                except Exception as e:
+                    ctx.audit.record("launch_error", error=str(e), client=ip)
+                    status = 500
+                    out = ('{"error": "launch failed: ' + str(e).replace('"', "'") + '"}').encode("utf-8")
+                    headers = [("Content-Type", "application/json")]
             self.send_response(status)
             for k, v in headers:
                 self.send_header(k, v)
