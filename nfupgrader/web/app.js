@@ -47,6 +47,42 @@ function refreshLog() {
   });
 }
 
+function row(label, value) {
+  return "<div class='k'>" + label + "</div><div class='v'>" +
+         (value === null || value === undefined || value === "" ? "-" : value) + "</div>";
+}
+
+function refreshInfo() {
+  getJSON("/api/info", function (i) {
+    var t = i.topology, v = i.versions, l = i.loads, g = i.gr;
+    var html = "";
+    html += row("Host", i.host);
+    html += row("Topology", t.kind + (t.role ? " (" + t.role + ")" : "") +
+                (t.host_count ? " — " + t.host_count + " hosts" : ""));
+    html += row("Mate", t.mate);
+    html += row("Application", i.app_up ? "UP" : "DOWN");
+    html += row("CORE", v.core);
+    html += row("PATCH", v.patch);
+    html += row("IPATCH", v.ipatch);
+    html += row("Installed load", l.installed);
+    html += row("Staged load", l.staged);
+    html += row("Saved load", l.saved);
+    html += row("GR transfer", g.transfer);
+    html += row("GR restore", g.restore ? "in progress" : "none");
+    (i.disk || []).forEach(function (d) {
+      html += row("Disk " + d.mount, d.use + " used");
+    });
+    if (i.app_detail) {
+      html += row("incinfo", i.app_detail.incinfo);
+      html += row("rdb", i.app_detail.rdb_version);
+      html += row("dbcheck errors", i.app_detail.dbcheck_errors);
+    }
+    document.getElementById("about-grid").innerHTML = html;
+    document.getElementById("links").textContent =
+      i.links ? i.links : (i.app_up ? "(no links reported)" : "application down — unavailable");
+  });
+}
+
 function launch(mode) {
   if (!window.confirm("Start the " + mode.toUpperCase() +
       " now? This runs the real upgrade and cannot be paused.")) {
@@ -68,5 +104,7 @@ document.getElementById("min-sev").onchange = function () {
 
 refreshProgress();
 refreshLog();
+refreshInfo();
 setInterval(refreshProgress, 2000);
 setInterval(refreshLog, 2000);
+setInterval(refreshInfo, 15000);

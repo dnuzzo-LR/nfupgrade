@@ -11,3 +11,7 @@ button { padding: .5rem 1rem; margin-right: .5rem; cursor: pointer; }
 .sev-ERROR { color: #e76f51; }
 .sev-FATAL { color: #ff4d4d; font-weight: bold; }
 .sev-EXEC { color: #888; }
+.grid { display: grid; grid-template-columns: 200px 1fr; gap: .25rem .75rem; }
+.grid .k { color: #555; }
+.grid .v { font-family: monospace; }
+#links { background: #111; color: #ddd; padding: .5rem; overflow-x: auto; }
