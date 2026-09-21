@@ -120,7 +120,7 @@ def gather(host, hostname, cnc_cnfg_path="/usr/cnc/features/cnc.cnfg", tier1_onl
 
     if app_up and not tier1_only:
         info["app_detail"] = {
-            "incinfo": parse_incinfo(host.run(["/usr/cnc/bin/incinfo"]).out),
+            "incinfo": parse_incinfo(host.run(["/usr/cnc/bin/incinfo", "-j"]).out),
             "rdb_version": host.run(["rdb", "version"]).out.strip(),
             "dbcheck_errors": parse_dbcheck_errors(host.run(["dbcheck", "-AV"]).out),
         }

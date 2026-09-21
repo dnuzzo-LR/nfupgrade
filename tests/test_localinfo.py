@@ -75,7 +75,7 @@ class TestGather(unittest.TestCase):
             ("test", "-f", "/usr/cnc/grestore.pid"): RunResult(1, "", ""),
             ("df", "-kP"): RunResult(0, "Filesystem 1024-blocks Used Available Capacity Mounted on\n"
                                         "/dev/sda4 73400320 46000000 27400320 63% /usr4\n", ""),
-            ("/usr/cnc/bin/incinfo",): RunResult(0, "INC 5.4.0-29\n", ""),
+            ("/usr/cnc/bin/incinfo", "-j"): RunResult(0, '{"release": "5.4.0", "up": true}', ""),
             ("rdb", "version"): RunResult(0, "rdb 1.2.3\n", ""),
             ("dbcheck", "-AV"): RunResult(0, "clean\n", ""),
             ("/usr/cnc/mbin/nestat", "-B"): RunResult(0, "01 fep2  -> UP 7001 MSG WTR 5\n", ""),
@@ -108,7 +108,7 @@ class TestGather(unittest.TestCase):
         tmp = tempfile.mkdtemp()
         info = localinfo.gather(self._host(app_up=True), "fep1", _cnfg(tmp))
         self.assertIsNotNone(info["app_detail"])
-        self.assertIn("INC", info["app_detail"]["incinfo"])
+        self.assertEqual(info["app_detail"]["incinfo"]["release"], "5.4.0")
         self.assertEqual(info["app_detail"]["dbcheck_errors"], 0)
         self.assertIn("fep2", info["links"])
 
