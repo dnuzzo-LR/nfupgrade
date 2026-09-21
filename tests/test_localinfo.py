@@ -40,6 +40,14 @@ class TestParsers(unittest.TestCase):
     def test_dbcheck_zero(self):
         self.assertEqual(localinfo.parse_dbcheck_errors("all clean\n"), 0)
 
+    def test_parse_incinfo_json_becomes_dict(self):
+        v = localinfo.parse_incinfo('{"release": "5.5.0", "up": true}')
+        self.assertEqual(v["release"], "5.5.0")
+        self.assertTrue(v["up"])
+
+    def test_parse_incinfo_non_json_stays_string(self):
+        self.assertEqual(localinfo.parse_incinfo("release : 5.5.0\n"), "release : 5.5.0")
+
 
 import os
 import tempfile

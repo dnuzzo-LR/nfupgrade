@@ -112,7 +112,16 @@ function refreshInfo() {
       html += row("Disk " + d.mount, d.use + " used");
     });
     if (i.app_detail) {
-      html += row("incinfo", i.app_detail.incinfo);
+      var inc = i.app_detail.incinfo;
+      if (inc && typeof inc === "object") {
+        Object.keys(inc).forEach(function (k) {
+          var val = inc[k];
+          if (val !== null && typeof val === "object") val = JSON.stringify(val);
+          html += row("incinfo · " + k, val);
+        });
+      } else {
+        html += row("incinfo", inc);
+      }
       html += row("rdb", i.app_detail.rdb_version);
       html += row("dbcheck errors", i.app_detail.dbcheck_errors);
     }

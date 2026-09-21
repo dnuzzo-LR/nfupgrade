@@ -1,7 +1,22 @@
 """localinfo.py — gather this host's read-only facts through the Host.run seam.
 Pure parsers turn command output into structure; gather() composes them. The
 same collectors serve peers over ssh in Phase 4b."""
+import json
+
 from nfupgrader import site
+
+
+def parse_incinfo(out):
+    """incinfo may emit JSON (a record object) or human text depending on the
+    box. Return the parsed dict when it is a JSON object, else the raw string."""
+    out = out.strip()
+    try:
+        v = json.loads(out)
+        if isinstance(v, dict):
+            return v
+    except ValueError:
+        pass
+    return out
 
 
 def parse_rpm_version(out):
@@ -105,7 +120,7 @@ def gather(host, hostname, cnc_cnfg_path="/usr/cnc/features/cnc.cnfg", tier1_onl
 
     if app_up and not tier1_only:
         info["app_detail"] = {
-            "incinfo": host.run(["/usr/cnc/bin/incinfo"]).out.strip(),
+            "incinfo": parse_incinfo(host.run(["/usr/cnc/bin/incinfo"]).out),
             "rdb_version": host.run(["rdb", "version"]).out.strip(),
             "dbcheck_errors": parse_dbcheck_errors(host.run(["dbcheck", "-AV"]).out),
         }
