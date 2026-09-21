@@ -23,6 +23,7 @@
 
   <nav class="tabs">
     <button class="tab active" data-tab="overview">Overview</button>
+    <button class="tab" data-tab="config">Config</button>
     <button class="tab" data-tab="upgrade">Upgrade</button>
     <button class="tab" data-tab="site">Site</button>
     <button class="tab" data-tab="log">Log</button>
@@ -39,10 +40,10 @@
       </div>
     </section>
 
-    <!-- UPGRADE workflow -->
-    <section class="panel" id="tab-upgrade">
+    <!-- CONFIG -->
+    <section class="panel" id="tab-config">
       <div class="card">
-        <h2>1 &middot; Upgrade configuration</h2>
+        <h2>Upgrade configuration</h2>
         <div style="margin-bottom:.5rem">
           <button id="cfg-load-depots">List depots</button>
           <select id="cfg-depot"><option value="">— choose a CORE RPM —</option></select>
@@ -56,9 +57,12 @@
         <pre id="cfg-rendered"></pre>
         <div id="cfg-issues"></div>
       </div>
+    </section>
 
+    <!-- UPGRADE workflow -->
+    <section class="panel" id="tab-upgrade">
       <div class="card">
-        <h2>2 &middot; Pre-flight checks &amp; launch</h2>
+        <h2>Pre-flight checks &amp; launch</h2>
         <div style="margin-bottom:.5rem">
           <label>Phase:
             <select id="mode"><option value="stage">Stage</option><option value="upgrade">Upgrade</option></select>
