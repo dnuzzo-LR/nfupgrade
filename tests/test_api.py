@@ -22,17 +22,23 @@ def make_ctx(tmp, running=True):
         ("cat", "/usr/cnc/.GR_STATUS"): RunResult(1, "", ""),
         ("test", "-f", "/usr/cnc/grestore.pid"): RunResult(1, "", ""),
         ("df", "-kP"): RunResult(0, "Filesystem 1024-blocks Used Available Capacity Mounted on\n"
-                                    "/dev/sda4 100 40 60 40% /usr4\n", ""),
+                                    "/dev/sda4 100000000 10000000 90000000 10% /usr4\n", ""),
+        # default-check commands: stage pre-flight all pass; upgrade blocks on
+        # staged-present (no staged load) — see readlink /usr/cnc_stage rc 1 above.
+        ("dbcheck", "-AV"): RunResult(0, "clean\n", ""),
     })
     open(os.path.join(tmp, ".h1_STATE"), "w").write("swscopycnc\n")
     open(os.path.join(tmp, "trace"), "w").write("2026-09-18 10:00:00 INFO  hi\n")
     cnfg = os.path.join(tmp, "cnc.cnfg")
     open(cnfg, "w").write("h1 1 h1 1 1 0\n")
+    checks_path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                               "nfupgrader", "checks.default.json")
     return api.Context(
         host=host, hostname="h1", inclogdir=tmp, phase="stage",
         tracefile=os.path.join(tmp, "trace"),
         auth=TokenAuth(token="TOK"), audit=AuditLog(os.path.join(tmp, "audit.jsonl")),
         webdir=tmp, nf_upgrade_path="/x/nf_upgrade", cnc_cnfg_path=cnfg,
+        checks_path=checks_path,
     )
 
 
@@ -123,6 +129,44 @@ class TestApi(unittest.TestCase):
         data = json.loads(body.decode())
         names = [h["name"] for h in data["hosts"]]
         self.assertEqual(sorted(names), ["h1", "h2"])
+
+    def test_checks_endpoint(self):
+        sid = self._session()
+        status, _, body = api.dispatch(
+            "GET", "/api/checks", {"when": ["preflight"], "phase": ["stage"]},
+            b"", {"nfu_sid": sid}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 200)
+        data = json.loads(body.decode())
+        self.assertIn("results", data)
+        self.assertIn("blocking", data)
+
+    def test_launch_blocked_by_preflight_error(self):
+        sid = self._session()
+        status, _, body = api.dispatch(
+            "POST", "/api/launch", {}, json.dumps({"mode": "upgrade"}).encode(),
+            {"nfu_sid": sid}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 409)
+        data = json.loads(body.decode())
+        self.assertTrue(len(data["blocking"]) >= 1)
+
+    def test_launch_override_requires_reason(self):
+        sid = self._session()
+        status, _, _ = api.dispatch(
+            "POST", "/api/launch", {}, json.dumps({"mode": "upgrade", "override": True}).encode(),
+            {"nfu_sid": sid}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 400)
+
+    def test_launch_override_with_reason_proceeds_and_audits(self):
+        sid = self._session()
+        status, _, _ = api.dispatch(
+            "POST", "/api/launch", {},
+            json.dumps({"mode": "upgrade", "override": True, "reason": "known good"}).encode(),
+            {"nfu_sid": sid}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 202)
+        events = [json.loads(l)["event"] for l in
+                  open(os.path.join(self.tmp, "audit.jsonl")).read().splitlines()]
+        self.assertIn("override", events)
+        self.assertIn("launch", events)
 
     def test_launch_bad_mode_400(self):
         sid = self._session()

@@ -4,23 +4,39 @@ unit-testable without sockets."""
 import collections
 import json
 
-from nfupgrader import progress, logtail, launcher, localinfo, siteview, site
+import os
+
+from nfupgrader import progress, logtail, launcher, localinfo, siteview, site, checks
 
 Context = collections.namedtuple("Context", [
     "host", "hostname", "inclogdir", "phase", "tracefile",
     "auth", "audit", "webdir", "nf_upgrade_path",
     "effective_config", "user_config", "launch_cwd", "cnc_cnfg_path",
-    "peer_host_factory",
+    "peer_host_factory", "checks_path",
 ])
-# The trailing fields are only used by side effects (launch) or info gathering;
-# default them so the dispatcher/tests need not supply each one.
+# The trailing fields are only used by side effects (launch), info gathering, or
+# checks; default them so the dispatcher/tests need not supply each one.
 # (namedtuple field defaults via __new__.__defaults__ — Python 3.6 compatible.)
-Context.__new__.__defaults__ = (None, None, None, None, None)
+Context.__new__.__defaults__ = (None, None, None, None, None, None)
 
 
 def _default_peer_factory(name):
     from nfupgrader.host import SshHost
     return SshHost(name)
+
+
+def _machtype(ctx):
+    hosts = site.read_site(ctx.cnc_cnfg_path or "/usr/cnc/features/cnc.cnfg")
+    me = site.local_host(hosts, ctx.hostname)
+    return me.role if me else None
+
+
+def _load_checks(ctx):
+    path = ctx.checks_path or os.path.join(os.path.dirname(__file__), "checks.default.json")
+    try:
+        return checks.load_checks(path)
+    except (IOError, OSError, ValueError):
+        return []
 
 
 def _json(status, obj):
@@ -76,6 +92,12 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         view = siteview.gather_site(hosts, ctx.hostname, cnfg, ctx.host, factory)
         return _json(200, view)
 
+    if path == "/api/checks" and method == "GET":
+        when = (query.get("when") or ["preflight"])[0]
+        phase = (query.get("phase") or [ctx.phase])[0]
+        results = checks.run_checks(ctx.host, _load_checks(ctx), when, phase, _machtype(ctx))
+        return _json(200, {"results": results, "blocking": checks.blocking_failures(results)})
+
     if path == "/api/launch" and method == "POST":
         try:
             payload = json.loads(body.decode("utf-8") or "{}")
@@ -84,6 +106,17 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         mode = payload.get("mode")
         if mode not in ("stage", "upgrade"):
             return _json(400, {"error": "mode must be stage or upgrade"})
+        results = checks.run_checks(ctx.host, _load_checks(ctx), "preflight", mode, _machtype(ctx))
+        blocking = checks.blocking_failures(results)
+        override = bool(payload.get("override"))
+        if blocking and not override:
+            return _json(409, {"error": "pre-flight checks failed", "blocking": blocking})
+        if blocking and override:
+            reason = (payload.get("reason") or "").strip()
+            if not reason:
+                return _json(400, {"error": "override requires a reason"})
+            ctx.audit.record("override", mode=mode, client=client_ip, reason=reason,
+                             checks=[b["name"] for b in blocking])
         ctx.audit.record("launch", mode=mode, client=client_ip)
         # The httpd layer performs the actual launch (side effect); the
         # dispatcher records intent and returns accepted. See httpd on_launch.
