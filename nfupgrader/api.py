@@ -4,17 +4,23 @@ unit-testable without sockets."""
 import collections
 import json
 
-from nfupgrader import progress, logtail, launcher, localinfo
+from nfupgrader import progress, logtail, launcher, localinfo, siteview, site
 
 Context = collections.namedtuple("Context", [
     "host", "hostname", "inclogdir", "phase", "tracefile",
     "auth", "audit", "webdir", "nf_upgrade_path",
     "effective_config", "user_config", "launch_cwd", "cnc_cnfg_path",
+    "peer_host_factory",
 ])
 # The trailing fields are only used by side effects (launch) or info gathering;
 # default them so the dispatcher/tests need not supply each one.
 # (namedtuple field defaults via __new__.__defaults__ — Python 3.6 compatible.)
-Context.__new__.__defaults__ = (None, None, None, None)
+Context.__new__.__defaults__ = (None, None, None, None, None)
+
+
+def _default_peer_factory(name):
+    from nfupgrader.host import SshHost
+    return SshHost(name)
 
 
 def _json(status, obj):
@@ -62,6 +68,13 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         info = localinfo.gather(ctx.host, ctx.hostname,
                                 ctx.cnc_cnfg_path or "/usr/cnc/features/cnc.cnfg")
         return _json(200, info)
+
+    if path == "/api/site" and method == "GET":
+        cnfg = ctx.cnc_cnfg_path or "/usr/cnc/features/cnc.cnfg"
+        hosts = site.read_site(cnfg)
+        factory = ctx.peer_host_factory or _default_peer_factory
+        view = siteview.gather_site(hosts, ctx.hostname, cnfg, ctx.host, factory)
+        return _json(200, view)
 
     if path == "/api/launch" and method == "POST":
         try:

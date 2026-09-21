@@ -108,6 +108,22 @@ class TestApi(unittest.TestCase):
         self.assertIn("versions", data)
         self.assertEqual(data["versions"]["core"], "5.4.0-29")
 
+    def test_site_requires_session(self):
+        status, _, _ = api.dispatch("GET", "/api/site", {}, b"", {}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 401)
+
+    def test_site_with_session_lists_hosts(self):
+        open(self.ctx.cnc_cnfg_path, "w").write("h1 1 h2 2 1 0\nh2 2 h1 1 1 0\n")
+        peer = FakeHost({("true",): RunResult(255, "", "")})   # h2 unreachable
+        ctx = self.ctx._replace(peer_host_factory=lambda n: peer)
+        sid = ctx.auth.redeem("TOK", "127.0.0.1")
+        status, _, body = api.dispatch(
+            "GET", "/api/site", {}, b"", {"nfu_sid": sid}, "127.0.0.1", ctx)
+        self.assertEqual(status, 200)
+        data = json.loads(body.decode())
+        names = [h["name"] for h in data["hosts"]]
+        self.assertEqual(sorted(names), ["h1", "h2"])
+
     def test_launch_bad_mode_400(self):
         sid = self._session()
         status, _, _ = api.dispatch(
