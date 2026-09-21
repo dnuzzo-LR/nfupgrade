@@ -149,6 +149,83 @@ function refreshPostflight() {
   });
 }
 
+var cfgFields = [];
+
+function buildForm() {
+  getJSON("/api/config/fields", function (d) {
+    cfgFields = d.fields;
+    var f = document.getElementById("cfg-form");
+    f.innerHTML = "";
+    cfgFields.forEach(function (fld) {
+      var wrap = document.createElement("div");
+      wrap.className = "cfg-row";
+      var label = fld.name + (fld.required ? " *" : "");
+      var input;
+      if (fld.kind === "enum") {
+        input = "<select name='" + fld.name + "'" + (fld.fixed ? " disabled" : "") + ">" +
+          fld.values.map(function (v) { return "<option>" + v + "</option>"; }).join("") + "</select>";
+      } else {
+        input = "<input name='" + fld.name + "' value='" + (fld.default || "") + "'>";
+      }
+      wrap.innerHTML = "<label>" + label + "</label>" + input +
+        "<span class='hint'>" + (fld.help || "") + "</span>";
+      f.appendChild(wrap);
+    });
+  });
+}
+
+function formValues() {
+  var v = {};
+  cfgFields.forEach(function (fld) {
+    var el = document.querySelector("[name='" + fld.name + "']");
+    if (el) v[fld.name] = el.value;
+  });
+  return v;
+}
+
+function renderIssues(issues) {
+  document.getElementById("cfg-issues").innerHTML = issues.map(function (i) {
+    return "<div class='issue " + i.level + "'>" + i.level + ": " + i.field + " — " + i.message + "</div>";
+  }).join("");
+}
+
+document.getElementById("cfg-load-depots").onclick = function () {
+  getJSON("/api/config/depots", function (d) {
+    var sel = document.getElementById("cfg-depot");
+    sel.innerHTML = "<option value=''>— choose a CORE RPM —</option>" +
+      d.depots.map(function (x) {
+        return "<option value='" + x.path + "' data-g='" + x.generic + "' data-l='" + x.load + "'>" +
+               x.name + "</option>";
+      }).join("");
+  });
+};
+
+document.getElementById("cfg-depot").onchange = function () {
+  var opt = this.options[this.selectedIndex];
+  if (!opt.value) return;
+  var set = function (n, val) { var e = document.querySelector("[name='" + n + "']"); if (e) e.value = val; };
+  set("DEPOTFILE", opt.value);
+  set("NEW_GENERIC", opt.getAttribute("data-g"));
+  set("NEW_LOAD", opt.getAttribute("data-l"));
+};
+
+document.getElementById("cfg-preview").onclick = function () {
+  postJSON("/api/config/preview", { values: formValues() }, function (status, d) {
+    document.getElementById("cfg-rendered").textContent = d.rendered || "";
+    renderIssues(d.issues || []);
+  });
+};
+
+document.getElementById("cfg-save").onclick = function () {
+  postJSON("/api/config/save", { values: formValues() }, function (status, d) {
+    var msg = document.getElementById("cfg-msg");
+    if (status === 200) { msg.textContent = "Saved — this config will be used on launch."; renderIssues([]); }
+    else { msg.textContent = "Not saved — fix the errors."; renderIssues(d.issues || []); }
+  });
+};
+
+buildForm();
+
 document.getElementById("btn-check").onclick = runPreflight;
 document.getElementById("btn-launch").onclick = launch;
 document.getElementById("min-sev").onchange = function () {

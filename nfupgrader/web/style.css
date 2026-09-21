@@ -22,3 +22,7 @@ table.checks { border-collapse: collapse; margin: .5rem 0; width: 100%; font-siz
 table.checks td, table.checks th { border: 1px solid #ddd; padding: .25rem .5rem; text-align: left; }
 tr.fail-ERROR { background: #fdecea; }
 tr.fail-WARNING { background: #fff8e1; }
+.cfg-row { display: grid; grid-template-columns: 200px 260px 1fr; gap: .3rem .6rem; align-items: center; margin: .15rem 0; }
+.cfg-row .hint { color: #777; font-size: 12px; }
+#cfg-rendered { background: #111; color: #ddd; padding: .5rem; overflow-x: auto; }
+.issue.ERROR { color: #b00020; } .issue.WARNING { color: #8a6d00; }
