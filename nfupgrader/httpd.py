@@ -3,9 +3,17 @@ loopback and prints the one-time access URL. Serves static files from web/."""
 import json
 import os
 import posixpath
+import socketserver
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
+
+
+class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
+    """Threaded server so one slow request (e.g. an unresponsive peer's ssh in
+    /api/site) cannot block the rest of the UI. (Python 3.6-safe; stdlib adds
+    http.server.ThreadingHTTPServer only in 3.7.)"""
+    daemon_threads = True
 
 from nfupgrader import api, launcher
 from nfupgrader.auth import TokenAuth
@@ -164,7 +172,7 @@ def main(argv=None):
     bind = os.environ.get("NFU_BIND", "127.0.0.1")
     url_host = resolve_url_host(bind, os.environ.get("NFU_URL_HOST"), hostname)
 
-    server = HTTPServer((bind, port), make_handler(ctx))
+    server = ThreadingHTTPServer((bind, port), make_handler(ctx))
     real_port = server.server_address[1]
     url = "http://{}:{}/auth?token={}".format(url_host, real_port, ctx.auth.token)
     print("nfupgrader listening on {}:{}".format(bind, real_port))

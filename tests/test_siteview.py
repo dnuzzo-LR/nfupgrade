@@ -43,6 +43,20 @@ class TestSiteView(unittest.TestCase):
         self.assertTrue(rows["fep2"]["reachable"])
         self.assertIsNone(rows["fep2"]["info"]["app_detail"])      # peer = tier1 only
 
+    def test_duplicate_host_lines_collapse_to_one_row(self):
+        # cnc.cnfg lists one line per mate relationship, so a host repeats.
+        tmp = tempfile.mkdtemp()
+        cnfg = os.path.join(tmp, "cnc.cnfg")
+        open(cnfg, "w").write("m60 1 m61 1 1 9\nm61 1 m60 1 0 0\n"
+                              "m60 1 m62 2 1 9\nm62 2 m60 1 0 0\n")
+        hosts = site.parse_cnfg(open(cnfg).read())
+        local = FakeHost(_tier1_responses())
+        peers = {"m61": FakeHost(_tier1_responses()), "m62": FakeHost(_tier1_responses())}
+        view = siteview.gather_site(hosts, "m60", cnfg, local, lambda n: peers[n])
+        names = [r["name"] for r in view["hosts"]]
+        self.assertEqual(names, ["m60", "m61", "m62"])   # m60 once, not twice
+        self.assertEqual(sum(1 for r in view["hosts"] if r["is_local"]), 1)
+
     def test_unreachable_peer_marked(self):
         tmp = tempfile.mkdtemp()
         cnfg = self._cnfg(tmp)

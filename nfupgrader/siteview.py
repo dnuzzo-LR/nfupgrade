@@ -8,14 +8,19 @@ def gather_site(hosts, local_name, cnc_cnfg_path, local_host, make_peer_host):
     """hosts: list[HostInfo]. local_host: a Host for this box. make_peer_host:
     callable(name) -> a Host (SshHost in production, a fake in tests)."""
     rows = []
+    seen = set()
     for h in hosts:
+        if h.name in seen:      # cnc.cnfg lists a line per mate pairing; dedupe
+            continue
+        seen.add(h.name)
         if h.name == local_name:
             info = localinfo.gather(local_host, h.name, cnc_cnfg_path)
             rows.append({"name": h.name, "role": h.role, "is_local": True,
                          "reachable": True, "info": info})
             continue
         peer = make_peer_host(h.name)
-        if peer.run(["true"]).rc != 0:
+        # Bound the probe hard: an unresponsive peer must not stall the view.
+        if peer.run(["true"], timeout=8).rc != 0:
             rows.append({"name": h.name, "role": h.role, "is_local": False,
                          "reachable": False, "info": None})
         else:
