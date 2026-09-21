@@ -63,6 +63,36 @@ def render_cfg(values):
     return "\n".join(lines) + "\n"
 
 
+_BY_NAME = {f["name"]: f for f in FIELDS}
+
+
+def validate(values):
+    """Structural validation of a values dict. Returns a list of
+    {field, level, message}. level is ERROR or WARNING. Does not touch the
+    filesystem (path existence is checked separately, with a Host)."""
+    issues = []
+    for f in FIELDS:
+        name = f["name"]
+        v = values.get(name, "")
+        v = "" if v is None else str(v).strip()
+        if f.get("required") and not v:
+            issues.append({"field": name, "level": "ERROR",
+                           "message": "{} is required".format(name)})
+            continue
+        if not v:
+            continue
+        if f["kind"] == "enum" and v not in f["values"]:
+            issues.append({"field": name, "level": "ERROR",
+                           "message": "{} must be one of {}".format(name, "/".join(f["values"]))})
+        elif f["kind"] == "int":
+            try:
+                int(v)
+            except ValueError:
+                issues.append({"field": name, "level": "ERROR",
+                               "message": "{} must be an integer".format(name)})
+    return issues
+
+
 def derive_generic_load(version):
     """Split a netFLEX version into (generic, load). The load is the trailing
     dotted component only when the version has 4+ components (X.Y.Z.LL):
