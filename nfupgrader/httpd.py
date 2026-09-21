@@ -131,6 +131,7 @@ def main(argv=None):
         "NFU_EFFECTIVE_CONFIG", os.path.join(inclogdir, "nfupgrader_effective.cfg"))
     user_config = os.environ.get("NFU_USER_CONFIG")
     launch_cwd = resolve_launch_cwd(os.environ.get("NFU_LAUNCH_CWD"), user_config)
+    cnc_cnfg_path = os.environ.get("NFU_CNC_CNFG", "/usr/cnc/features/cnc.cnfg")
 
     ctx = api.Context(
         host=Host(), hostname=hostname, inclogdir=inclogdir, phase=phase,
@@ -138,7 +139,7 @@ def main(argv=None):
         audit=AuditLog(os.path.join(inclogdir, "nfupgrader_audit.jsonl")),
         webdir=webdir, nf_upgrade_path=nf_upgrade_path,
         effective_config=effective_config, user_config=user_config,
-        launch_cwd=launch_cwd,
+        launch_cwd=launch_cwd, cnc_cnfg_path=cnc_cnfg_path,
     )
 
     port = int(os.environ.get("NFU_PORT", "0"))
