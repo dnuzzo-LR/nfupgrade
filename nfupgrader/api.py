@@ -4,17 +4,17 @@ unit-testable without sockets."""
 import collections
 import json
 
-from nfupgrader import progress, logtail, launcher
+from nfupgrader import progress, logtail, launcher, localinfo
 
 Context = collections.namedtuple("Context", [
     "host", "hostname", "inclogdir", "phase", "tracefile",
     "auth", "audit", "webdir", "nf_upgrade_path",
-    "effective_config", "user_config", "launch_cwd",
+    "effective_config", "user_config", "launch_cwd", "cnc_cnfg_path",
 ])
-# The last three fields are only used by the httpd launch side effect; default
-# them so api tests and the dispatcher (which never reads them) need not supply
-# them. (namedtuple field defaults via __new__.__defaults__ — Python 3.6 compatible.)
-Context.__new__.__defaults__ = (None, None, None)
+# The trailing fields are only used by side effects (launch) or info gathering;
+# default them so the dispatcher/tests need not supply each one.
+# (namedtuple field defaults via __new__.__defaults__ — Python 3.6 compatible.)
+Context.__new__.__defaults__ = (None, None, None, None)
 
 
 def _json(status, obj):
@@ -57,6 +57,11 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         min_sev = (query.get("min") or [None])[0]
         chunk = logtail.tail_since(ctx.tracefile, offset, min_severity=min_sev)
         return _json(200, chunk)
+
+    if path == "/api/info" and method == "GET":
+        info = localinfo.gather(ctx.host, ctx.hostname,
+                                ctx.cnc_cnfg_path or "/usr/cnc/features/cnc.cnfg")
+        return _json(200, info)
 
     if path == "/api/launch" and method == "POST":
         try:

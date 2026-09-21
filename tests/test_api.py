@@ -9,14 +9,30 @@ from nfupgrader.host import FakeHost, RunResult
 
 
 def make_ctx(tmp, running=True):
-    host = FakeHost({("pgrep", "-f", "nf_upgrader"): RunResult(0 if running else 1, "", "")})
+    host = FakeHost({
+        ("pgrep", "-f", "nf_upgrader"): RunResult(0 if running else 1, "", ""),
+        # localinfo commands (app down: no tier-2 needed)
+        ("rpm", "-qi", "netFLEX-CORE"): RunResult(0, "Version     : 5.4.0\nRelease     : 29\n", ""),
+        ("rpm", "-qi", "netFLEX-CORE-PATCH"): RunResult(1, "", ""),
+        ("rpm", "-qi", "netFLEX-CORE-IPATCH"): RunResult(1, "", ""),
+        ("readlink", "/usr/cnc"): RunResult(0, "/usr/inc/inc54.029\n", ""),
+        ("readlink", "/usr/cnc_stage"): RunResult(1, "", ""),
+        ("readlink", "/usr/cnc_saved"): RunResult(1, "", ""),
+        ("test", "-f", "/usr/cnc/.CNC_UP"): RunResult(1, "", ""),
+        ("cat", "/usr/cnc/.GR_STATUS"): RunResult(1, "", ""),
+        ("test", "-f", "/usr/cnc/grestore.pid"): RunResult(1, "", ""),
+        ("df", "-kP"): RunResult(0, "Filesystem 1024-blocks Used Available Capacity Mounted on\n"
+                                    "/dev/sda4 100 40 60 40% /usr4\n", ""),
+    })
     open(os.path.join(tmp, ".h1_STATE"), "w").write("swscopycnc\n")
     open(os.path.join(tmp, "trace"), "w").write("2026-09-18 10:00:00 INFO  hi\n")
+    cnfg = os.path.join(tmp, "cnc.cnfg")
+    open(cnfg, "w").write("h1 1 h1 1 1 0\n")
     return api.Context(
         host=host, hostname="h1", inclogdir=tmp, phase="stage",
         tracefile=os.path.join(tmp, "trace"),
         auth=TokenAuth(token="TOK"), audit=AuditLog(os.path.join(tmp, "audit.jsonl")),
-        webdir=tmp, nf_upgrade_path="/x/nf_upgrade",
+        webdir=tmp, nf_upgrade_path="/x/nf_upgrade", cnc_cnfg_path=cnfg,
     )
 
 
@@ -77,6 +93,20 @@ class TestApi(unittest.TestCase):
         events = [json.loads(l)["event"] for l in
                   open(os.path.join(self.tmp, "audit.jsonl")).read().splitlines()]
         self.assertIn("launch", events)
+
+    def test_info_requires_session(self):
+        status, _, _ = api.dispatch("GET", "/api/info", {}, b"", {}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 401)
+
+    def test_info_with_session_returns_facts(self):
+        sid = self._session()
+        status, _, body = api.dispatch(
+            "GET", "/api/info", {}, b"", {"nfu_sid": sid}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 200)
+        data = json.loads(body.decode())
+        self.assertIn("topology", data)
+        self.assertIn("versions", data)
+        self.assertEqual(data["versions"]["core"], "5.4.0-29")
 
     def test_launch_bad_mode_400(self):
         sid = self._session()
