@@ -20,6 +20,20 @@ function postJSON(url, obj, cb) {
   x.send(JSON.stringify(obj));
 }
 
+function initTabs() {
+  var tabs = document.querySelectorAll(".tab");
+  var panels = document.querySelectorAll(".panel");
+  function show(name) {
+    tabs.forEach(function (t) { t.classList.toggle("active", t.getAttribute("data-tab") === name); });
+    panels.forEach(function (p) { p.classList.toggle("active", p.id === "tab-" + name); });
+    try { localStorage.setItem("nfu_tab", name); } catch (e) {}
+  }
+  tabs.forEach(function (t) { t.onclick = function () { show(t.getAttribute("data-tab")); }; });
+  var saved;
+  try { saved = localStorage.getItem("nfu_tab"); } catch (e) {}
+  show(saved || "overview");
+}
+
 function refreshProgress() {
   getJSON("/api/progress", function (p) {
     document.getElementById("phase").textContent = p.phase;
@@ -58,12 +72,15 @@ function refreshSite() {
       var v = i.versions || {}, l = i.loads || {}, g = i.gr || {};
       var tr = document.createElement("tr");
       if (h.is_local) tr.className = "local";
-      var reach = h.reachable ? "ok" : "unreachable";
-      var app = !h.reachable ? "?" : (i.app_up ? "UP" : "DOWN");
+      var reach = h.reachable
+        ? "<span class='pill ok'>ok</span>"
+        : "<span class='pill down'>unreachable</span>";
+      var app = !h.reachable ? "<span class='pill unknown'>?</span>"
+        : (i.app_up ? "<span class='pill ok'>UP</span>" : "<span class='pill down'>DOWN</span>");
       tr.innerHTML =
-        cell(h.name + (h.is_local ? " (this)" : "")) + cell(h.role) + cell(reach) +
-        cell(app) + cell(v.core) + cell(l.installed) + cell(l.staged) +
-        cell(g.transfer);
+        cell(h.name + (h.is_local ? " (this)" : "")) + cell(h.role) +
+        "<td>" + reach + "</td><td>" + app + "</td>" +
+        cell(v.core) + cell(l.installed) + cell(l.staged) + cell(g.transfer);
       tb.appendChild(tr);
     });
   });
@@ -102,6 +119,9 @@ function refreshInfo() {
     document.getElementById("about-grid").innerHTML = html;
     document.getElementById("links").textContent =
       i.links ? i.links : (i.app_up ? "(no links reported)" : "application down — unavailable");
+    var badge = document.getElementById("app-badge");
+    badge.textContent = i.app_up ? "APP UP" : "APP DOWN";
+    badge.className = "badge " + (i.app_up ? "up" : "down");
   });
 }
 
@@ -234,6 +254,7 @@ document.getElementById("min-sev").onchange = function () {
   refreshLog();
 };
 
+initTabs();
 refreshProgress();
 refreshLog();
 refreshInfo();
