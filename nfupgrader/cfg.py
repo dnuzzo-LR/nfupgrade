@@ -64,6 +64,23 @@ def render_cfg(values):
 
 
 _BY_NAME = {f["name"]: f for f in FIELDS}
+_DEPOT_RE = re.compile(r"netFLEX-CORE-([0-9][0-9.]*)-")
+
+
+def list_depots(host, dirs):
+    """Scan dirs for netFLEX-CORE*.rpm via Host.run(find). Return
+    [{path, name, generic, load}] with generic/load derived from the version."""
+    out = []
+    for d in dirs:
+        r = host.run(["find", d, "-maxdepth", "1", "-name", "netFLEX-CORE*.rpm"])
+        if r.rc != 0:
+            continue
+        for path in r.out.split():
+            name = path.rsplit("/", 1)[-1]
+            m = _DEPOT_RE.search(name)
+            generic, load = derive_generic_load(m.group(1)) if m else ("", "")
+            out.append({"path": path, "name": name, "generic": generic, "load": load})
+    return out
 
 
 def validate(values):

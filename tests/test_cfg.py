@@ -65,5 +65,26 @@ class TestValidate(unittest.TestCase):
         self.assertEqual([i for i in cfg.validate(_ok({})) if i["level"] == "ERROR"], [])
 
 
+from nfupgrader.host import FakeHost, RunResult
+
+
+class TestDepots(unittest.TestCase):
+    def test_list_depots_parses_names(self):
+        out = ("/depot/netFLEX-CORE-5.5.0.03-1.rhel8.x86_64.rpm\n"
+               "/depot/netFLEX-CORE-5.5.0.04-1.rhel8.x86_64.rpm\n")
+        h = FakeHost({("find", "/depot", "-maxdepth", "1", "-name", "netFLEX-CORE*.rpm"):
+                      RunResult(0, out, "")})
+        depots = cfg.list_depots(h, ["/depot"])
+        self.assertEqual(len(depots), 2)
+        self.assertEqual(depots[0]["generic"], "5.5.0")
+        self.assertEqual(depots[0]["load"], "03")
+        self.assertEqual(depots[0]["path"], "/depot/netFLEX-CORE-5.5.0.03-1.rhel8.x86_64.rpm")
+
+    def test_list_depots_empty_dir(self):
+        h = FakeHost({("find", "/none", "-maxdepth", "1", "-name", "netFLEX-CORE*.rpm"):
+                      RunResult(1, "", "")})
+        self.assertEqual(cfg.list_depots(h, ["/none"]), [])
+
+
 if __name__ == "__main__":
     unittest.main()
