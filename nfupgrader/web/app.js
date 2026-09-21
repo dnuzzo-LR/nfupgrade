@@ -20,6 +20,15 @@ function postJSON(url, obj, cb) {
   x.send(JSON.stringify(obj));
 }
 
+function spin(id, on) {
+  var el = document.getElementById(id);
+  if (el) el.style.display = on ? "inline-block" : "none";
+}
+
+function loadingHTML(text) {
+  return "<div class='loading'><span class='spinner'></span> " + text + "</div>";
+}
+
 function initTabs() {
   var tabs = document.querySelectorAll(".tab");
   var panels = document.querySelectorAll(".panel");
@@ -64,7 +73,9 @@ function refreshLog() {
 function cell(v) { return "<td>" + (v === null || v === undefined || v === "" ? "-" : v) + "</td>"; }
 
 function refreshSite() {
+  spin("site-spin", true);
   getJSON("/api/site", function (s) {
+    spin("site-spin", false);
     var tb = document.querySelector("#site-table tbody");
     tb.innerHTML = "";
     s.hosts.forEach(function (h) {
@@ -92,7 +103,9 @@ function row(label, value) {
 }
 
 function refreshInfo() {
+  spin("overview-spin", true);
   getJSON("/api/info", function (i) {
+    spin("overview-spin", false);
     var t = i.topology, v = i.versions, l = i.loads, g = i.gr;
     var html = "";
     html += row("Host", i.host);
@@ -264,6 +277,10 @@ document.getElementById("min-sev").onchange = function () {
 };
 
 initTabs();
+document.getElementById("about-grid").innerHTML = loadingHTML("Loading host info…");
+document.getElementById("links").textContent = "Loading…";
+document.querySelector("#site-table tbody").innerHTML =
+  "<tr><td colspan='8' class='loading'><span class='spinner'></span> Loading site…</td></tr>";
 refreshProgress();
 refreshLog();
 refreshInfo();

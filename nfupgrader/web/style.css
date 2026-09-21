@@ -81,6 +81,13 @@ table.checks tr.fail-WARNING { background: #fff8e1; }
 .sev-WARN { color: #e9c46a; } .sev-ERROR { color: #e76f51; }
 .sev-FATAL { color: #ff6b6b; font-weight: bold; } .sev-EXEC { color: #8895a3; }
 
+/* loading spinner */
+.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--line);
+  border-top-color: var(--accent); border-radius: 50%; animation: nfu-spin .7s linear infinite;
+  vertical-align: middle; margin-left: .4rem; }
+@keyframes nfu-spin { to { transform: rotate(360deg); } }
+.loading { color: var(--muted); padding: .5rem 0; }
+
 /* responsive */
 @media (max-width: 720px) {
   .grid { grid-template-columns: 1fr; }
