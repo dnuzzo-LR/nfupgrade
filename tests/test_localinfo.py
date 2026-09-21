@@ -104,6 +104,13 @@ class TestGather(unittest.TestCase):
         self.assertEqual(info["app_detail"]["dbcheck_errors"], 0)
         self.assertIn("fep2", info["links"])
 
+    def test_gather_tier1_only_skips_tier2_even_when_app_up(self):
+        tmp = tempfile.mkdtemp()
+        info = localinfo.gather(self._host(app_up=True), "fep1", _cnfg(tmp), tier1_only=True)
+        self.assertTrue(info["app_up"])          # tier-1 still reported
+        self.assertIsNone(info["app_detail"])     # tier-2 skipped
+        self.assertIsNone(info["links"])
+
     def test_gather_singlebox(self):
         tmp = tempfile.mkdtemp()
         p = os.path.join(tmp, "cnc.cnfg")

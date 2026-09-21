@@ -58,9 +58,10 @@ def _test_f(host, path):
     return host.run(["test", "-f", path]).rc == 0
 
 
-def gather(host, hostname, cnc_cnfg_path="/usr/cnc/features/cnc.cnfg"):
+def gather(host, hostname, cnc_cnfg_path="/usr/cnc/features/cnc.cnfg", tier1_only=False):
     """Collect this host's read-only facts. Tier-2 (app-dependent) fields are
-    gathered only when /usr/cnc/.CNC_UP exists."""
+    gathered only when /usr/cnc/.CNC_UP exists and tier1_only is False (peers
+    are tier-1 only)."""
     try:
         with open(cnc_cnfg_path) as fh:
             hosts = site.parse_cnfg(fh.read())
@@ -102,7 +103,7 @@ def gather(host, hostname, cnc_cnfg_path="/usr/cnc/features/cnc.cnfg"):
         "links": None,
     }
 
-    if app_up:
+    if app_up and not tier1_only:
         info["app_detail"] = {
             "incinfo": host.run(["/usr/cnc/bin/incinfo"]).out.strip(),
             "rdb_version": host.run(["rdb", "version"]).out.strip(),
