@@ -10,7 +10,7 @@ from urllib.parse import urlparse, parse_qs
 from nfupgrader import api, launcher
 from nfupgrader.auth import TokenAuth
 from nfupgrader.audit import AuditLog
-from nfupgrader.host import Host
+from nfupgrader.host import Host, SshHost
 
 _CTYPES = {".html": "text/html", ".js": "application/javascript", ".css": "text/css"}
 
@@ -140,6 +140,7 @@ def main(argv=None):
         webdir=webdir, nf_upgrade_path=nf_upgrade_path,
         effective_config=effective_config, user_config=user_config,
         launch_cwd=launch_cwd, cnc_cnfg_path=cnc_cnfg_path,
+        peer_host_factory=lambda name: SshHost(name),
     )
 
     port = int(os.environ.get("NFU_PORT", "0"))
