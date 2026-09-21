@@ -132,6 +132,7 @@ def main(argv=None):
     user_config = os.environ.get("NFU_USER_CONFIG")
     launch_cwd = resolve_launch_cwd(os.environ.get("NFU_LAUNCH_CWD"), user_config)
     cnc_cnfg_path = os.environ.get("NFU_CNC_CNFG", "/usr/cnc/features/cnc.cnfg")
+    checks_path = os.environ.get("NFU_CHECKS", os.path.join(here, "checks.default.json"))
 
     ctx = api.Context(
         host=Host(), hostname=hostname, inclogdir=inclogdir, phase=phase,
@@ -141,6 +142,7 @@ def main(argv=None):
         effective_config=effective_config, user_config=user_config,
         launch_cwd=launch_cwd, cnc_cnfg_path=cnc_cnfg_path,
         peer_host_factory=lambda name: SshHost(name),
+        checks_path=checks_path,
     )
 
     port = int(os.environ.get("NFU_PORT", "0"))
