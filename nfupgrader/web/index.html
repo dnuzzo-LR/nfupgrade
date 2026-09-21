@@ -37,9 +37,21 @@
 
   <section id="controls">
     <h2>Launch</h2>
-    <button id="btn-stage">Start Staging</button>
-    <button id="btn-upgrade">Start Upgrade</button>
+    <div>
+      <label>Phase:
+        <select id="mode"><option value="stage">Stage</option><option value="upgrade">Upgrade</option></select>
+      </label>
+      <button id="btn-check">Run pre-flight checks</button>
+      <button id="btn-launch" disabled>Launch</button>
+    </div>
+    <div id="preflight"></div>
+    <div id="override-box" style="display:none">
+      <label><input type="checkbox" id="override"> Override blocking checks</label>
+      <input type="text" id="reason" placeholder="reason (required to override)" size="40">
+    </div>
     <span id="launch-msg"></span>
+    <h3>Post-flight</h3>
+    <div id="postflight">-</div>
   </section>
 
   <section id="logs">

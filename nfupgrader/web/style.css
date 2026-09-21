@@ -18,3 +18,7 @@ button { padding: .5rem 1rem; margin-right: .5rem; cursor: pointer; }
 #site-table { border-collapse: collapse; width: 100%; font-size: 13px; }
 #site-table th, #site-table td { border: 1px solid #ddd; padding: .3rem .5rem; text-align: left; }
 #site-table tr.local { background: #eef7f0; font-weight: bold; }
+table.checks { border-collapse: collapse; margin: .5rem 0; width: 100%; font-size: 13px; }
+table.checks td, table.checks th { border: 1px solid #ddd; padding: .25rem .5rem; text-align: left; }
+tr.fail-ERROR { background: #fdecea; }
+tr.fail-WARNING { background: #fff8e1; }

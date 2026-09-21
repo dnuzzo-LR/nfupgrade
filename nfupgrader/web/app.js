@@ -105,19 +105,52 @@ function refreshInfo() {
   });
 }
 
-function launch(mode) {
-  if (!window.confirm("Start the " + mode.toUpperCase() +
-      " now? This runs the real upgrade and cannot be paused.")) {
-    return;
-  }
-  postJSON("/api/launch", { mode: mode }, function (status, body) {
-    document.getElementById("launch-msg").textContent =
-      status === 202 ? ("Launched " + mode + "…") : ("Error: " + (body.error || status));
+function renderChecks(el, data) {
+  var html = "<table class='checks'><tr><th></th><th>Check</th><th>Detail</th></tr>";
+  data.results.forEach(function (r) {
+    var mark = r.passed ? "✅" : (r.severity === "ERROR" ? "❌" : "⚠️");
+    html += "<tr class='" + (r.passed ? "pass" : "fail-" + r.severity) + "'>" +
+            "<td>" + mark + "</td><td>" + r.name + " — " + r.description + "</td>" +
+            "<td>" + (r.detail || "") + "</td></tr>";
+  });
+  html += "</table>";
+  el.innerHTML = html;
+}
+
+function runPreflight() {
+  var mode = document.getElementById("mode").value;
+  getJSON("/api/checks?when=preflight&phase=" + mode, function (data) {
+    renderChecks(document.getElementById("preflight"), data);
+    var blocked = data.blocking.length > 0;
+    document.getElementById("override-box").style.display = blocked ? "block" : "none";
+    document.getElementById("btn-launch").disabled = false;  // enabled; server re-checks
   });
 }
 
-document.getElementById("btn-stage").onclick = function () { launch("stage"); };
-document.getElementById("btn-upgrade").onclick = function () { launch("upgrade"); };
+function launch() {
+  var mode = document.getElementById("mode").value;
+  var override = document.getElementById("override").checked;
+  var reason = document.getElementById("reason").value;
+  if (!window.confirm("Start the " + mode.toUpperCase() +
+      " now? This runs the real upgrade and cannot be paused.")) return;
+  postJSON("/api/launch", { mode: mode, override: override, reason: reason },
+    function (status, body) {
+      var msg = document.getElementById("launch-msg");
+      if (status === 202) { msg.textContent = "Launched " + mode + "…"; }
+      else if (status === 409) { msg.textContent = "Blocked by pre-flight checks — override to proceed."; }
+      else { msg.textContent = "Error: " + (body.error || status); }
+    });
+}
+
+function refreshPostflight() {
+  var mode = document.getElementById("mode").value;
+  getJSON("/api/checks?when=postflight&phase=" + mode, function (data) {
+    if (data.results.length) renderChecks(document.getElementById("postflight"), data);
+  });
+}
+
+document.getElementById("btn-check").onclick = runPreflight;
+document.getElementById("btn-launch").onclick = launch;
 document.getElementById("min-sev").onchange = function () {
   logOffset = 0;
   document.getElementById("log").innerHTML = "";
@@ -128,7 +161,9 @@ refreshProgress();
 refreshLog();
 refreshInfo();
 refreshSite();
+refreshPostflight();
 setInterval(refreshProgress, 2000);
 setInterval(refreshLog, 2000);
 setInterval(refreshInfo, 15000);
 setInterval(refreshSite, 15000);
+setInterval(refreshPostflight, 15000);
