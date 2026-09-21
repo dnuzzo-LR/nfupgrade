@@ -62,6 +62,37 @@ class TestKinds(unittest.TestCase):
         h2 = FakeHost({("readlink", "/usr/cnc_stage"): RunResult(1, "", "")})
         self.assertFalse(checks.KINDS["staged_present"](h2, {})[0])
 
+    def test_touchfile(self):
+        h = FakeHost({("test", "-f", "/usr/cnc/features/ems"): RunResult(0, "", "")})
+        self.assertTrue(checks.KINDS["touchfile"](h, {"file": "ems"})[0])
+        h2 = FakeHost({("test", "-f", "/usr/cnc/features/nms"): RunResult(1, "", "")})
+        self.assertFalse(checks.KINDS["touchfile"](h2, {"file": "nms"})[0])
+
+    def test_system_define_membership(self):
+        cmd = ("sh", "-c", "grep -E '^M_SDI_TEST_MODE=' /usr/cnc/features/system_defines 2>/dev/null | tail -1")
+        h = FakeHost({cmd: RunResult(0, "M_SDI_TEST_MODE=1\n", "")})
+        self.assertTrue(checks.KINDS["system_define"](h, {"variable": "M_SDI_TEST_MODE", "expected_values": ["1"]})[0])
+        self.assertFalse(checks.KINDS["system_define"](h, {"variable": "M_SDI_TEST_MODE", "expected_values": ["0"]})[0])
+
+    def test_system_define_absent_matches_empty_expected(self):
+        cmd = ("sh", "-c", "grep -E '^INC_API_LIBCURL=' /usr/cnc/features/system_defines 2>/dev/null | tail -1")
+        h = FakeHost({cmd: RunResult(1, "", "")})   # not present -> value ""
+        self.assertTrue(checks.KINDS["system_define"](h, {"variable": "INC_API_LIBCURL", "expected_values": ["", "0"]})[0])
+
+    def test_kernel_param(self):
+        h = FakeHost({("sysctl", "kernel.pid_max"): RunResult(0, "kernel.pid_max = 65000\n", "")})
+        self.assertTrue(checks.KINDS["kernel_param"](h, {"param": "kernel.pid_max", "expected_value": "65000"})[0])
+        self.assertFalse(checks.KINDS["kernel_param"](h, {"param": "kernel.pid_max", "expected_value": "99999"})[0])
+
+    def test_ulimit(self):
+        out = "# comment\ncmm soft nproc 32768\ncmm hard nproc 32768\n"
+        cmd = ("sh", "-c", "cat /etc/security/limits.conf /etc/security/limits.d/*.conf 2>/dev/null")
+        h = FakeHost({cmd: RunResult(0, out, "")})
+        self.assertTrue(checks.KINDS["ulimit"](h, {"domain": "cmm", "limit_type": "soft",
+                                                   "limit_item": "nproc", "expected_value": "32768"})[0])
+        self.assertFalse(checks.KINDS["ulimit"](h, {"domain": "cmm", "limit_type": "hard",
+                                                    "limit_item": "nproc", "expected_value": "999"})[0])
+
 
 import os
 import tempfile
@@ -118,6 +149,16 @@ class TestRun(unittest.TestCase):
         stage_blk = [r["name"] for r in checks.blocking_failures(stage_res)]
         self.assertNotIn("warnonly", stage_blk)   # a WARNING failure never blocks
         self.assertIn("disk", stage_blk)          # ERROR failure (phase any) blocks in stage too
+
+    def test_shipped_default_checks_load_and_use_known_kinds(self):
+        import os
+        path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                            "nfupgrader", "checks.default.json")
+        loaded = checks.load_checks(path)
+        self.assertGreaterEqual(len(loaded), 50)   # ported nf-install system checks
+        for c in loaded:
+            self.assertIn(c["kind"], checks.KINDS, "unknown kind: %s" % c["kind"])
+            self.assertIn(c.get("when"), ("preflight", "postflight"))
 
     def test_result_shape(self):
         r = checks.run_checks(self._host(), self._checks(), "preflight", "upgrade", machtype="FEP")[0]

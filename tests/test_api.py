@@ -33,8 +33,9 @@ def make_ctx(tmp, running=True):
     open(os.path.join(tmp, "trace"), "w").write("2026-09-18 10:00:00 INFO  hi\n")
     cnfg = os.path.join(tmp, "cnc.cnfg")
     open(cnfg, "w").write("h1 1 h1 1 1 0\n")
-    checks_path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
-                               "nfupgrader", "checks.default.json")
+    # Use a controlled fixture, not the shipped default, so these tests stay
+    # stable as the production check list grows.
+    checks_path = os.path.join(os.path.dirname(__file__), "fixtures", "checks.test.json")
     return api.Context(
         host=host, hostname="h1", inclogdir=tmp, phase="stage",
         tracefile=os.path.join(tmp, "trace"),

@@ -68,6 +68,53 @@ def _staged_present(host, p):
     return (r.rc == 0 and bool(r.out.strip())), r.out.strip() or "no staged load"
 
 
+def _touchfile(host, p):
+    """A netFLEX mode flag under /usr/cnc/features (ported from nf-install)."""
+    path = "/usr/cnc/features/" + p["file"]
+    return host.run(["test", "-f", path]).rc == 0, path
+
+
+def _system_define(host, p):
+    """A variable in /usr/cnc/features/system_defines whose value must be one of
+    expected_values (an absent variable reads as '')."""
+    var = p["variable"]
+    expected = p.get("expected_values", [])
+    r = host.run(["sh", "-c",
+                  "grep -E '^%s=' /usr/cnc/features/system_defines 2>/dev/null | tail -1" % var])
+    line = r.out.strip()
+    val = line.split("=", 1)[1].strip() if "=" in line else ""
+    return val in expected, "{}={}".format(var, val or "(unset)")
+
+
+def _kernel_param(host, p):
+    """A sysctl parameter that must equal expected_value."""
+    r = host.run(["sysctl", p["param"]])
+    if r.rc != 0:
+        return False, "cannot read {}".format(p["param"])
+    out = r.out.strip()
+    cur = out.split(" = ", 1)[1] if " = " in out else out
+    return cur == p["expected_value"], "{} = {}".format(p["param"], cur)
+
+
+def _ulimit(host, p):
+    """A limits.conf / limits.d entry (domain type item value) that must equal
+    expected_value."""
+    r = host.run(["sh", "-c",
+                  "cat /etc/security/limits.conf /etc/security/limits.d/*.conf 2>/dev/null"])
+    found = None
+    for line in r.out.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if (len(parts) >= 4 and parts[0] == p["domain"]
+                and parts[1] == p["limit_type"] and parts[2] == p["limit_item"]):
+            found = parts[3]
+    if found is None:
+        return False, "{} {} {} not set".format(p["domain"], p["limit_item"], p["limit_type"])
+    return found == p["expected_value"], "{} {} = {}".format(p["domain"], p["limit_item"], found)
+
+
 KINDS = {
     "rpm_installed": _rpm_installed,
     "file_exists": _file_exists,
@@ -79,6 +126,10 @@ KINDS = {
     "service_active": _service_active,
     "dbcheck_clean": _dbcheck_clean,
     "staged_present": _staged_present,
+    "touchfile": _touchfile,
+    "system_define": _system_define,
+    "kernel_param": _kernel_param,
+    "ulimit": _ulimit,
 }
 
 

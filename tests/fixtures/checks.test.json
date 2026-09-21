@@ -1,0 +1,33 @@
+[
+  {
+    "name": "disk-usr4", "description": "At least 5 GB free on /usr4",
+    "fail_text": "ERROR", "when": "preflight", "phase": "any",
+    "kind": "disk_space_min", "params": {"mount": "/usr4", "min_gb": 5}
+  },
+  {
+    "name": "gr-idle", "description": "No GR transfer in progress",
+    "fail_text": "ERROR", "when": "preflight", "phase": "any",
+    "kind": "command_output_match",
+    "params": {"argv": ["cat", "/usr/cnc/.GR_STATUS"], "pattern": "IN_PROGRESS", "negate": true}
+  },
+  {
+    "name": "no-grestore", "description": "No GR restore in progress",
+    "fail_text": "ERROR", "when": "preflight", "phase": "any",
+    "kind": "file_absent", "params": {"path": "/usr/cnc/grestore.pid"}
+  },
+  {
+    "name": "dbcheck-clean", "description": "Database check reports no errors",
+    "fail_text": "ERROR", "when": "preflight", "phase": "upgrade",
+    "kind": "dbcheck_clean", "params": {}
+  },
+  {
+    "name": "staged-present", "description": "A staged load exists before upgrading",
+    "fail_text": "ERROR", "when": "preflight", "phase": "upgrade",
+    "kind": "staged_present", "params": {}
+  },
+  {
+    "name": "post-dbcheck", "description": "Database check clean after upgrade",
+    "fail_text": "WARNING", "when": "postflight", "phase": "upgrade",
+    "kind": "dbcheck_clean", "params": {}
+  }
+]

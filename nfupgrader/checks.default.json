@@ -2,44 +2,643 @@
   {
     "name": "disk-usr4",
     "description": "At least 5 GB free on /usr4 before staging",
-    "fail_text": "ERROR", "when": "preflight", "phase": "any",
-    "kind": "disk_space_min", "params": {"mount": "/usr4", "min_gb": 5}
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "disk_space_min",
+    "params": {
+      "mount": "/usr4",
+      "min_gb": 5
+    }
   },
   {
     "name": "gr-idle",
     "description": "No GR transfer in progress",
-    "fail_text": "ERROR", "when": "preflight", "phase": "any",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
     "kind": "command_output_match",
-    "params": {"argv": ["cat", "/usr/cnc/.GR_STATUS"], "pattern": "IN_PROGRESS", "negate": true}
+    "params": {
+      "argv": [
+        "cat",
+        "/usr/cnc/.GR_STATUS"
+      ],
+      "pattern": "IN_PROGRESS",
+      "negate": true
+    }
   },
   {
     "name": "no-grestore",
     "description": "No GR restore in progress",
-    "fail_text": "ERROR", "when": "preflight", "phase": "any",
-    "kind": "file_absent", "params": {"path": "/usr/cnc/grestore.pid"}
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "file_absent",
+    "params": {
+      "path": "/usr/cnc/grestore.pid"
+    }
   },
   {
     "name": "dbcheck-clean",
     "description": "Database check reports no errors",
-    "fail_text": "ERROR", "when": "preflight", "phase": "upgrade",
-    "kind": "dbcheck_clean", "params": {}
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "upgrade",
+    "kind": "dbcheck_clean",
+    "params": {}
   },
   {
     "name": "staged-present",
     "description": "A staged load exists before upgrading",
-    "fail_text": "ERROR", "when": "preflight", "phase": "upgrade",
-    "kind": "staged_present", "params": {}
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "upgrade",
+    "kind": "staged_present",
+    "params": {}
   },
   {
     "name": "post-dbcheck",
     "description": "Database check clean after upgrade",
-    "fail_text": "WARNING", "when": "postflight", "phase": "upgrade",
-    "kind": "dbcheck_clean", "params": {}
+    "fail_text": "WARNING",
+    "when": "postflight",
+    "phase": "upgrade",
+    "kind": "dbcheck_clean",
+    "params": {}
   },
   {
     "name": "post-app-up",
     "description": "Application booted after upgrade",
-    "fail_text": "WARNING", "when": "postflight", "phase": "upgrade",
-    "kind": "file_exists", "params": {"path": "/usr/cnc/.CNC_UP"}
+    "fail_text": "WARNING",
+    "when": "postflight",
+    "phase": "upgrade",
+    "kind": "file_exists",
+    "params": {
+      "path": "/usr/cnc/.CNC_UP"
+    }
+  },
+  {
+    "name": "00lvm2",
+    "description": "SYSTEM : Logical Volume Management",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "lvm2"
+    }
+  },
+  {
+    "name": "002cronie",
+    "description": "SYSTEM : Cron Service Package",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "cronie"
+    }
+  },
+  {
+    "name": "libpng",
+    "description": "NETFLEX: PNG image format",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "libpng"
+    }
+  },
+  {
+    "name": "ksh",
+    "description": "NETFLEX: The Original ATT Korn Shell2",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "ksh"
+    }
+  },
+  {
+    "name": "nettools",
+    "description": "NETFLEX: Basic networking tools",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "net-tools"
+    }
+  },
+  {
+    "name": "utillinux",
+    "description": "NETFLEX: Basic linux user tools",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "util-linux"
+    }
+  },
+  {
+    "name": "bc",
+    "description": "NETFLEX: GNU bc (calculator)",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "bc"
+    }
+  },
+  {
+    "name": "traceroute",
+    "description": "NETFLEX: Network diagnostic tool",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "traceroute"
+    }
+  },
+  {
+    "name": "xerces",
+    "description": "NETFLEX: Validating XML Parser",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "xerces-c"
+    }
+  },
+  {
+    "name": "zlib",
+    "description": "NETFLEX: zlib library",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "zlib"
+    }
+  },
+  {
+    "name": "apache",
+    "description": "NETFLEX: HTTP Server",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "httpd"
+    }
+  },
+  {
+    "name": "zeromq",
+    "description": "NETFLEX: zeromq library for Multibox",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "zeromq"
+    }
+  },
+  {
+    "name": "mod_ssl",
+    "description": "NETFLEX: SSL/TLS certificate expiry warnings",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "mod_ssl"
+    }
+  },
+  {
+    "name": "jq",
+    "description": "NETFLEX: JSON Query Tool",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "jq"
+    }
+  },
+  {
+    "name": "libsodium",
+    "description": "NETFLEX: libsodium",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "libsodium"
+    }
+  },
+  {
+    "name": "curses",
+    "description": "NETFLEX: ncurses libraries",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "ncurses-libs"
+    }
+  },
+  {
+    "name": "228dialog",
+    "description": "NETFLEX: A utility for creating TTY dialogs",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "dialog"
+    }
+  },
+  {
+    "name": "229telnet",
+    "description": "NETFLEX: Used to communicate with legacy Equipment",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "telnet"
+    }
+  },
+  {
+    "name": "230gpm",
+    "description": "NETFLEX: gpm library",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "gpm"
+    }
+  },
+  {
+    "name": "231sysstat",
+    "description": "NETFLEX: Performance Monitoring Tools",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "sysstat"
+    }
+  },
+  {
+    "name": "233tmux",
+    "description": "SUPPORT: Terminal Multiplexer",
+    "fail_text": "WARNING",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "tmux"
+    }
+  },
+  {
+    "name": "234curl",
+    "description": "NETFLEX: HTTP Client Tool",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "curl"
+    }
+  },
+  {
+    "name": "235gdb",
+    "description": "SUPPORT: Source Code Debugger",
+    "fail_text": "WARNING",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "gdb"
+    }
+  },
+  {
+    "name": "236bzip2",
+    "description": "SUPPORT: Compression Command",
+    "fail_text": "WARNING",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "bzip2"
+    }
+  },
+  {
+    "name": "237zip",
+    "description": "SUPPORT: Compression Command",
+    "fail_text": "WARNING",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "zip"
+    }
+  },
+  {
+    "name": "238wget",
+    "description": "NETFLEX: Web File Downloader",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "wget"
+    }
+  },
+  {
+    "name": "netcat",
+    "description": "SUPPORT: netcat diagnostic tool",
+    "fail_text": "WARNING",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "netcat"
+    }
+  },
+  {
+    "name": "239fzf",
+    "description": "SUPPORT: command-line fuzzy finder {epel}",
+    "fail_text": "WARNING",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "fzf"
+    }
+  },
+  {
+    "name": "240emacs",
+    "description": "SUPPORT: The Only Real Editor",
+    "fail_text": "WARNING",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "emacs-nox"
+    }
+  },
+  {
+    "name": "241mg",
+    "description": "SUPPORT: Tiny Emacs-like editor {epel}",
+    "fail_text": "WARNING",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "mg"
+    }
+  },
+  {
+    "name": "strace",
+    "description": "SUPPORT: Tracks and displays system calls",
+    "fail_text": "WARNING",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "strace"
+    }
+  },
+  {
+    "name": "243zsh",
+    "description": "SUPPORT: Z Shell",
+    "fail_text": "WARNING",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "zsh"
+    }
+  },
+  {
+    "name": "244htop",
+    "description": "SUPPORT: A better top command {epel}",
+    "fail_text": "WARNING",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "htop"
+    }
+  },
+  {
+    "name": "245nano",
+    "description": "SUPPORT: Can't live without nano",
+    "fail_text": "WARNING",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "nano"
+    }
+  },
+  {
+    "name": "246ne",
+    "description": "SUPPORT: Like nano, just better {epel}",
+    "fail_text": "WARNING",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "ne"
+    }
+  },
+  {
+    "name": "247fd",
+    "description": "SUPPORT: Like find, just better {epel}",
+    "fail_text": "WARNING",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "fd-find"
+    }
+  },
+  {
+    "name": "248rg",
+    "description": "SUPPORT: Like grep, just way better {epel}",
+    "fail_text": "WARNING",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "ripgrep"
+    }
+  },
+  {
+    "name": "ems_mode",
+    "description": "NETFLEX: EMS mode Check",
+    "fail_text": "WARNING",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "touchfile",
+    "params": {
+      "file": "ems"
+    }
+  },
+  {
+    "name": "nms_mode",
+    "description": "NETFLEX: NMS mode Check",
+    "fail_text": "WARNING",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "touchfile",
+    "params": {
+      "file": "nms"
+    }
+  },
+  {
+    "name": "dbchg_mode",
+    "description": "NETFLEX: DBCHG mode Check",
+    "fail_text": "WARNING",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "touchfile",
+    "params": {
+      "file": "dbchg"
+    }
+  },
+  {
+    "name": "hide_passwd_mode",
+    "description": "NETFLEX: HIDE_PASSWD mode Check",
+    "fail_text": "WARNING",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "touchfile",
+    "params": {
+      "file": "hide_passwd"
+    }
+  },
+  {
+    "name": "no_passwd_mode",
+    "description": "NETFLEX: NO_PASSWD mode Check",
+    "fail_text": "WARNING",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "touchfile",
+    "params": {
+      "file": "nopasswd"
+    }
+  },
+  {
+    "name": "del_chk_ties_mode",
+    "description": "NETFLEX: DEL_CHK_TIES mode Check",
+    "fail_text": "WARNING",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "touchfile",
+    "params": {
+      "file": "del_chk_ties"
+    }
+  },
+  {
+    "name": "curlhttps",
+    "description": "NETFLEX: Curl Commands HTTPS",
+    "fail_text": "WARNING",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "system_define",
+    "params": {
+      "variable": "INC_API_LIBCURL",
+      "expected_values": [
+        "",
+        "0"
+      ]
+    }
+  },
+  {
+    "name": "msditestmode",
+    "description": "NETFLEX: M_SDI_TEST_MODE",
+    "fail_text": "WARNING",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "system_define",
+    "params": {
+      "variable": "M_SDI_TEST_MODE",
+      "expected_values": [
+        "1"
+      ]
+    }
+  },
+  {
+    "name": "firewall",
+    "description": "SYSTEM : Firewall",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "service_active",
+    "params": {
+      "name": "firewalld"
+    }
+  },
+  {
+    "name": "kernel_pid_max",
+    "description": "SYSTEM : kernel pid_max",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "kernel_param",
+    "params": {
+      "param": "kernel.pid_max",
+      "expected_value": "65000"
+    }
+  },
+  {
+    "name": "kernel_pty_max",
+    "description": "SYSTEM : kernel pty_max",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "kernel_param",
+    "params": {
+      "param": "kernel.pty.max",
+      "expected_value": "16384"
+    }
+  },
+  {
+    "name": "nproc_soft",
+    "description": "SYSTEM : nproc soft limit (cmm)",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "ulimit",
+    "params": {
+      "domain": "cmm",
+      "limit_type": "soft",
+      "limit_item": "nproc",
+      "expected_value": "32768"
+    }
+  },
+  {
+    "name": "nproc_hard",
+    "description": "SYSTEM : nproc hard limit (cmm)",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "ulimit",
+    "params": {
+      "domain": "cmm",
+      "limit_type": "hard",
+      "limit_item": "nproc",
+      "expected_value": "32768"
+    }
   }
 ]
