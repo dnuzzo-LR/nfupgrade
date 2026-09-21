@@ -1,5 +1,5 @@
 import unittest
-from nfupgrader.host import Host, FakeHost, RunResult
+from nfupgrader.host import Host, FakeHost, RunResult, build_ssh_argv, SshHost
 
 
 class TestHost(unittest.TestCase):
@@ -22,6 +22,23 @@ class TestHost(unittest.TestCase):
     def test_fakehost_unknown_argv_defaults_to_rc1(self):
         r = FakeHost({}).run(["nope"])
         self.assertEqual(r.rc, 1)
+
+
+class TestSsh(unittest.TestCase):
+    def test_build_ssh_argv_quotes_remote_command(self):
+        argv = build_ssh_argv("bep1", ["rpm", "-qi", "netFLEX-CORE"])
+        self.assertEqual(argv[0], "ssh")
+        self.assertIn("BatchMode=yes", argv)
+        self.assertIn("bep1", argv)
+        self.assertEqual(argv[-1], "rpm -qi netFLEX-CORE")
+
+    def test_build_ssh_argv_quotes_spaces(self):
+        argv = build_ssh_argv("bep1", ["sh", "-c", "echo a b"])
+        self.assertEqual(argv[-1], "sh -c 'echo a b'")
+
+    def test_sshhost_runs_through_local_exec(self):
+        r = SshHost("nonexistent.invalid").run(["true"])
+        self.assertIsNotNone(r.rc)
 
 
 if __name__ == "__main__":
