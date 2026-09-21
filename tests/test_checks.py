@@ -63,5 +63,67 @@ class TestKinds(unittest.TestCase):
         self.assertFalse(checks.KINDS["staged_present"](h2, {})[0])
 
 
+import os
+import tempfile
+
+
+class TestRun(unittest.TestCase):
+    def _checks(self):
+        return [
+            {"name": "staged", "description": "staged load present", "fail_text": "ERROR",
+             "when": "preflight", "phase": "upgrade", "kind": "staged_present", "params": {}},
+            {"name": "disk", "description": "5GB on /usr4", "fail_text": "ERROR",
+             "when": "preflight", "phase": "any", "kind": "disk_space_min",
+             "params": {"mount": "/usr4", "min_gb": 5}},
+            {"name": "warnonly", "description": "advisory", "fail_text": "WARNING",
+             "when": "preflight", "phase": "stage", "kind": "file_exists",
+             "params": {"path": "/nope"}},
+            {"name": "post", "description": "dbcheck", "fail_text": "WARNING",
+             "when": "postflight", "phase": "any", "kind": "dbcheck_clean", "params": {}},
+            {"name": "bep-only", "description": "bep thing", "fail_text": "ERROR",
+             "when": "preflight", "phase": "any", "machtype": "BEP",
+             "kind": "file_exists", "params": {"path": "/x"}},
+        ]
+
+    def _host(self):
+        return FakeHost({
+            ("readlink", "/usr/cnc_stage"): RunResult(0, "/usr4/inc5.5.103\n", ""),
+            ("df", "-kP"): RunResult(0, "H\n/d 1 1 1048576 99% /usr4\n", ""),  # 1 GiB free
+            ("test", "-f", "/nope"): RunResult(1, "", ""),
+            ("dbcheck", "-AV"): RunResult(0, "clean\n", ""),
+        })
+
+    def test_load_checks(self):
+        p = os.path.join(tempfile.mkdtemp(), "c.json")
+        json_text = '[{"name":"x","kind":"file_exists","when":"preflight","phase":"any","params":{"path":"/a"}}]'
+        open(p, "w").write(json_text)
+        self.assertEqual(len(checks.load_checks(p)), 1)
+
+    def test_run_filters_by_when_phase_machtype(self):
+        results = checks.run_checks(self._host(), self._checks(), "preflight", "upgrade", machtype="FEP")
+        names = [r["name"] for r in results]
+        self.assertIn("staged", names)      # preflight + upgrade
+        self.assertIn("disk", names)        # preflight + any
+        self.assertNotIn("warnonly", names) # phase stage != upgrade
+        self.assertNotIn("post", names)     # postflight
+        self.assertNotIn("bep-only", names) # machtype BEP != FEP
+
+    def test_blocking_only_preflight_error_failures(self):
+        results = checks.run_checks(self._host(), self._checks(), "preflight", "upgrade", machtype="FEP")
+        blk = checks.blocking_failures(results)
+        blk_names = [r["name"] for r in blk]
+        self.assertIn("disk", blk_names)        # ERROR + failed (1GB < 5GB)
+        self.assertNotIn("staged", blk_names)   # passed
+        stage_res = checks.run_checks(self._host(), self._checks(), "preflight", "stage")
+        stage_blk = [r["name"] for r in checks.blocking_failures(stage_res)]
+        self.assertNotIn("warnonly", stage_blk)   # a WARNING failure never blocks
+        self.assertIn("disk", stage_blk)          # ERROR failure (phase any) blocks in stage too
+
+    def test_result_shape(self):
+        r = checks.run_checks(self._host(), self._checks(), "preflight", "upgrade", machtype="FEP")[0]
+        for k in ("name", "description", "severity", "passed", "detail", "blocking"):
+            self.assertIn(k, r)
+
+
 if __name__ == "__main__":
     unittest.main()
