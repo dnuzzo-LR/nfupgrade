@@ -25,6 +25,10 @@ function spin(id, on) {
   if (el) el.style.display = on ? "inline-block" : "none";
 }
 
+// Panels that have loaded at least once — the spinner shows only on the first
+// load; background re-polls refresh silently (stale data stays on screen).
+var loaded = {};
+
 function loadingHTML(text) {
   return "<div class='loading'><span class='spinner'></span> " + text + "</div>";
 }
@@ -73,9 +77,10 @@ function refreshLog() {
 function cell(v) { return "<td>" + (v === null || v === undefined || v === "" ? "-" : v) + "</td>"; }
 
 function refreshSite() {
-  spin("site-spin", true);
+  if (!loaded.site) spin("site-spin", true);
   getJSON("/api/site", function (s) {
     spin("site-spin", false);
+    loaded.site = true;
     var tb = document.querySelector("#site-table tbody");
     tb.innerHTML = "";
     s.hosts.forEach(function (h) {
@@ -103,9 +108,10 @@ function row(label, value) {
 }
 
 function refreshInfo() {
-  spin("overview-spin", true);
+  if (!loaded.info) spin("overview-spin", true);
   getJSON("/api/info", function (i) {
     spin("overview-spin", false);
+    loaded.info = true;
     var t = i.topology, v = i.versions, l = i.loads, g = i.gr;
     var html = "";
     html += row("Host", i.host);
