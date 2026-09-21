@@ -26,6 +26,8 @@ def make_ctx(tmp, running=True):
         # default-check commands: stage pre-flight all pass; upgrade blocks on
         # staged-present (no staged load) — see readlink /usr/cnc_stage rc 1 above.
         ("dbcheck", "-AV"): RunResult(0, "clean\n", ""),
+        ("find", "/depot", "-maxdepth", "1", "-name", "netFLEX-CORE*.rpm"):
+            RunResult(0, "/depot/netFLEX-CORE-5.5.0.03-1.x86_64.rpm\n", ""),
     })
     open(os.path.join(tmp, ".h1_STATE"), "w").write("swscopycnc\n")
     open(os.path.join(tmp, "trace"), "w").write("2026-09-18 10:00:00 INFO  hi\n")
@@ -38,7 +40,7 @@ def make_ctx(tmp, running=True):
         tracefile=os.path.join(tmp, "trace"),
         auth=TokenAuth(token="TOK"), audit=AuditLog(os.path.join(tmp, "audit.jsonl")),
         webdir=tmp, nf_upgrade_path="/x/nf_upgrade", cnc_cnfg_path=cnfg,
-        checks_path=checks_path,
+        checks_path=checks_path, state={}, depot_dirs=["/depot"],
     )
 
 
@@ -167,6 +169,61 @@ class TestApi(unittest.TestCase):
                   open(os.path.join(self.tmp, "audit.jsonl")).read().splitlines()]
         self.assertIn("override", events)
         self.assertIn("launch", events)
+
+    def test_config_fields(self):
+        sid = self._session()
+        status, _, body = api.dispatch("GET", "/api/config/fields", {}, b"",
+                                       {"nfu_sid": sid}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 200)
+        self.assertTrue(any(f["name"] == "NEW_GENERIC" for f in json.loads(body.decode())["fields"]))
+
+    def test_config_depots(self):
+        sid = self._session()
+        status, _, body = api.dispatch("GET", "/api/config/depots", {}, b"",
+                                       {"nfu_sid": sid}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 200)
+        self.assertIn("depots", json.loads(body.decode()))
+
+    def test_config_preview_reports_issues_and_rendered(self):
+        sid = self._session()
+        payload = json.dumps({"values": {"NEW_GENERIC": "5.5.0"}}).encode()  # missing required
+        status, _, body = api.dispatch("POST", "/api/config/preview", {}, payload,
+                                       {"nfu_sid": sid}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 200)
+        data = json.loads(body.decode())
+        self.assertTrue(any(i["level"] == "ERROR" for i in data["issues"]))
+        self.assertIn("PROMPTFORVALIDATE=NO", data["rendered"])
+
+    def test_config_import_shows_values_and_override(self):
+        sid = self._session()
+        p = os.path.join(self.tmp, "user.cfg")
+        open(p, "w").write('INCLOGDIR="/usr/cnc/logs"\nPROMPTFORVALIDATE=YES\n')
+        status, _, body = api.dispatch("GET", "/api/config/import", {"path": [p]}, b"",
+                                       {"nfu_sid": sid}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 200)
+        data = json.loads(body.decode())
+        self.assertEqual(data["values"]["INCLOGDIR"], "/usr/cnc/logs")
+        self.assertTrue(data["forces_promptforvalidate"])   # original had YES; we force NO
+
+    def test_config_save_sets_active_and_writes_file(self):
+        sid = self._session()
+        payload = json.dumps({"values": {
+            "INCLOGDIR": "/usr/cnc/logs", "NEW_GENERIC": "5.5.0", "NEW_LOAD": "03",
+            "DEPOTFILE": "/depot/netFLEX-CORE-5.5.0.03-1.x86_64.rpm"}}).encode()
+        status, _, body = api.dispatch("POST", "/api/config/save", {}, payload,
+                                       {"nfu_sid": sid}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 200)
+        saved = json.loads(body.decode())["saved"]
+        self.assertIn("PROMPTFORVALIDATE=NO", open(saved).read())
+        self.assertEqual(self.ctx.state["user_config"], saved)
+
+    def test_config_save_rejects_invalid(self):
+        sid = self._session()
+        payload = json.dumps({"values": {"NEW_GENERIC": "5.5.0"}}).encode()  # missing required
+        status, _, body = api.dispatch("POST", "/api/config/save", {}, payload,
+                                       {"nfu_sid": sid}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 400)
+        self.assertTrue(len(json.loads(body.decode())["issues"]) >= 1)
 
     def test_launch_bad_mode_400(self):
         sid = self._session()

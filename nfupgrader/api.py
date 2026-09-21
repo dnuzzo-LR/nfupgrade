@@ -6,18 +6,18 @@ import json
 
 import os
 
-from nfupgrader import progress, logtail, launcher, localinfo, siteview, site, checks
+from nfupgrader import progress, logtail, launcher, localinfo, siteview, site, checks, cfg
 
 Context = collections.namedtuple("Context", [
     "host", "hostname", "inclogdir", "phase", "tracefile",
     "auth", "audit", "webdir", "nf_upgrade_path",
     "effective_config", "user_config", "launch_cwd", "cnc_cnfg_path",
-    "peer_host_factory", "checks_path",
+    "peer_host_factory", "checks_path", "state", "depot_dirs",
 ])
-# The trailing fields are only used by side effects (launch), info gathering, or
-# checks; default them so the dispatcher/tests need not supply each one.
-# (namedtuple field defaults via __new__.__defaults__ — Python 3.6 compatible.)
-Context.__new__.__defaults__ = (None, None, None, None, None, None)
+# The trailing fields are only used by side effects (launch), info gathering,
+# checks, or the config builder; default them so the dispatcher/tests need not
+# supply each one. (namedtuple field defaults via __new__.__defaults__ — py3.6.)
+Context.__new__.__defaults__ = (None, None, None, None, None, None, None, None)
 
 
 def _default_peer_factory(name):
@@ -97,6 +97,48 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         phase = (query.get("phase") or [ctx.phase])[0]
         results = checks.run_checks(ctx.host, _load_checks(ctx), when, phase, _machtype(ctx))
         return _json(200, {"results": results, "blocking": checks.blocking_failures(results)})
+
+    if path == "/api/config/fields" and method == "GET":
+        return _json(200, {"fields": cfg.FIELDS})
+
+    if path == "/api/config/depots" and method == "GET":
+        depots = cfg.list_depots(ctx.host, ctx.depot_dirs or ["/opt/apt/upgrade", "."])
+        return _json(200, {"depots": depots})
+
+    if path == "/api/config/preview" and method == "POST":
+        try:
+            values = json.loads(body.decode("utf-8") or "{}").get("values", {})
+        except ValueError:
+            return _json(400, {"error": "bad json"})
+        return _json(200, {"issues": cfg.validate(values), "rendered": cfg.render_cfg(values)})
+
+    if path == "/api/config/import" and method == "GET":
+        p = (query.get("path") or [""])[0]
+        try:
+            with open(p) as fh:
+                text = fh.read()
+        except (IOError, OSError):
+            return _json(404, {"error": "cannot read {}".format(p)})
+        values = cfg.parse_cfg(text)
+        forces = values.get("PROMPTFORVALIDATE", "NO") != "NO"
+        return _json(200, {"values": values, "forces_promptforvalidate": forces,
+                           "issues": cfg.validate(values)})
+
+    if path == "/api/config/save" and method == "POST":
+        try:
+            values = json.loads(body.decode("utf-8") or "{}").get("values", {})
+        except ValueError:
+            return _json(400, {"error": "bad json"})
+        issues = cfg.validate(values)
+        if any(i["level"] == "ERROR" for i in issues):
+            return _json(400, {"error": "config invalid", "issues": issues})
+        saved = os.path.join(ctx.inclogdir, "nfupgrader_user.cfg")
+        with open(saved, "w") as fh:
+            fh.write(cfg.render_cfg(values))
+        if ctx.state is not None:
+            ctx.state["user_config"] = saved
+        ctx.audit.record("config_saved", path=saved, client=client_ip)
+        return _json(200, {"saved": saved})
 
     if path == "/api/launch" and method == "POST":
         try:
