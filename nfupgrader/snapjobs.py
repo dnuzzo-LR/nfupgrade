@@ -23,6 +23,17 @@ def thread_spawn(fn):
     t.start()
 
 
+def _safe_record(audit, event, **fields):
+    """Call audit.record(event, **fields) if audit is set, swallowing any
+    exception. A broken audit sink must never change control flow."""
+    if audit is None:
+        return
+    try:
+        audit.record(event, **fields)
+    except Exception:
+        pass
+
+
 class SnapshotRunner(object):
     """Owns the single snapshot job. `spawn` runs the job body (a thread in
     production, inline in tests)."""
@@ -63,10 +74,16 @@ class SnapshotRunner(object):
         except (IOError, OSError, ValueError):
             return []
 
+    def _audit(self, event, **fields):
+        """Record an audit event, swallowing any exception from the sink."""
+        _safe_record(self.audit, event, **fields)
+
     def start(self, label, mode=None, pair_of=None, note="", then=None, client="auto"):
         """Start a snapshot; returns its id. Raises Busy if one is running.
-        `then(snap_id)` is called once the job is finished and no longer busy,
-        even if the snapshot itself failed."""
+        `then(snap_id)` runs once the snapshot itself is finished (whether or not
+        it succeeded), while the runner is still marked busy -- busy() only
+        clears after `then` returns. `then` must not call start() synchronously
+        (it will raise Busy); spawn any follow-up job instead."""
         report_list = self._load()
         with self._lock:
             if self._job is not None:
@@ -76,45 +93,64 @@ class SnapshotRunner(object):
             snap_id = reports.new_snapshot_id(self.root, label, self.now())
             self._job = {"id": snap_id, "label": label, "index": 0,
                          "total": len(report_list), "current": "", "status": "running"}
-        if self.audit is not None:
-            self.audit.record("report_snapshot", id=snap_id, label=label, client=client)
+        self._audit("report_snapshot", id=snap_id, label=label, client=client)
 
         def work():
             try:
-                reports.take_snapshot(self.host, report_list, self.root, snap_id, label,
-                                      mode=mode, pair_of=pair_of, note=note,
-                                      on_progress=self._progress, now=self.now)
-                reports.prune(self.root, self.keep, protect=(snap_id,))
-            except Exception as e:
-                if self.audit is not None:
-                    self.audit.record("report_snapshot_error", id=snap_id, error=str(e))
+                try:
+                    reports.take_snapshot(self.host, report_list, self.root, snap_id, label,
+                                          mode=mode, pair_of=pair_of, note=note,
+                                          on_progress=self._progress, now=self.now)
+                    reports.prune(self.root, self.keep, protect=(snap_id,))
+                except Exception as e:
+                    self._audit("report_snapshot_error", id=snap_id, error=str(e))
+                if then is not None:
+                    try:
+                        then(snap_id)
+                    except Exception as e:
+                        self._audit("report_then_error", id=snap_id, error=str(e))
             finally:
+                # Stays busy through `then` so callers (like /api/launch) can't
+                # race a launch it triggers; only cleared once `then` returns.
                 with self._lock:
                     self._job = None
-            # Cleared before `then` so the after-watcher it starts can run a job.
-            if then is not None:
-                then(snap_id)
 
         self.spawn(work)
         return snap_id
 
 
 def watch_upgrade(read_status, start_after, sleep=time.sleep, clock=time.time,
-                  grace=GRACE, interval=INTERVAL):
+                  grace=GRACE, interval=INTERVAL, max_read_errors=10):
     """Poll read_status() until the upgrade ends, then start_after(note), retrying
     while a snapshot is busy. done/died only count once 'running' was seen, since
-    the state file can still hold a terminal state from an earlier run."""
+    the state file can still hold a terminal state from an earlier run.
+
+    read_status() may raise (transient read of a state file mid-write, a peer
+    briefly unreachable, etc); that's treated as status "unreadable" for the
+    iteration rather than aborting the watch. If 'running' was already seen and
+    reads fail `max_read_errors` times in a row, the watch gives up rather than
+    polling forever; a successful read resets the count."""
     t0 = clock()
     seen_running = False
+    read_errors = 0
     while True:
-        st = read_status()
+        try:
+            st = read_status()
+        except Exception:
+            st = "unreadable"
+            read_errors += 1
+        else:
+            read_errors = 0
         if st == "running":
             seen_running = True
-        elif seen_running and st == "done":
+        if seen_running and st == "done":
             note = ""
             break
         elif seen_running and st == "died":
             note = "upgrade died before completion"
+            break
+        elif seen_running and read_errors >= max_read_errors:
+            note = "progress unreadable after upgrade started"
             break
         elif not seen_running and clock() - t0 >= grace:
             note = "upgrade not observed running (status: {})".format(st)
@@ -137,8 +173,7 @@ def begin_upgrade(runner, launch, read_status, client, audit=None, spawn=thread_
         try:
             launch()
         except Exception as e:
-            if audit is not None:
-                audit.record("launch_error", error=str(e), client=client)
+            _safe_record(audit, "launch_error", error=str(e), client=client)
             return
 
         def start_after(note):

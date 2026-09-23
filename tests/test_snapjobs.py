@@ -2,6 +2,8 @@ import datetime
 import json
 import os
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -72,6 +74,31 @@ def clock(step=30):
     return now
 
 
+class RaisingAudit(object):
+    """audit stand-in whose record() always raises."""
+
+    def record(self, event, **fields):
+        raise OSError("audit sink down")
+
+
+class BlockingHost(object):
+    """host stand-in that blocks in run() on `event` for the first call only,
+    then answers from `responses` like FakeHost."""
+
+    def __init__(self, event, responses):
+        self.event = event
+        self.responses = responses
+        self.name = "blocking"
+        self.local = True
+        self._first = True
+
+    def run(self, argv, timeout=None):
+        if self._first:
+            self._first = False
+            self.event.wait(5)
+        return self.responses.get(tuple(argv), RunResult(1, "", "unmocked"))
+
+
 class RunnerBase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -123,11 +150,39 @@ class TestRunner(RunnerBase):
         r.start("manual")
         self.assertEqual(seen, [(1, "Version"), (2, "Disk Check")])
 
-    def test_then_runs_after_job_cleared(self):
+    def test_then_runs_while_still_busy(self):
         r = self.runner()
         seen = []
         sid = r.start("before", then=lambda i: seen.append((i, r.busy())))
-        self.assertEqual(seen, [(sid, False)])
+        self.assertEqual(seen, [(sid, True)])
+        self.assertFalse(r.busy())
+
+    def test_then_error_audited_and_runner_idle(self):
+        r = self.runner()
+
+        def boom(sid):
+            raise ValueError("boom")
+        sid = r.start("before", then=boom)
+        self.assertFalse(r.busy())
+        err = [e for e in self.events() if e["event"] == "report_then_error"]
+        self.assertEqual(err[0]["id"], sid)
+        self.assertEqual(err[0]["error"], "boom")
+        # runner must still be usable afterwards
+        sid2 = r.start("manual")
+        self.assertEqual(reports.read_manifest(self.root, sid2)["status"], "complete")
+
+    def test_audit_failures_never_change_control_flow(self):
+        r = self.runner()
+        r.audit = RaisingAudit()
+        sid = r.start("manual")
+        self.assertIsNotNone(sid)
+        man = reports.read_manifest(self.root, sid)
+        self.assertEqual(man["status"], "complete")
+        self.assertFalse(r.busy())
+        # a second start still works normally
+        sid2 = r.start("manual")
+        self.assertNotEqual(sid, sid2)
+        self.assertFalse(r.busy())
 
     def test_snapshot_error_audited_and_then_still_runs(self):
         r = self.runner()
@@ -149,6 +204,29 @@ class TestRunner(RunnerBase):
         r.start("manual")
         second = r.start("manual")
         self.assertEqual(os.listdir(self.root), [second])
+
+    def test_real_thread_stays_busy_until_done(self):
+        event = threading.Event()
+        responses = {("sh", "-c", "echo v"): RunResult(0, "v1\n", ""),
+                     ("sh", "-c", "df"): RunResult(0, "ok\n", "")}
+        h = BlockingHost(event, responses)
+        r = snapjobs.SnapshotRunner(h, FIXTURE, self.root, audit=self.audit,
+                                    spawn=snapjobs.thread_spawn, now=ticking())
+        try:
+            sid = r.start("manual")
+            self.assertTrue(r.busy())
+            with self.assertRaises(snapjobs.Busy):
+                r.start("manual")
+        finally:
+            event.set()
+
+        deadline = time.time() + 5
+        while r.busy() and time.time() < deadline:
+            time.sleep(0.01)
+        self.assertFalse(r.busy())
+        man = reports.read_manifest(self.root, sid)
+        self.assertEqual(man["status"], "complete")
+        self.assertEqual([x["name"] for x in man["reports"]], ["Version", "Disk Check"])
 
 
 class TestWatch(unittest.TestCase):
@@ -186,14 +264,44 @@ class TestWatch(unittest.TestCase):
         self.run_watch(["running", "done"], start_after=start_after)
         self.assertEqual(attempts, ["", ""])
 
+    def test_status_read_error_recovers(self):
+        calls = {"n": 0}
+        seq = iter(["running", "done"])
+
+        def read():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise OSError("transient")
+            return next(seq)
+        note = snapjobs.watch_upgrade(read, lambda n: None,
+                                      sleep=lambda s: None, clock=clock())
+        self.assertEqual(note, "")
+
+    def test_status_unreadable_after_running_gives_up(self):
+        calls = {"n": 0}
+
+        def read():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return "running"
+            raise OSError("gone")
+        note = snapjobs.watch_upgrade(read, lambda n: None, sleep=lambda s: None,
+                                      clock=clock(), max_read_errors=3)
+        self.assertEqual(note, "progress unreadable after upgrade started")
+
 
 class TestBeginUpgrade(RunnerBase):
     def test_before_then_launch_then_after(self):
         events = []
         r = self.runner(h=host(events))
+        hold = Hold()
         before = snapjobs.begin_upgrade(
             r, lambda: events.append("launch"), statuses(["running", "done"]),
-            client="ip", audit=self.audit, spawn=sync, sleep=lambda s: None, clock=clock())
+            client="ip", audit=self.audit, spawn=hold, sleep=lambda s: None, clock=clock())
+        # begin_upgrade returns once the before snapshot's `then` has launched;
+        # the after-watcher was only handed to `hold`, not run yet.
+        self.assertEqual(events, ["report", "report", "launch"])
+        hold.fns[0]()
         self.assertEqual(events, ["report", "report", "launch", "report", "report"])
         snaps = reports.list_snapshots(self.root)
         self.assertEqual([s["label"] for s in snaps], ["after", "before"])
