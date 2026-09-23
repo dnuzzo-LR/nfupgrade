@@ -1,5 +1,10 @@
+import json
+import os
+import tempfile
 import unittest
-from nfupgrader import httpd
+from nfupgrader import api, httpd, snapjobs
+from nfupgrader.audit import AuditLog
+from nfupgrader.host import FakeHost, RunResult
 
 
 class TestHelpers(unittest.TestCase):
@@ -37,6 +42,83 @@ class TestLaunchCwd(unittest.TestCase):
 
     def test_none_when_nothing_known(self):
         self.assertIsNone(httpd.resolve_launch_cwd(None, None))
+
+
+def launch_ctx(tmp, runner=None, host=None):
+    return api.Context(
+        host=host or FakeHost(), hostname="h1", inclogdir=tmp, phase="stage",
+        tracefile=os.path.join(tmp, "trace"), auth=None,
+        audit=AuditLog(os.path.join(tmp, "audit.jsonl")), webdir=tmp,
+        nf_upgrade_path="/bin/true", runner=runner)
+
+
+class FakeRunner(object):
+    pass
+
+
+class TestLaunchSideEffect(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.performed = []
+
+    def perform(self, ctx, mode):
+        self.performed.append(mode)
+
+    def events(self):
+        return [json.loads(l)["event"] for l in open(os.path.join(self.tmp, "audit.jsonl"))]
+
+    def test_stage_launches_directly(self):
+        ctx = launch_ctx(self.tmp, runner=FakeRunner())
+        status, body = httpd.launch_side_effect(ctx, "stage", "ip", perform=self.perform,
+                                                begin=None)
+        self.assertEqual((status, body), (202, {"accepted": True, "mode": "stage"}))
+        self.assertEqual(self.performed, ["stage"])
+
+    def test_direct_launch_failure_is_500_and_audited(self):
+        def boom(ctx, mode):
+            raise OSError('bad "path"')
+        status, body = httpd.launch_side_effect(launch_ctx(self.tmp), "stage", "ip",
+                                                perform=boom)
+        self.assertEqual(status, 500)
+        self.assertEqual(body["error"], 'launch failed: bad "path"')
+        self.assertIn("launch_error", self.events())
+
+    def test_upgrade_goes_through_before_snapshot(self):
+        seen = {}
+
+        def begin(runner, launch, read_status, client, audit=None):
+            seen.update(runner=runner, client=client)
+            launch()
+            return "20260923_140000_before"
+        runner = FakeRunner()
+        ctx = launch_ctx(self.tmp, runner=runner)
+        status, body = httpd.launch_side_effect(ctx, "upgrade", "ip", perform=self.perform,
+                                                begin=begin)
+        self.assertEqual(status, 202)
+        self.assertEqual(body, {"accepted": True, "mode": "upgrade",
+                                "snapshot": "20260923_140000_before"})
+        self.assertIs(seen["runner"], runner)
+        self.assertEqual(self.performed, ["upgrade"])
+
+    def test_upgrade_busy_is_409(self):
+        def begin(*a, **kw):
+            raise snapjobs.Busy()
+        status, body = httpd.launch_side_effect(launch_ctx(self.tmp, runner=FakeRunner()),
+                                                "upgrade", "ip", perform=self.perform,
+                                                begin=begin)
+        self.assertEqual(status, 409)
+        self.assertEqual(self.performed, [])
+
+    def test_upgrade_without_runner_launches_directly(self):
+        status, body = httpd.launch_side_effect(launch_ctx(self.tmp), "upgrade", "ip",
+                                                perform=self.perform)
+        self.assertEqual(status, 202)
+        self.assertEqual(self.performed, ["upgrade"])
+
+    def test_upgrade_status_reads_upgrade_phase(self):
+        host = FakeHost({("pgrep", "-f", "nf_upgrader"): RunResult(1, "", "")})
+        open(os.path.join(self.tmp, ".h1_STATE"), "w").write("swidone\n")
+        self.assertEqual(httpd.upgrade_status(launch_ctx(self.tmp, host=host)), "done")
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@ class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
     http.server.ThreadingHTTPServer only in 3.7.)"""
     daemon_threads = True
 
-from nfupgrader import api, launcher
+from nfupgrader import api, launcher, progress, snapjobs
 from nfupgrader.auth import TokenAuth
 from nfupgrader.audit import AuditLog
 from nfupgrader.host import Host, SshHost
@@ -61,6 +61,44 @@ def resolve_launch_cwd(env_cwd, user_config):
     return None
 
 
+def perform_launch(ctx, mode):
+    """Spawn nf_upgrade. The active config is one chosen in the UI (state), else
+    NFU_USER_CONFIG; an effective config is generated from it (sources it + forces
+    PROMPTFORVALIDATE=NO) — the customer's own file is never edited."""
+    resolved = (ctx.state or {}).get("user_config") or ctx.user_config
+    if resolved:
+        launcher.write_effective_config(resolved, ctx.effective_config)
+    launcher.launch(ctx.nf_upgrade_path, ctx.effective_config, mode, cwd=ctx.launch_cwd)
+
+
+def upgrade_status(ctx):
+    """The upgrade-phase progress status (done/running/died/not_started)."""
+    running = launcher.upgrader_running(ctx.host)
+    return progress.read_progress(ctx.hostname, "upgrade", ctx.inclogdir, running)["status"]
+
+
+def launch_side_effect(ctx, mode, ip, perform=None, begin=None):
+    """Carry out an accepted launch; returns (status, body dict). Upgrades run a
+    before snapshot first (in the background) and then launch; stage launches, or
+    any launch without a snapshot runner, spawn nf_upgrade directly — a spawn
+    failure (missing/non-executable script, missing config) becomes a clean 500."""
+    perform = perform or perform_launch
+    begin = begin or snapjobs.begin_upgrade
+    if mode == "upgrade" and ctx.runner is not None:
+        try:
+            before = begin(ctx.runner, lambda: perform(ctx, mode),
+                           lambda: upgrade_status(ctx), client=ip, audit=ctx.audit)
+        except snapjobs.Busy:
+            return 409, {"error": "report snapshot in progress"}
+        return 202, {"accepted": True, "mode": mode, "snapshot": before}
+    try:
+        perform(ctx, mode)
+    except Exception as e:
+        ctx.audit.record("launch_error", error=str(e), client=ip)
+        return 500, {"error": "launch failed: {}".format(e)}
+    return 202, {"accepted": True, "mode": mode}
+
+
 def make_handler(ctx):
     class Handler(BaseHTTPRequestHandler):
         def _serve_static(self, path):
@@ -94,26 +132,12 @@ def make_handler(ctx):
             cookies = parse_cookies(self.headers.get("Cookie", ""))
             ip = client_ip_from(self.client_address)
             status, headers, out = api.dispatch(method, path, query, body, cookies, ip, ctx)
-            # Perform the launch side effect after a recorded 202. A spawn
-            # failure (missing/non-executable script, missing config) must not
-            # crash the connection — turn it into a clean 500.
+            # Perform the launch side effect after a recorded 202 (see launch_side_effect).
             if path == "/api/launch" and status == 202:
-                try:
-                    mode = json.loads(body.decode() or "{}").get("mode")
-                    # Resolve the active config: one chosen in the UI (state) wins,
-                    # else the NFU_USER_CONFIG env. Generate the effective config
-                    # from it (sources it + forces PROMPTFORVALIDATE=NO); the
-                    # customer's own file is never edited.
-                    resolved = (ctx.state or {}).get("user_config") or ctx.user_config
-                    if resolved:
-                        launcher.write_effective_config(resolved, ctx.effective_config)
-                    launcher.launch(ctx.nf_upgrade_path, ctx.effective_config, mode,
-                                    cwd=ctx.launch_cwd)
-                except Exception as e:
-                    ctx.audit.record("launch_error", error=str(e), client=ip)
-                    status = 500
-                    out = ('{"error": "launch failed: ' + str(e).replace('"', "'") + '"}').encode("utf-8")
-                    headers = [("Content-Type", "application/json")]
+                mode = json.loads(body.decode() or "{}").get("mode")
+                status, obj = launch_side_effect(ctx, mode, ip)
+                out = json.dumps(obj).encode("utf-8")
+                headers = [("Content-Type", "application/json")]
             self.send_response(status)
             for k, v in headers:
                 self.send_header(k, v)
@@ -157,15 +181,22 @@ def main(argv=None):
     if user_config:
         state["user_config"] = user_config
 
+    host = Host()
+    audit = AuditLog(os.path.join(inclogdir, "nfupgrader_audit.jsonl"))
+    reports_path = os.environ.get("NFU_REPORTS", os.path.join(here, "reports.default.json"))
+    reports_root = os.path.join(inclogdir, "nfupgrader_reports")
+    runner = snapjobs.SnapshotRunner(host, reports_path, reports_root, audit=audit)
+
     ctx = api.Context(
-        host=Host(), hostname=hostname, inclogdir=inclogdir, phase=phase,
+        host=host, hostname=hostname, inclogdir=inclogdir, phase=phase,
         tracefile=tracefile, auth=TokenAuth(),
-        audit=AuditLog(os.path.join(inclogdir, "nfupgrader_audit.jsonl")),
+        audit=audit,
         webdir=webdir, nf_upgrade_path=nf_upgrade_path,
         effective_config=effective_config, user_config=user_config,
         launch_cwd=launch_cwd, cnc_cnfg_path=cnc_cnfg_path,
         peer_host_factory=lambda name: SshHost(name),
         checks_path=checks_path, state=state, depot_dirs=depot_dirs,
+        reports_path=reports_path, reports_root=reports_root, runner=runner,
     )
 
     port = int(os.environ.get("NFU_PORT", "0"))
