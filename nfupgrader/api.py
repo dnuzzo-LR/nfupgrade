@@ -134,8 +134,8 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         return _json(200, {"fields": cfg.FIELDS})
 
     if path == "/api/config/depots" and method == "GET":
-        depots = cfg.list_depots(ctx.host, ctx.depot_dirs or ["/opt/apt/upgrade", "."])
-        return _json(200, {"depots": depots})
+        dirs = ctx.depot_dirs or ["/opt/apt/upgrade", "."]
+        return _json(200, {"depots": cfg.list_depots(ctx.host, dirs), "dirs": dirs})
 
     if path == "/api/config/preview" and method == "POST":
         try:

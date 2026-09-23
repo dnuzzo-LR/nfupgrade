@@ -250,7 +250,10 @@ class TestApi(unittest.TestCase):
         status, _, body = api.dispatch("GET", "/api/config/depots", {}, b"",
                                        {"nfu_sid": sid}, "127.0.0.1", self.ctx)
         self.assertEqual(status, 200)
-        self.assertIn("depots", json.loads(body.decode()))
+        data = json.loads(body.decode())
+        self.assertEqual(data["dirs"], ["/depot"])
+        self.assertEqual([d["name"] for d in data["depots"]],
+                         ["netFLEX-CORE-5.5.0.03-1.x86_64.rpm"])
 
     def test_config_preview_reports_issues_and_rendered(self):
         sid = self._session()

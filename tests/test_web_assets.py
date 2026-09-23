@@ -6,7 +6,7 @@ WEB = os.path.join(os.path.dirname(os.path.dirname(__file__)), "nfupgrader", "we
 
 REQUIRED_IDS = [
     "host", "app-badge", "phase", "status", "bar-fill", "counter", "current",
-    "about-grid", "links", "cfg-load-depots", "cfg-depot", "cfg-form",
+    "about-grid", "links", "cfg-load-depots", "cfg-depot", "cfg-depot-msg", "cfg-form",
     "cfg-preview", "cfg-save", "cfg-msg", "cfg-rendered", "cfg-issues",
     "mode", "btn-check", "btn-launch", "launch-msg", "preflight", "override-box",
     "override-msg", "reason", "postflight", "site-table", "min-sev", "log",
@@ -35,6 +35,14 @@ class TestWebAssets(unittest.TestCase):
 
     def test_saved_tab_falls_back_to_overview(self):
         self.assertIn('names.indexOf(saved) >= 0 ? saved : "overview"', self.js)
+
+    def test_depots_listed_automatically(self):
+        self.assertIn(">Refresh depots</button>", self.html)
+        self.assertNotIn("List depots", self.html)
+        self.assertIn("function loadDepots(", self.js)
+        startup = self.js.split("buildForm();", 1)[1]
+        self.assertIn("loadDepots();", startup)
+        self.assertIn("esc(x.path)", self.js)
 
     def test_all_required_ids_present(self):
         missing = [i for i in REQUIRED_IDS if ('id="%s"' % i) not in self.html]

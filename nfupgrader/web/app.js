@@ -1,11 +1,13 @@
 "use strict";
 var logOffset = 0;
 
-function getJSON(url, cb) {
+function getJSON(url, cb, onError) {
   var x = new XMLHttpRequest();
   x.open("GET", url, true);
   x.onreadystatechange = function () {
-    if (x.readyState === 4 && x.status === 200) cb(JSON.parse(x.responseText));
+    if (x.readyState !== 4) return;
+    if (x.status === 200) cb(JSON.parse(x.responseText));
+    else if (onError) onError(x.status);
   };
   x.send();
 }
@@ -495,16 +497,28 @@ function renderIssues(issues) {
   }).join("");
 }
 
-document.getElementById("cfg-load-depots").onclick = function () {
+// Built automatically at startup; the button re-scans (e.g. after copying an RPM in).
+function loadDepots() {
+  var msg = document.getElementById("cfg-depot-msg");
+  msg.textContent = "Scanning depots…";
   getJSON("/api/config/depots", function (d) {
     var sel = document.getElementById("cfg-depot");
+    var keep = sel.value;
     sel.innerHTML = "<option value=''>— choose a CORE RPM —</option>" +
       d.depots.map(function (x) {
-        return "<option value='" + x.path + "' data-g='" + x.generic + "' data-l='" + x.load + "'>" +
-               x.name + "</option>";
+        return "<option value='" + esc(x.path) + "' data-g='" + esc(x.generic) +
+               "' data-l='" + esc(x.load) + "'" + (x.path === keep ? " selected" : "") + ">" +
+               esc(x.name) + "</option>";
       }).join("");
+    msg.textContent = d.depots.length
+      ? d.depots.length + (d.depots.length === 1 ? " RPM" : " RPMs") + " found"
+      : "no netFLEX-CORE RPMs in " + (d.dirs || []).join(", ");
+  }, function (status) {
+    msg.textContent = "could not list depots (HTTP " + status + ")";
   });
-};
+}
+
+document.getElementById("cfg-load-depots").onclick = loadDepots;
 
 document.getElementById("cfg-depot").onchange = function () {
   var opt = this.options[this.selectedIndex];
@@ -531,6 +545,7 @@ document.getElementById("cfg-save").onclick = function () {
 };
 
 buildForm();
+loadDepots();
 
 document.getElementById("btn-check").onclick = runPreflight;
 document.getElementById("btn-launch").onclick = launch;
