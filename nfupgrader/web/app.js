@@ -290,6 +290,7 @@ function refreshReportsJob() {
     if (reportsJob && reportsJob.label === "before") msg.textContent = jobText(reportsJob);
     else if (was && was.label === "before") msg.textContent = "Before snapshot done — upgrade starting.";
     if (was && !reportsJob) refreshReports();
+    if (d.launch_error) msg.textContent = "Launch failed: " + d.launch_error;
   });
 }
 
@@ -326,23 +327,30 @@ function refreshReports() {
     var pair = defaultPair();
     fillSelect("cmp-a", cmpTouched && keepA ? keepA : pair[0]);
     fillSelect("cmp-b", cmpTouched && keepB ? keepB : pair[1]);
+    if (!cmpTouched) {
+      var curA = document.getElementById("cmp-a").value;
+      var curB = document.getElementById("cmp-b").value;
+      if (curA && curB && (curA + "|" + curB) !== lastCompared) runCompare();
+    }
   });
 }
 
 var BADGE = { unchanged: "✅", changed: "●", failed: "❌", missing: "⚠️" };
+var lastCompared = "";   // "a|b" of the pair Compare last ran for
 
 function runCompare() {
   var a = document.getElementById("cmp-a").value;
   var b = document.getElementById("cmp-b").value;
   var body = document.querySelector("#cmp-table tbody");
   if (!a || !b) { body.innerHTML = "<tr><td>Select two snapshots.</td></tr>"; return; }
+  lastCompared = a + "|" + b;
   body.innerHTML = "<tr><td>" + loadingHTML("Comparing…") + "</td></tr>";
   getJSON("/api/reports/compare?a=" + encodeURIComponent(a) + "&b=" + encodeURIComponent(b),
     function (d) {
       body.innerHTML = "<tr><th></th><th>Report</th><th>Result</th></tr>" +
         d.reports.map(function (r, i) {
           var res = r.status + ((r.added || r.removed) ? " [+" + r.added + " −" + r.removed + "]" : "");
-          return "<tr class='cmp-row cmp-" + r.status + "' data-i='" + i + "' data-report='" +
+          return "<tr class='cmp-row cmp-" + esc(r.status) + "' data-i='" + i + "' data-report='" +
                  esc(r.name) + "'><td>" + BADGE[r.status] + "</td><td>" + esc(r.name) +
                  "</td><td>" + esc(res) + "</td></tr>" +
                  "<tr class='cmp-diff' id='cmp-diff-" + i + "' style='display:none'>" +
@@ -368,7 +376,7 @@ function sideHTML(rows) {
     if (r.op === "skip") {
       return "<tr class='skip'><td colspan='2'>… " + r.count + " unchanged lines …</td></tr>";
     }
-    return "<tr class='" + r.op + "'><td>" + esc(r.left) + "</td><td>" + esc(r.right) + "</td></tr>";
+    return "<tr class='" + esc(r.op) + "'><td>" + esc(r.left) + "</td><td>" + esc(r.right) + "</td></tr>";
   }).join("") + "</table>";
 }
 
@@ -381,8 +389,10 @@ function loadDiff(name, cell) {
   getJSON("/api/reports/diff?a=" + encodeURIComponent(a) + "&b=" + encodeURIComponent(b) +
           rep + "&style=" + style, function (d) {
     var links = "<div class='diff-links'>" +
-      "<a target='_blank' href='/api/reports/raw?id=" + encodeURIComponent(a) + rep + "'>raw A</a> · " +
-      "<a target='_blank' href='/api/reports/raw?id=" + encodeURIComponent(b) + rep + "'>raw B</a>" +
+      "<a target='_blank' href='" + esc("/api/reports/raw?id=" + encodeURIComponent(a) + rep) +
+      "'>raw A</a> · " +
+      "<a target='_blank' href='" + esc("/api/reports/raw?id=" + encodeURIComponent(b) + rep) +
+      "'>raw B</a>" +
       (d.truncated ? " · <b>diff truncated — see raw</b>" : "") + "</div>";
     cell.innerHTML = links + (style === "unified" ? unifiedHTML(d.rows) : sideHTML(d.rows));
   });
@@ -479,9 +489,23 @@ document.getElementById("btn-reports-run").onclick = function () {
   });
 };
 document.getElementById("btn-compare").onclick = runCompare;
-document.getElementById("cmp-style").onchange = runCompare;
-document.getElementById("cmp-a").onchange = function () { cmpTouched = true; };
-document.getElementById("cmp-b").onchange = function () { cmpTouched = true; };
+document.getElementById("cmp-style").onchange = function () {
+  var rows = document.querySelectorAll("tr.cmp-diff");
+  Array.prototype.forEach.call(rows, function (row) {
+    if (row.style.display === "none") return;
+    var prevRow = row.previousElementSibling;
+    if (!prevRow) return;
+    loadDiff(prevRow.getAttribute("data-report"), row.firstChild);
+  });
+};
+function onCmpSelectionChanged() {
+  cmpTouched = true;
+  lastCompared = "";
+  document.querySelector("#cmp-table tbody").innerHTML =
+    "<tr><td>Selection changed — click Compare.</td></tr>";
+}
+document.getElementById("cmp-a").onchange = onCmpSelectionChanged;
+document.getElementById("cmp-b").onchange = onCmpSelectionChanged;
 document.getElementById("cmp-table").onclick = function (ev) {
   var tr = ev.target.closest ? ev.target.closest("tr.cmp-row") : null;
   if (!tr) return;

@@ -159,7 +159,8 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         return _json(200, {"snapshots": reports.list_snapshots(_reports_root(ctx), live)})
 
     if path == "/api/reports/job" and method == "GET":
-        return _json(200, {"job": ctx.runner.job() if ctx.runner is not None else None})
+        return _json(200, {"job": ctx.runner.job() if ctx.runner is not None else None,
+                           "launch_error": (ctx.state or {}).get("launch_error")})
 
     if path == "/api/reports/run" and method == "POST":
         if ctx.runner is None:
@@ -192,7 +193,9 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         text = reports.report_text(_reports_root(ctx), _q(query, "id"), _q(query, "report"))
         if text is None:
             return _json(404, {"error": "unknown snapshot or report"})
-        return 200, [("Content-Type", "text/plain; charset=utf-8")], text.encode("utf-8")
+        headers = [("Content-Type", "text/plain; charset=utf-8"),
+                  ("X-Content-Type-Options", "nosniff")]
+        return 200, headers, text.encode("utf-8")
 
     if path == "/api/launch" and method == "POST":
         try:

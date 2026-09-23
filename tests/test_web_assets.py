@@ -45,6 +45,36 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn("esc(r.left)", self.js)
         self.assertIn("esc(r.right)", self.js)
 
+    def test_raw_diff_links_are_escaped(self):
+        self.assertIn('esc("/api/reports/raw?id="', self.js)
+
+    def test_cmp_status_and_op_classes_are_escaped(self):
+        self.assertIn("cmp-\" + esc(r.status)", self.js)
+        self.assertIn("esc(r.op)", self.js)
+
+    def test_compare_follows_newest_pair(self):
+        self.assertIn("lastCompared", self.js)
+
+    def test_style_change_rerenders_open_diffs_not_refetch(self):
+        self.assertNotIn('"cmp-style").onchange = runCompare', self.js)
+        self.assertIn('getElementById("cmp-style").onchange = function', self.js)
+
+    def test_ab_change_clears_stale_diffs(self):
+        self.assertIn("Selection changed", self.js)
+        self.assertIn('lastCompared = ""', self.js)
+
+    def test_launch_error_shown(self):
+        self.assertIn("d.launch_error", self.js)
+        self.assertIn("Launch failed: ", self.js)
+
+    def test_es5_only(self):
+        # ES5-only per project constraints: no arrow functions, let/const, or
+        # template literals in the shipped JS.
+        self.assertNotRegex(self.js, r"=>")
+        self.assertNotRegex(self.js, r"\blet\b")
+        self.assertNotRegex(self.js, r"\bconst\b")
+        self.assertNotIn("`", self.js)
+
 
 if __name__ == "__main__":
     unittest.main()

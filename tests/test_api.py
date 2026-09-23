@@ -332,7 +332,8 @@ class TestReportsApi(unittest.TestCase):
         snaps = self._json(self._get("/api/reports"))["snapshots"]
         self.assertEqual([(s["id"], s["label"], s["status"]) for s in snaps],
                          [(sid, "manual", "complete")])
-        self.assertEqual(self._json(self._get("/api/reports/job")), {"job": None})
+        self.assertEqual(self._json(self._get("/api/reports/job")),
+                         {"job": None, "launch_error": None})
 
     def test_busy_run_and_launch_409(self):
         held = []
@@ -361,7 +362,13 @@ class TestReportsApi(unittest.TestCase):
         status, headers, body = self._get("/api/reports/raw", id=a, report="Version")
         self.assertEqual(status, 200)
         self.assertIn(("Content-Type", "text/plain; charset=utf-8"), headers)
+        self.assertIn(("X-Content-Type-Options", "nosniff"), headers)
         self.assertEqual(body, b"v1\n")
+
+    def test_reports_job_surfaces_launch_error(self):
+        self.ctx.state["launch_error"] = "no nf_upgrade"
+        self.assertEqual(self._json(self._get("/api/reports/job"))["launch_error"],
+                         "no nf_upgrade")
 
     def test_errors(self):
         a = self._json(self._post("/api/reports/run"))["id"]

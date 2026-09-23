@@ -195,9 +195,23 @@ class TestRunner(RunnerBase):
         self.assertFalse(r.busy())
 
     def test_missing_report_file_gives_empty_snapshot(self):
-        r = self.runner(path=os.path.join(self.tmp, "nope.json"))
+        bad_path = os.path.join(self.tmp, "nope.json")
+        r = self.runner(path=bad_path)
         sid = r.start("manual")
         self.assertEqual(reports.read_manifest(self.root, sid)["reports"], [])
+        err = [e for e in self.events() if e["event"] == "reports_config_error"]
+        self.assertEqual(err[0]["path"], bad_path)
+        self.assertIn("error", err[0])
+
+    def test_malformed_report_config_audited(self):
+        bad_path = os.path.join(self.tmp, "bad.json")
+        with open(bad_path, "w") as fh:
+            fh.write("not json")
+        r = self.runner(path=bad_path)
+        sid = r.start("manual")
+        self.assertEqual(reports.read_manifest(self.root, sid)["reports"], [])
+        err = [e for e in self.events() if e["event"] == "reports_config_error"]
+        self.assertEqual(err[0]["path"], bad_path)
 
     def test_prunes_after_run(self):
         r = self.runner(keep=1)
@@ -324,6 +338,42 @@ class TestBeginUpgrade(RunnerBase):
         r.start("manual")
         with self.assertRaises(snapjobs.Busy):
             snapjobs.begin_upgrade(r, lambda: None, statuses(["done"]), client="ip")
+
+    def test_on_error_receives_message(self):
+        r = self.runner()
+
+        def boom():
+            raise OSError("no nf_upgrade")
+        seen = []
+        snapjobs.begin_upgrade(r, boom, statuses(["running", "done"]), client="ip",
+                               audit=self.audit, spawn=sync, sleep=lambda s: None, clock=clock(),
+                               on_error=seen.append)
+        self.assertEqual(seen, ["no nf_upgrade"])
+        # existing launch_error audit still happens alongside on_error
+        err = [e for e in self.events() if e["event"] == "launch_error"]
+        self.assertEqual(err[0]["error"], "no nf_upgrade")
+
+    def test_on_error_raising_does_not_propagate(self):
+        r = self.runner()
+
+        def boom():
+            raise OSError("no nf_upgrade")
+
+        def bad_on_error(msg):
+            raise ValueError("callback exploded")
+        # must not raise out of begin_upgrade/then
+        snapjobs.begin_upgrade(r, boom, statuses(["running", "done"]), client="ip",
+                               audit=self.audit, spawn=sync, sleep=lambda s: None, clock=clock(),
+                               on_error=bad_on_error)
+        self.assertEqual([s["label"] for s in reports.list_snapshots(self.root)], ["before"])
+
+    def test_on_error_not_called_on_success(self):
+        r = self.runner(h=host([]))
+        seen = []
+        snapjobs.begin_upgrade(r, lambda: None, statuses(["running", "done"]), client="ip",
+                               audit=self.audit, spawn=Hold(), sleep=lambda s: None, clock=clock(),
+                               on_error=seen.append)
+        self.assertEqual(seen, [])
 
 
 if __name__ == "__main__":

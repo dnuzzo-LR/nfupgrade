@@ -71,7 +71,8 @@ class SnapshotRunner(object):
     def _load(self):
         try:
             return reports.load_reports(self.reports_path)
-        except (IOError, OSError, ValueError):
+        except (IOError, OSError, ValueError) as e:
+            self._audit("reports_config_error", path=self.reports_path, error=str(e))
             return []
 
     def _audit(self, event, **fields):
@@ -165,15 +166,23 @@ def watch_upgrade(read_status, start_after, sleep=time.sleep, clock=time.time,
 
 
 def begin_upgrade(runner, launch, read_status, client, audit=None, spawn=thread_spawn,
-                  sleep=time.sleep, clock=time.time):
+                  sleep=time.sleep, clock=time.time, on_error=None):
     """Take the before snapshot, then launch(), then watch for completion and take
     the after snapshot. Returns the before id; raises Busy if a job is running.
-    A launch() failure is audited and ends the sequence (no after snapshot)."""
+    A launch() failure is audited and ends the sequence (no after snapshot). If
+    `on_error` is given, it is called with the error string so the caller (e.g.
+    httpd) can surface the failure elsewhere; on_error is guarded — it must
+    never raise out of the background job."""
     def then(before_id):
         try:
             launch()
         except Exception as e:
             _safe_record(audit, "launch_error", error=str(e), client=client)
+            if on_error is not None:
+                try:
+                    on_error(str(e))
+                except Exception:
+                    pass
             return
 
         def start_after(note):

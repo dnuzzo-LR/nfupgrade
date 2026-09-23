@@ -120,6 +120,47 @@ class TestLaunchSideEffect(unittest.TestCase):
         open(os.path.join(self.tmp, ".h1_STATE"), "w").write("swidone\n")
         self.assertEqual(httpd.upgrade_status(launch_ctx(self.tmp, host=host)), "done")
 
+    def test_upgrade_busy_audits_launch_rejected(self):
+        def begin(*a, **kw):
+            raise snapjobs.Busy()
+        status, body = httpd.launch_side_effect(launch_ctx(self.tmp, runner=FakeRunner()),
+                                                "upgrade", "ip", perform=self.perform,
+                                                begin=begin)
+        self.assertEqual(status, 409)
+        self.assertIn("launch_rejected", self.events())
+
+    def test_async_launch_error_surfaced_in_state(self):
+        def begin(runner, launch, read_status, client, audit=None, on_error=None):
+            on_error("boom")
+            return "20260923_140000_before"
+        ctx = launch_ctx(self.tmp, runner=FakeRunner())
+        ctx = ctx._replace(state={})
+        status, body = httpd.launch_side_effect(ctx, "upgrade", "ip", perform=self.perform,
+                                                begin=begin)
+        self.assertEqual(status, 202)
+        self.assertEqual(ctx.state["launch_error"], "boom")
+
+    def test_async_launch_error_cleared_on_next_launch(self):
+        def begin_ok(runner, launch, read_status, client, audit=None, on_error=None):
+            return "20260923_140100_before"
+        ctx = launch_ctx(self.tmp, runner=FakeRunner())
+        ctx = ctx._replace(state={"launch_error": "stale"})
+        httpd.launch_side_effect(ctx, "upgrade", "ip", perform=self.perform, begin=begin_ok)
+        self.assertNotIn("launch_error", ctx.state)
+
+    def test_no_state_dict_does_not_pass_on_error_or_raise(self):
+        seen = {}
+
+        def begin(runner, launch, read_status, client, audit=None):
+            seen["called"] = True
+            launch()
+            return "20260923_140200_before"
+        ctx = launch_ctx(self.tmp, runner=FakeRunner())  # ctx.state is None
+        status, body = httpd.launch_side_effect(ctx, "upgrade", "ip", perform=self.perform,
+                                                begin=begin)
+        self.assertEqual(status, 202)
+        self.assertTrue(seen["called"])
+
 
 if __name__ == "__main__":
     unittest.main()
