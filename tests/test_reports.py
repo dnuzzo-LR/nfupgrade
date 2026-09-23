@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from nfupgrader import reports
 from nfupgrader.host import FakeHost, RunResult
@@ -35,6 +36,7 @@ class RecordingHost(object):
 class SnapshotBase(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp()
+        reports._clear_cache()
 
     def snap(self, host, label="manual", when=T0, report_list=REPS, **kw):
         sid = reports.new_snapshot_id(self.root, label, when)
@@ -67,6 +69,10 @@ class TestDefinitions(unittest.TestCase):
 
 
 class TestSnapshot(SnapshotBase):
+    def test_new_id_rejects_bad_label(self):
+        with self.assertRaises(ValueError):
+            reports.new_snapshot_id(self.root, "bogus", T0)
+
     def test_new_id_avoids_collision(self):
         first = reports.new_snapshot_id(self.root, "before", T0)
         self.assertEqual(first, "20260923_140200_before")
@@ -113,6 +119,23 @@ class TestSnapshot(SnapshotBase):
         seen = []
         self.snap(fake_host(), on_progress=lambda i, n, name: seen.append((i, n, name)))
         self.assertEqual(seen, [(1, 2, "Version"), (2, 2, "Disk Check")])
+
+    def test_progress_callback_error_does_not_abort_snapshot(self):
+        def boom(i, n, name):
+            raise RuntimeError("ui gone")
+        sid = self.snap(fake_host(), on_progress=boom)
+        m = self.manifest(sid)
+        self.assertEqual(m["status"], "complete")
+        self.assertEqual([r["name"] for r in m["reports"]], ["Version", "Disk Check"])
+
+    def test_round_trips_non_utf8_and_unicode_output(self):
+        host = FakeHost({
+            ("sh", "-c", "echo v"): RunResult(0, "v1\n", ""),
+            ("sh", "-c", "df"): RunResult(0, "bad:� ok:é\n", ""),
+        })
+        sid = self.snap(host)
+        self.assertEqual(reports.report_text(self.root, sid, "Disk Check"),
+                         "bad:� ok:é\n")
 
     def test_pair_and_note_stored(self):
         sid = self.snap(fake_host(), label="after", pair_of="20260923_140000_before", note="x")
@@ -189,6 +212,27 @@ class TestCompare(SnapshotBase):
         a = self.snap(fake_host())
         self.assertIsNone(reports.compare(self.root, a, "20990101_000000_after"))
 
+    def test_complete_snapshots_are_cached(self):
+        a = self.snap(fake_host(), when=T0)
+        b = self.snap(fake_host(version="v2\n"), when=T0 + datetime.timedelta(minutes=1))
+        with mock.patch.object(reports, "_counts", wraps=reports._counts) as spy:
+            first = reports.compare(self.root, a, b)
+            second = reports.compare(self.root, a, b)
+        self.assertEqual(spy.call_count, len(REPS))
+        self.assertIs(first, second)
+
+    def test_running_snapshot_is_not_cached(self):
+        a = self.snap(fake_host(), when=T0)
+        b = self.snap(fake_host(version="v2\n"), when=T0 + datetime.timedelta(minutes=1))
+        path = os.path.join(self.root, b, "manifest.json")
+        m = json.load(open(path))
+        m["status"] = "running"
+        json.dump(m, open(path, "w"))
+        with mock.patch.object(reports, "_counts", wraps=reports._counts) as spy:
+            reports.compare(self.root, a, b)
+            reports.compare(self.root, a, b)
+        self.assertEqual(spy.call_count, 2 * len(REPS))
+
 
 class TestDiffRows(unittest.TestCase):
     def test_unified(self):
@@ -251,6 +295,18 @@ class TestDiff(SnapshotBase):
     def test_diff_unknown_report(self):
         a = self.snap(fake_host())
         self.assertIsNone(reports.diff(self.root, a, a, "Nope", "side"))
+
+    def test_diff_unknown_snapshot(self):
+        a = self.snap(fake_host())
+        self.assertIsNone(reports.diff(self.root, a, "20990101_000000_after", "Version", "side"))
+
+    def test_diff_is_cached_for_complete_snapshots(self):
+        a = self.snap(fake_host(version="1\n2\n3\n"), when=T0)
+        b = self.snap(fake_host(version="1\nX\nY\n"),
+                      when=T0 + datetime.timedelta(minutes=1))
+        first = reports.diff(self.root, a, b, "Version", "side")
+        second = reports.diff(self.root, a, b, "Version", "side")
+        self.assertIs(first, second)
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ def _exec(argv, timeout=None):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             universal_newlines=True,
+            errors="replace",
             timeout=timeout,
         )
         return RunResult(p.returncode, p.stdout, p.stderr)

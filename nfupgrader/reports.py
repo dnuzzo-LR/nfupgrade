@@ -8,12 +8,43 @@ import json
 import os
 import re
 import shutil
+import threading
 import time
 
 REPORT_TIMEOUT = 300
 KEEP = 20
 STDERR_MARK = "----- STDERR -----"
-_ID_RE = re.compile(r"^\d{8}_\d{6}_(before|after|manual)(_\d+)?$")
+LABELS = ("before", "after", "manual")
+_ID_RE = re.compile(r"^\d{8}_\d{6}_(" + "|".join(LABELS) + r")(_\d+)?$")
+
+# compare()/diff() results for two *complete* (immutable) snapshots never
+# change, but compare() runs SequenceMatcher over every report (some are
+# 100k-line exports) so it's worth memoizing. Bounded: once it grows past
+# _CACHE_MAX entries the whole cache is dropped rather than tracking LRU.
+_CACHE_MAX = 64
+_cache = {}
+_cache_lock = threading.Lock()
+
+
+def _clear_cache():
+    """Drop all cached compare()/diff() results. Exposed for tests."""
+    with _cache_lock:
+        _cache.clear()
+
+
+def _cached(key, compute):
+    """Return _cache[key], computing and storing it via `compute()` first if
+    absent. The cache is only ever populated by callers that already checked
+    both snapshots are complete."""
+    with _cache_lock:
+        if key in _cache:
+            return _cache[key]
+    result = compute()
+    with _cache_lock:
+        if len(_cache) >= _CACHE_MAX:
+            _cache.clear()
+        _cache[key] = result
+    return result
 
 
 def load_reports(path):
@@ -33,6 +64,8 @@ def safe_name(name):
 
 def new_snapshot_id(root, label, when):
     """<YYYYmmdd_HHMMSS>_<label>, suffixed _2, _3... if that directory exists."""
+    if label not in LABELS:
+        raise ValueError("bad label: {}".format(label))
     base = "{}_{}".format(when.strftime("%Y%m%d_%H%M%S"), label)
     sid, n = base, 2
     while os.path.exists(os.path.join(root, sid)):
@@ -48,7 +81,7 @@ def _iso(when):
 def _write_manifest(snap_dir, man):
     # Write-then-rename so a reader never sees a half-written manifest.
     tmp = os.path.join(snap_dir, "manifest.json.tmp")
-    with open(tmp, "w") as fh:
+    with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(man, fh, indent=1, sort_keys=True)
     os.rename(tmp, os.path.join(snap_dir, "manifest.json"))
 
@@ -59,6 +92,8 @@ def take_snapshot(host, report_list, root, snap_id, label, mode=None, pair_of=No
     A failing, timed-out or unrunnable report is recorded, never raised.
     Returns the final manifest."""
     snap_dir = os.path.join(root, snap_id)
+    # snap_id came from new_snapshot_id, and the SnapshotRunner guarantees only
+    # one job runs at a time, so this directory cannot appear between the two.
     os.makedirs(snap_dir)
     man = {"id": snap_id, "label": label, "mode": mode, "pair_of": pair_of,
            "started": _iso(now()), "finished": None, "status": "running",
@@ -67,7 +102,10 @@ def take_snapshot(host, report_list, root, snap_id, label, mode=None, pair_of=No
     total = len(report_list)
     for idx, rep in enumerate(report_list, 1):
         if on_progress is not None:
-            on_progress(idx, total, rep["name"])
+            try:
+                on_progress(idx, total, rep["name"])
+            except Exception:
+                pass  # progress reporting is best-effort; never abort the snapshot
         fname = "{:02d}_{}.txt".format(idx, safe_name(rep["name"]))
         entry = {"name": rep["name"], "command": rep["command"], "file": fname,
                  "rc": None, "secs": 0.0, "error": None}
@@ -87,7 +125,7 @@ def take_snapshot(host, report_list, root, snap_id, label, mode=None, pair_of=No
             text = ""
             entry["error"] = str(e)
         entry["secs"] = round(clock() - t0, 2)
-        with open(os.path.join(snap_dir, fname), "w") as fh:
+        with open(os.path.join(snap_dir, fname), "w", encoding="utf-8") as fh:
             fh.write(text)
         man["reports"].append(entry)
         _write_manifest(snap_dir, man)
@@ -102,7 +140,7 @@ def read_manifest(root, snap_id):
     if not _ID_RE.match(snap_id or ""):
         return None
     try:
-        with open(os.path.join(root, snap_id, "manifest.json")) as fh:
+        with open(os.path.join(root, snap_id, "manifest.json"), encoding="utf-8") as fh:
             return json.load(fh)
     except (IOError, OSError, ValueError):
         return None
@@ -147,7 +185,8 @@ def report_text(root, snap_id, name):
     for r in man["reports"]:
         if r["name"] == name:
             try:
-                with open(os.path.join(root, snap_id, r["file"]), errors="replace") as fh:
+                with open(os.path.join(root, snap_id, r["file"]),
+                          encoding="utf-8", errors="replace") as fh:
                     return fh.read()
             except (IOError, OSError):
                 return None
@@ -186,25 +225,31 @@ def compare(root, a, b):
     ma, mb = read_manifest(root, a), read_manifest(root, b)
     if ma is None or mb is None:
         return None
-    ea = dict((r["name"], r) for r in ma["reports"])
-    eb = dict((r["name"], r) for r in mb["reports"])
-    names = [r["name"] for r in ma["reports"]] + \
-            [r["name"] for r in mb["reports"] if r["name"] not in ea]
-    rows = []
-    for name in names:
-        if name not in ea or name not in eb:
-            rows.append({"name": name, "status": "missing", "added": 0, "removed": 0,
-                         "side": "a" if name in ea else "b"})
-            continue
-        added, removed = _counts(_lines(root, a, name), _lines(root, b, name))
-        if _failed(ea[name]) or _failed(eb[name]):
-            status = "failed"
-        elif added or removed:
-            status = "changed"
-        else:
-            status = "unchanged"
-        rows.append({"name": name, "status": status, "added": added, "removed": removed})
-    return {"a": a, "b": b, "reports": rows}
+
+    def compute():
+        ea = dict((r["name"], r) for r in ma["reports"])
+        eb = dict((r["name"], r) for r in mb["reports"])
+        names = [r["name"] for r in ma["reports"]] + \
+                [r["name"] for r in mb["reports"] if r["name"] not in ea]
+        rows = []
+        for name in names:
+            if name not in ea or name not in eb:
+                rows.append({"name": name, "status": "missing", "added": 0, "removed": 0,
+                             "side": "a" if name in ea else "b"})
+                continue
+            added, removed = _counts(_lines(root, a, name), _lines(root, b, name))
+            if _failed(ea[name]) or _failed(eb[name]):
+                status = "failed"
+            elif added or removed:
+                status = "changed"
+            else:
+                status = "unchanged"
+            rows.append({"name": name, "status": status, "added": added, "removed": removed})
+        return {"a": a, "b": b, "reports": rows}
+
+    if ma["status"] == "complete" and mb["status"] == "complete":
+        return _cached(("compare", root, a, b), compute)
+    return compute()
 
 
 def unified_rows(a_lines, b_lines, context=CONTEXT):
@@ -251,10 +296,20 @@ def side_rows(a_lines, b_lines, context=CONTEXT):
 
 def diff(root, a, b, name, style="side", cap=MAX_ROWS):
     """Diff rows for one report between two snapshots (a side missing the report
-    diffs as empty), or None if neither snapshot has it."""
-    at, bt = report_text(root, a, name), report_text(root, b, name)
-    if at is None and bt is None:
+    diffs as empty), or None if either snapshot is unknown or neither has the
+    report."""
+    ma, mb = read_manifest(root, a), read_manifest(root, b)
+    if ma is None or mb is None:
         return None
-    al, bl = (at or "").splitlines(), (bt or "").splitlines()
-    rows = unified_rows(al, bl) if style == "unified" else side_rows(al, bl)
-    return {"rows": rows[:cap], "truncated": len(rows) > cap}
+
+    def compute():
+        at, bt = report_text(root, a, name), report_text(root, b, name)
+        if at is None and bt is None:
+            return None
+        al, bl = (at or "").splitlines(), (bt or "").splitlines()
+        rows = unified_rows(al, bl) if style == "unified" else side_rows(al, bl)
+        return {"rows": rows[:cap], "truncated": len(rows) > cap}
+
+    if ma["status"] == "complete" and mb["status"] == "complete":
+        return _cached(("diff", root, a, b, name, style, cap), compute)
+    return compute()

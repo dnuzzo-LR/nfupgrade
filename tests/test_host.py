@@ -23,6 +23,12 @@ class TestHost(unittest.TestCase):
         r = FakeHost({}).run(["nope"])
         self.assertEqual(r.rc, 1)
 
+    def test_local_run_survives_undecodable_bytes(self):
+        r = Host().run(["printf", "\\377ok"])
+        self.assertEqual(r.rc, 0)
+        self.assertTrue(r.out.endswith("ok"))
+        self.assertIn("�", r.out)
+
 
 class TestSsh(unittest.TestCase):
     def test_build_ssh_argv_quotes_remote_command(self):
