@@ -148,12 +148,18 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         mode = payload.get("mode")
         if mode not in ("stage", "upgrade"):
             return _json(400, {"error": "mode must be stage or upgrade"})
+        overrides = payload.get("overrides", [])
+        if not isinstance(overrides, list):
+            return _json(400, {"error": "overrides must be a list of check names"})
         results = checks.run_checks(ctx.host, _load_checks(ctx), "preflight", mode, _machtype(ctx))
         blocking = checks.blocking_failures(results)
-        override = bool(payload.get("override"))
-        if blocking and not override:
-            return _json(409, {"error": "pre-flight checks failed", "blocking": blocking})
-        if blocking and override:
+        # Every blocking failure must be overridden by name; names for checks
+        # that now pass (or never existed) are simply ignored.
+        missing = [b["name"] for b in blocking if b["name"] not in overrides]
+        if missing:
+            return _json(409, {"error": "pre-flight checks failed", "blocking": blocking,
+                               "not_overridden": missing})
+        if blocking:
             reason = (payload.get("reason") or "").strip()
             if not reason:
                 return _json(400, {"error": "override requires a reason"})

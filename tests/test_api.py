@@ -51,7 +51,12 @@ class TestApi(unittest.TestCase):
         self.ctx = make_ctx(self.tmp)
 
     def _session(self):
-        return self.ctx.auth.redeem("TOK", "127.0.0.1")
+        # Cached: the token is single-use, but several tests (e.g. those
+        # driving /api/launch through the _launch() helper) call _session()
+        # more than once per test and need the same session back.
+        if getattr(self, "_sid", None) is None:
+            self._sid = self.ctx.auth.redeem("TOK", "127.0.0.1")
+        return self._sid
 
     def test_progress_requires_session(self):
         status, _, _ = api.dispatch("GET", "/api/progress", {}, b"", {}, "127.0.0.1", self.ctx)
@@ -152,24 +157,72 @@ class TestApi(unittest.TestCase):
         data = json.loads(body.decode())
         self.assertTrue(len(data["blocking"]) >= 1)
 
-    def test_launch_override_requires_reason(self):
+    def _launch(self, payload):
         sid = self._session()
-        status, _, _ = api.dispatch(
-            "POST", "/api/launch", {}, json.dumps({"mode": "upgrade", "override": True}).encode(),
+        status, _, body = api.dispatch(
+            "POST", "/api/launch", {}, json.dumps(payload).encode(),
             {"nfu_sid": sid}, "127.0.0.1", self.ctx)
+        return status, json.loads(body.decode())
+
+    def _audit(self):
+        path = os.path.join(self.tmp, "audit.jsonl")
+        if not os.path.exists(path):
+            return []
+        return [json.loads(l) for l in open(path).read().splitlines()]
+
+    def test_launch_partial_override_names_missing(self):
+        self.ctx.host.responses[("dbcheck", "-AV")] = RunResult(0, "ERROR: x\n", "")
+        status, data = self._launch({"mode": "upgrade", "overrides": ["staged-present"],
+                                     "reason": "known good"})
+        self.assertEqual(status, 409)
+        self.assertEqual(data["not_overridden"], ["dbcheck-clean"])
+        self.assertEqual(sorted(b["name"] for b in data["blocking"]),
+                         ["dbcheck-clean", "staged-present"])
+
+    def test_launch_full_override_requires_reason(self):
+        status, _ = self._launch({"mode": "upgrade", "overrides": ["staged-present"]})
+        self.assertEqual(status, 400)
+        status, _ = self._launch({"mode": "upgrade", "overrides": ["staged-present"],
+                                  "reason": "   "})
         self.assertEqual(status, 400)
 
-    def test_launch_override_with_reason_proceeds_and_audits(self):
-        sid = self._session()
-        status, _, _ = api.dispatch(
-            "POST", "/api/launch", {},
-            json.dumps({"mode": "upgrade", "override": True, "reason": "known good"}).encode(),
-            {"nfu_sid": sid}, "127.0.0.1", self.ctx)
+    def test_launch_full_override_with_reason_audits_names(self):
+        self.ctx.host.responses[("dbcheck", "-AV")] = RunResult(0, "ERROR: x\n", "")
+        status, _ = self._launch({"mode": "upgrade",
+                                  "overrides": ["staged-present", "dbcheck-clean"],
+                                  "reason": "known good"})
         self.assertEqual(status, 202)
-        events = [json.loads(l)["event"] for l in
-                  open(os.path.join(self.tmp, "audit.jsonl")).read().splitlines()]
-        self.assertIn("override", events)
+        recs = self._audit()
+        ovr = [r for r in recs if r["event"] == "override"]
+        self.assertEqual(len(ovr), 1)
+        self.assertEqual(sorted(ovr[0]["checks"]), ["dbcheck-clean", "staged-present"])
+        self.assertEqual(ovr[0]["reason"], "known good")
+        self.assertIn("launch", [r["event"] for r in recs])
+
+    def test_launch_stale_override_name_ignored(self):
+        status, _ = self._launch({"mode": "upgrade",
+                                  "overrides": ["staged-present", "disk-usr4", "no-such"],
+                                  "reason": "known good"})
+        self.assertEqual(status, 202)
+        ovr = [r for r in self._audit() if r["event"] == "override"]
+        self.assertEqual(ovr[0]["checks"], ["staged-present"])
+
+    def test_launch_no_blocking_no_override_record(self):
+        status, _ = self._launch({"mode": "stage"})
+        self.assertEqual(status, 202)
+        events = [r["event"] for r in self._audit()]
+        self.assertNotIn("override", events)
         self.assertIn("launch", events)
+
+    def test_launch_overrides_must_be_list(self):
+        status, _ = self._launch({"mode": "upgrade", "overrides": "staged-present",
+                                  "reason": "x"})
+        self.assertEqual(status, 400)
+
+    def test_launch_legacy_override_flag_no_longer_bypasses(self):
+        status, data = self._launch({"mode": "upgrade", "override": True, "reason": "x"})
+        self.assertEqual(status, 409)
+        self.assertEqual(data["not_overridden"], ["staged-present"])
 
     def test_config_fields(self):
         sid = self._session()
