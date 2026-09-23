@@ -43,6 +43,29 @@ def tail(path, min_severity=None, limit=None):
     return entries
 
 
+def latest_trace(inclogdir, phase, hostname):
+    """The newest nf_upgrader trace for this phase/host. nf_upgrader writes
+    ${INCLOGDIR}/${MODE}_inc_${HOSTNAME}.${PID} (plus .web/.rpm/... side files,
+    which are ignored); with none present, fall back to the pid-less name."""
+    pat = re.compile(r"^{}_inc_{}\.\d+$".format(re.escape(phase), re.escape(hostname)))
+    best, best_key = None, None
+    try:
+        names = os.listdir(inclogdir)
+    except OSError:
+        names = []
+    for name in names:
+        if not pat.match(name):
+            continue
+        path = os.path.join(inclogdir, name)
+        try:
+            key = (os.path.getmtime(path), name)
+        except OSError:
+            continue
+        if best_key is None or key > best_key:
+            best, best_key = path, key
+    return best or os.path.join(inclogdir, "{}_inc_{}".format(phase, hostname))
+
+
 def tail_since(path, offset, min_severity=None):
     """Incremental tail: read from byte `offset`, return new entries and the new
     offset. Lets the UI poll for only what was appended."""

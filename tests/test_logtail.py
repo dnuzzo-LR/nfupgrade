@@ -56,5 +56,32 @@ class TestTail(unittest.TestCase):
         self.assertEqual(len(chunk["entries"]), 4)
 
 
+
+class TestLatestTrace(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+
+    def touch(self, name, mtime):
+        p = os.path.join(self.d, name)
+        open(p, "w").write("x\n")
+        os.utime(p, (mtime, mtime))
+        return p
+
+    def test_newest_pid_file_for_phase_and_host(self):
+        self.touch("stage_inc_h1.lab.local.100", 1000)
+        newest = self.touch("stage_inc_h1.lab.local.200", 2000)
+        self.touch("stage_inc_h1.lab.local.200.web", 3000)
+        self.touch("stage_inc_h1.lab.local.200.rpm", 3000)
+        self.touch("stage_inc_h1XlabXlocal.300", 4000)   # dots in host are literal
+        up = self.touch("upgrade_inc_h1.lab.local.400", 5000)
+        self.assertEqual(logtail.latest_trace(self.d, "stage", "h1.lab.local"), newest)
+        self.assertEqual(logtail.latest_trace(self.d, "upgrade", "h1.lab.local"), up)
+
+    def test_falls_back_to_pidless_path(self):
+        self.assertEqual(logtail.latest_trace(self.d, "stage", "h1"),
+                         os.path.join(self.d, "stage_inc_h1"))
+        self.assertEqual(logtail.latest_trace(os.path.join(self.d, "nope"), "stage", "h1"),
+                         os.path.join(self.d, "nope", "stage_inc_h1"))
+
 if __name__ == "__main__":
     unittest.main()
