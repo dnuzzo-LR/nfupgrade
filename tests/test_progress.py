@@ -47,5 +47,25 @@ class TestReadProgress(unittest.TestCase):
         self.assertEqual(p["completed"], 0)
 
 
+
+class TestPhaseInference(unittest.TestCase):
+    def test_upgrade_staged_not_running_is_not_started(self):
+        self.assertEqual(progress.compute_progress("upgrade", "swscomplete", False)["status"],
+                         "not_started")
+        self.assertEqual(progress.compute_progress("upgrade", "swscomplete", True)["status"],
+                         "running")
+
+    def test_infer_phase(self):
+        for st in ("swistart", "swicopycnc", "postinstall", "swidone"):
+            self.assertEqual(progress.infer_phase(st), "upgrade", st)
+        for st in ("swsstart", "swscopycnc", "swscomplete", None, "weird"):
+            self.assertEqual(progress.infer_phase(st), "stage", st)
+
+    def test_read_state(self):
+        d = tempfile.mkdtemp()
+        self.assertIsNone(progress.read_state("h1", d))
+        open(os.path.join(d, ".h1_STATE"), "w").write("swistart\n")
+        self.assertEqual(progress.read_state("h1", d), "swistart")
+
 if __name__ == "__main__":
     unittest.main()
