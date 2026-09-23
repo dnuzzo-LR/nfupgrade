@@ -165,16 +165,46 @@ def list_snapshots(root, live_id=None):
 
 
 def prune(root, keep=KEEP, protect=()):
-    """Delete the oldest snapshots so at most `keep` remain, skipping `protect`."""
+    """Delete the oldest snapshots so at most `keep` remain, skipping `protect`.
+
+    A before and the after(s) whose pair_of names it are one unit: they are
+    deleted together (each directory counts toward the excess), and a unit
+    with any protected member is kept whole. The newest `before` is also
+    kept while it has no after yet -- an upgrade from it may be in flight,
+    and its after snapshot has not been taken."""
     ids = sorted(s for s in os.listdir(root) if _ID_RE.match(s))
+    present = set(ids)
+    partners = dict((sid, set()) for sid in ids)
+    befores = []
+    for sid in ids:
+        man = read_manifest(root, sid)
+        if man is None:
+            continue
+        if man.get("label") == "before":
+            befores.append(sid)
+        pair = man.get("pair_of")
+        if man.get("label") == "after" and pair in present:
+            partners[sid].add(pair)
+            partners[pair].add(sid)
+    protect = set(protect)
+    if befores and not partners[befores[-1]]:
+        protect.add(befores[-1])
     excess = len(ids) - keep
+    gone = set()
     for sid in ids:
         if excess <= 0:
             break
-        if sid in protect:
+        if sid in gone:
             continue
-        shutil.rmtree(os.path.join(root, sid), ignore_errors=True)
-        excess -= 1
+        unit = set([sid]) | partners[sid]
+        for p in list(unit):        # a before with several afters stays whole
+            unit |= partners[p]
+        if unit & protect:
+            continue
+        for member in sorted(unit):
+            shutil.rmtree(os.path.join(root, member), ignore_errors=True)
+            gone.add(member)
+            excess -= 1
 
 
 def report_text(root, snap_id, name):

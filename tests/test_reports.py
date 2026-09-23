@@ -174,6 +174,44 @@ class TestListing(SnapshotBase):
         reports.prune(self.root, keep=2, protect=(ids[0],))
         self.assertEqual(sorted(os.listdir(self.root)), [ids[0], ids[4]])
 
+    def test_prune_deletes_pairs_together(self):
+        t = lambda i: T0 + datetime.timedelta(seconds=i)
+        before = self.snap(fake_host(), label="before", when=t(0))
+        after = self.snap(fake_host(), label="after", when=t(1), pair_of=before)
+        m2 = self.snap(fake_host(), when=t(2))
+        m3 = self.snap(fake_host(), when=t(3))
+        # one over the limit: the oldest unit is the before/after pair, both go
+        reports.prune(self.root, keep=3)
+        self.assertEqual(sorted(os.listdir(self.root)), [m2, m3])
+
+    def test_prune_never_splits_pair_by_removing_after_alone(self):
+        t = lambda i: T0 + datetime.timedelta(seconds=i)
+        m0 = self.snap(fake_host(), when=t(0))
+        before = self.snap(fake_host(), label="before", when=t(1))
+        after = self.snap(fake_host(), label="after", when=t(2), pair_of=before)
+        m3 = self.snap(fake_host(), when=t(3))
+        reports.prune(self.root, keep=3, protect=(after,))
+        # the pair is protected as a unit via its after; only m0 goes
+        self.assertEqual(sorted(os.listdir(self.root)), [before, after, m3])
+
+    def test_prune_keeps_newest_unpaired_before(self):
+        t = lambda i: T0 + datetime.timedelta(seconds=i)
+        old_before = self.snap(fake_host(), label="before", when=t(0))
+        before = self.snap(fake_host(), label="before", when=t(1))
+        ms = [self.snap(fake_host(), when=t(2 + i)) for i in range(3)]
+        # an upgrade is in flight from `before` (no after yet): keep it even
+        # though it is among the oldest; the older unpaired before is fair game
+        reports.prune(self.root, keep=2)
+        self.assertEqual(sorted(os.listdir(self.root)), [before, ms[2]])
+
+    def test_prune_unpaired_before_not_protected_once_newer_before_paired(self):
+        t = lambda i: T0 + datetime.timedelta(seconds=i)
+        b0 = self.snap(fake_host(), label="before", when=t(0))
+        b1 = self.snap(fake_host(), label="before", when=t(1))
+        a1 = self.snap(fake_host(), label="after", when=t(2), pair_of=b1)
+        reports.prune(self.root, keep=2)
+        self.assertEqual(sorted(os.listdir(self.root)), [b1, a1])
+
     def test_read_manifest_rejects_bad_ids(self):
         self.assertIsNone(reports.read_manifest(self.root, "../etc"))
         self.assertIsNone(reports.read_manifest(self.root, "x"))

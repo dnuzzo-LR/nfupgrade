@@ -219,6 +219,23 @@ class TestRunner(RunnerBase):
         second = r.start("manual")
         self.assertEqual(os.listdir(self.root), [second])
 
+    def test_prune_protects_live_job_and_its_pair(self):
+        r = self.runner()
+        with mock.patch("nfupgrader.snapjobs.reports.prune") as prune:
+            sid = r.start("after", pair_of="20260923_135959_before")
+        prune.assert_called_once_with(self.root, 20,
+                                      protect=(sid, "20260923_135959_before"))
+        with mock.patch("nfupgrader.snapjobs.reports.prune") as prune:
+            sid = r.start("manual")
+        prune.assert_called_once_with(self.root, 20, protect=(sid,))
+
+    def test_after_snapshot_keeps_its_before_when_pruning(self):
+        r = self.runner(keep=2)
+        m = r.start("manual")
+        before = r.start("before")
+        after = r.start("after", pair_of=before)
+        self.assertEqual(sorted(os.listdir(self.root)), [before, after])
+
     def test_real_thread_stays_busy_until_done(self):
         event = threading.Event()
         responses = {("sh", "-c", "echo v"): RunResult(0, "v1\n", ""),

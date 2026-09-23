@@ -102,7 +102,9 @@ class SnapshotRunner(object):
                     reports.take_snapshot(self.host, report_list, self.root, snap_id, label,
                                           mode=mode, pair_of=pair_of, note=note,
                                           on_progress=self._progress, now=self.now)
-                    reports.prune(self.root, self.keep, protect=(snap_id,))
+                    # An after's before must survive its own after's prune.
+                    reports.prune(self.root, self.keep,
+                                  protect=(snap_id,) + ((pair_of,) if pair_of else ()))
                 except Exception as e:
                     self._audit("report_snapshot_error", id=snap_id, error=str(e))
                 if then is not None:
