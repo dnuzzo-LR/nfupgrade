@@ -1,8 +1,10 @@
+import datetime
 import json
 import os
 import tempfile
 import unittest
 from nfupgrader import api
+from nfupgrader import snapjobs
 from nfupgrader.auth import TokenAuth
 from nfupgrader.audit import AuditLog
 from nfupgrader.host import FakeHost, RunResult
@@ -288,6 +290,99 @@ class TestApi(unittest.TestCase):
             "POST", "/api/launch", {}, json.dumps({"mode": "x"}).encode(),
             {"nfu_sid": sid}, "127.0.0.1", self.ctx)
         self.assertEqual(status, 400)
+
+
+REPORTS_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "reports.test.json")
+
+
+class TestReportsApi(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        base = make_ctx(self.tmp)
+        base.host.responses[("sh", "-c", "echo v")] = RunResult(0, "v1\n", "")
+        base.host.responses[("sh", "-c", "df")] = RunResult(0, "/usr4 10%\n", "")
+        self.root = os.path.join(self.tmp, "nfupgrader_reports")
+        ticks = iter(datetime.datetime(2026, 9, 23, 14, 0, s) for s in range(60))
+        self.runner = snapjobs.SnapshotRunner(base.host, REPORTS_FIXTURE, self.root,
+                                              audit=base.audit, spawn=lambda fn: fn(),
+                                              now=lambda: next(ticks))
+        self.ctx = base._replace(runner=self.runner, reports_root=self.root,
+                                 reports_path=REPORTS_FIXTURE)
+        self.sid = self.ctx.auth.redeem("TOK", "127.0.0.1")
+
+    def _get(self, path, **q):
+        return api.dispatch("GET", path, dict((k, [v]) for k, v in q.items()), b"",
+                            {"nfu_sid": self.sid}, "127.0.0.1", self.ctx)
+
+    def _post(self, path, payload=None):
+        return api.dispatch("POST", path, {}, json.dumps(payload or {}).encode(),
+                            {"nfu_sid": self.sid}, "127.0.0.1", self.ctx)
+
+    def _json(self, resp):
+        return json.loads(resp[2].decode())
+
+    def test_requires_session(self):
+        status, _, _ = api.dispatch("GET", "/api/reports", {}, b"", {}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 401)
+
+    def test_run_then_list_and_idle_job(self):
+        resp = self._post("/api/reports/run")
+        self.assertEqual(resp[0], 202)
+        sid = self._json(resp)["id"]
+        snaps = self._json(self._get("/api/reports"))["snapshots"]
+        self.assertEqual([(s["id"], s["label"], s["status"]) for s in snaps],
+                         [(sid, "manual", "complete")])
+        self.assertEqual(self._json(self._get("/api/reports/job")), {"job": None})
+
+    def test_busy_run_and_launch_409(self):
+        held = []
+        self.runner.spawn = held.append
+        self.assertEqual(self._post("/api/reports/run")[0], 202)
+        self.assertEqual(self._post("/api/reports/run")[0], 409)
+        self.assertEqual(self._json(self._get("/api/reports/job"))["job"]["label"], "manual")
+        resp = self._post("/api/launch", {"mode": "stage"})
+        self.assertEqual(resp[0], 409)
+        self.assertEqual(self._json(resp)["error"], "report snapshot in progress")
+        held[0]()
+        self.assertEqual(self._post("/api/launch", {"mode": "stage"})[0], 202)
+
+    def test_compare_diff_raw(self):
+        a = self._json(self._post("/api/reports/run"))["id"]
+        self.ctx.host.responses[("sh", "-c", "echo v")] = RunResult(0, "v2\n", "")
+        b = self._json(self._post("/api/reports/run"))["id"]
+        cmp_ = self._json(self._get("/api/reports/compare", a=a, b=b))
+        self.assertEqual([(r["name"], r["status"]) for r in cmp_["reports"]],
+                         [("Version", "changed"), ("Disk Check", "unchanged")])
+        side = self._json(self._get("/api/reports/diff", a=a, b=b, report="Version", style="side"))
+        self.assertEqual(side["rows"], [{"op": "replace", "left": "v1", "right": "v2"}])
+        uni = self._json(self._get("/api/reports/diff", a=a, b=b, report="Version",
+                                   style="unified"))
+        self.assertEqual([r["op"] for r in uni["rows"]], ["@", "-", "+"])
+        status, headers, body = self._get("/api/reports/raw", id=a, report="Version")
+        self.assertEqual(status, 200)
+        self.assertIn(("Content-Type", "text/plain; charset=utf-8"), headers)
+        self.assertEqual(body, b"v1\n")
+
+    def test_errors(self):
+        a = self._json(self._post("/api/reports/run"))["id"]
+        bad = "20990101_000000_after"
+        self.assertEqual(self._get("/api/reports/compare", a=a, b=bad)[0], 404)
+        self.assertEqual(self._get("/api/reports/diff", a=a, b=bad, report="Version")[0], 404)
+        self.assertEqual(self._get("/api/reports/diff", a=a, b=a, report="Nope")[0], 404)
+        self.assertEqual(self._get("/api/reports/diff", a=a, b=a, report="Version",
+                                   style="weird")[0], 400)
+        self.assertEqual(self._get("/api/reports/raw", id="../x", report="Version")[0], 404)
+        self.assertEqual(self._get("/api/reports/raw", id=a, report="Nope")[0], 404)
+
+    def test_no_runner(self):
+        ctx = make_ctx(tempfile.mkdtemp())
+        sid = ctx.auth.redeem("TOK", "127.0.0.1")
+        status, _, body = api.dispatch("POST", "/api/reports/run", {}, b"{}",
+                                       {"nfu_sid": sid}, "127.0.0.1", ctx)
+        self.assertEqual(status, 503)
+        status, _, body = api.dispatch("GET", "/api/reports", {}, b"",
+                                       {"nfu_sid": sid}, "127.0.0.1", ctx)
+        self.assertEqual(json.loads(body.decode()), {"snapshots": []})
 
 
 if __name__ == "__main__":

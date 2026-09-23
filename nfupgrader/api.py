@@ -7,17 +7,19 @@ import json
 import os
 
 from nfupgrader import progress, logtail, launcher, localinfo, siteview, site, checks, cfg
+from nfupgrader import reports, snapjobs
 
 Context = collections.namedtuple("Context", [
     "host", "hostname", "inclogdir", "phase", "tracefile",
     "auth", "audit", "webdir", "nf_upgrade_path",
     "effective_config", "user_config", "launch_cwd", "cnc_cnfg_path",
     "peer_host_factory", "checks_path", "state", "depot_dirs",
+    "reports_path", "reports_root", "runner",
 ])
 # The trailing fields are only used by side effects (launch), info gathering,
-# checks, or the config builder; default them so the dispatcher/tests need not
-# supply each one. (namedtuple field defaults via __new__.__defaults__ — py3.6.)
-Context.__new__.__defaults__ = (None, None, None, None, None, None, None, None)
+# checks, the config builder, or reports; default them so the dispatcher/tests
+# need not supply each one. (namedtuple field defaults via __new__.__defaults__ — py3.6.)
+Context.__new__.__defaults__ = (None,) * 11
 
 
 def _default_peer_factory(name):
@@ -47,6 +49,18 @@ def _json(status, obj):
 def _needs_session(cookies, client_ip, ctx):
     sid = cookies.get("nfu_sid")
     return bool(sid) and ctx.auth.valid_session(sid, client_ip)
+
+
+def _q(query, name, default=""):
+    return (query.get(name) or [default])[0]
+
+
+def _reports_root(ctx):
+    return ctx.reports_root or os.path.join(ctx.inclogdir, "nfupgrader_reports")
+
+
+def _snapshot_busy(ctx):
+    return ctx.runner is not None and ctx.runner.busy()
 
 
 def dispatch(method, path, query, body, cookies, client_ip, ctx):
@@ -140,6 +154,46 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         ctx.audit.record("config_saved", path=saved, client=client_ip)
         return _json(200, {"saved": saved})
 
+    if path == "/api/reports" and method == "GET":
+        live = ctx.runner.live_id() if ctx.runner is not None else None
+        return _json(200, {"snapshots": reports.list_snapshots(_reports_root(ctx), live)})
+
+    if path == "/api/reports/job" and method == "GET":
+        return _json(200, {"job": ctx.runner.job() if ctx.runner is not None else None})
+
+    if path == "/api/reports/run" and method == "POST":
+        if ctx.runner is None:
+            return _json(503, {"error": "reports unavailable"})
+        try:
+            snap_id = ctx.runner.start("manual", client=client_ip)
+        except snapjobs.Busy:
+            return _json(409, {"error": "report snapshot in progress"})
+        return _json(202, {"id": snap_id})
+
+    if path == "/api/reports/compare" and method == "GET":
+        res = reports.compare(_reports_root(ctx), _q(query, "a"), _q(query, "b"))
+        if res is None:
+            return _json(404, {"error": "unknown snapshot"})
+        return _json(200, res)
+
+    if path == "/api/reports/diff" and method == "GET":
+        root = _reports_root(ctx)
+        a, b, style = _q(query, "a"), _q(query, "b"), _q(query, "style", "side")
+        if style not in ("side", "unified"):
+            return _json(400, {"error": "style must be side or unified"})
+        if reports.read_manifest(root, a) is None or reports.read_manifest(root, b) is None:
+            return _json(404, {"error": "unknown snapshot"})
+        res = reports.diff(root, a, b, _q(query, "report"), style)
+        if res is None:
+            return _json(404, {"error": "unknown report"})
+        return _json(200, res)
+
+    if path == "/api/reports/raw" and method == "GET":
+        text = reports.report_text(_reports_root(ctx), _q(query, "id"), _q(query, "report"))
+        if text is None:
+            return _json(404, {"error": "unknown snapshot or report"})
+        return 200, [("Content-Type", "text/plain; charset=utf-8")], text.encode("utf-8")
+
     if path == "/api/launch" and method == "POST":
         try:
             payload = json.loads(body.decode("utf-8") or "{}")
@@ -148,6 +202,8 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         mode = payload.get("mode")
         if mode not in ("stage", "upgrade"):
             return _json(400, {"error": "mode must be stage or upgrade"})
+        if _snapshot_busy(ctx):
+            return _json(409, {"error": "report snapshot in progress"})
         overrides = payload.get("overrides", [])
         if not isinstance(overrides, list):
             return _json(400, {"error": "overrides must be a list of check names"})
