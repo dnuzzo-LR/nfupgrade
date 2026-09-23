@@ -44,6 +44,10 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn("loadDepots();", startup)
         self.assertIn("esc(x.path)", self.js)
 
+    def test_log_follows_trace_file_changes(self):
+        self.assertIn('"&file=" + encodeURIComponent(logFile)', self.js)
+        self.assertIn("if (d.reset)", self.js)
+
     def test_all_required_ids_present(self):
         missing = [i for i in REQUIRED_IDS if ('id="%s"' % i) not in self.html]
         self.assertEqual(missing, [], "index.html missing IDs: %s" % missing)

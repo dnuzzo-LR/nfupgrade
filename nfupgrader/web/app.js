@@ -1,5 +1,6 @@
 "use strict";
 var logOffset = 0;
+var logFile = "";   // trace file the log pane is showing (server picks the newest)
 
 function getJSON(url, cb, onError) {
   var x = new XMLHttpRequest();
@@ -66,9 +67,12 @@ function refreshProgress() {
 
 function refreshLog() {
   var min = document.getElementById("min-sev").value;
-  getJSON("/api/log?offset=" + logOffset + (min ? "&min=" + min : ""), function (d) {
+  getJSON("/api/log?offset=" + logOffset + "&file=" + encodeURIComponent(logFile) +
+          (min ? "&min=" + min : ""), function (d) {
     logOffset = d.next_offset;
     var pre = document.getElementById("log");
+    if (d.reset) pre.innerHTML = "";   // a new trace file (new run or phase switch)
+    logFile = d.file || "";
     d.entries.forEach(function (e) {
       var line = document.createElement("div");
       line.className = "sev-" + e.severity;

@@ -482,5 +482,65 @@ class TestReportsApi(unittest.TestCase):
         self.assertEqual(json.loads(body.decode()), {"snapshots": []})
 
 
+
+class TestActivePhase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def ctx(self, **kw):
+        # make_ctx writes its own state file; tests set theirs afterwards.
+        c = make_ctx(self.tmp, running=False)._replace(**kw)
+        self.sids = getattr(self, "sids", {})
+        self.sids[id(c)] = c.auth.redeem("TOK", "127.0.0.1")
+        return c
+
+    def get(self, ctx, path, **q):
+        sid = self.sids[id(ctx)]
+        status, _, body = api.dispatch("GET", path, dict((k, [v]) for k, v in q.items()), b"",
+                                       {"nfu_sid": sid}, "127.0.0.1", ctx)
+        return json.loads(body.decode())
+
+    def state(self, value):
+        open(os.path.join(self.tmp, ".h1_STATE"), "w").write(value + "\n")
+
+    def test_inferred_from_state_file_when_unset(self):
+        ctx = self.ctx(phase=None)
+        self.state("swistart")
+        self.assertEqual(self.get(ctx, "/api/progress")["phase"], "upgrade")
+        self.state("swscomplete")
+        self.assertEqual(self.get(ctx, "/api/progress")["phase"], "stage")
+
+    def test_env_phase_beats_inference(self):
+        ctx = self.ctx(phase="stage")
+        self.state("swistart")
+        self.assertEqual(self.get(ctx, "/api/progress")["phase"], "stage")
+
+    def test_last_launch_beats_env(self):
+        ctx = self.ctx(phase="stage", state={"phase": "upgrade"})
+        self.state("swscomplete")
+        p = self.get(ctx, "/api/progress")
+        self.assertEqual((p["phase"], p["status"]), ("upgrade", "not_started"))
+
+    def test_log_follows_newest_trace_and_signals_reset(self):
+        open(os.path.join(self.tmp, "stage_inc_h1.10"), "w").write(
+            "2026-09-23 16:00:00 INFO  first run\n")
+        ctx = self.ctx(phase=None, tracefile=None)
+        d = self.get(ctx, "/api/log", offset="0")
+        self.assertEqual(d["file"], "stage_inc_h1.10")
+        self.assertFalse(d["reset"])
+        self.assertEqual([e["msg"] for e in d["entries"]], ["first run"])
+        newer = os.path.join(self.tmp, "stage_inc_h1.20")
+        open(newer, "w").write("2026-09-23 17:00:00 INFO  second run\n")
+        os.utime(newer, None)
+        os.utime(os.path.join(self.tmp, "stage_inc_h1.10"), (1, 1))
+        d = self.get(ctx, "/api/log", offset=str(d["next_offset"]), file="stage_inc_h1.10")
+        self.assertEqual(d["file"], "stage_inc_h1.20")
+        self.assertTrue(d["reset"])
+        self.assertEqual([e["msg"] for e in d["entries"]], ["second run"])
+
+    def test_explicit_tracefile_still_wins(self):
+        d = self.get(self.ctx(), "/api/log", offset="0")
+        self.assertEqual(d["file"], "trace")
+
 if __name__ == "__main__":
     unittest.main()

@@ -55,6 +55,22 @@ def _q(query, name, default=""):
     return (query.get(name) or [default])[0]
 
 
+def _active_phase(ctx):
+    """Which phase the progress strip and log follow: the mode of the last
+    accepted launch, else NFU_PHASE, else inferred from the state file."""
+    st = ctx.state if isinstance(ctx.state, dict) else {}
+    if st.get("phase") in ("stage", "upgrade"):
+        return st["phase"]
+    if ctx.phase in ("stage", "upgrade"):
+        return ctx.phase
+    return progress.infer_phase(progress.read_state(ctx.hostname, ctx.inclogdir))
+
+
+def _active_tracefile(ctx, phase):
+    """An explicit NFU_TRACEFILE, else the newest nf_upgrader trace for the phase."""
+    return ctx.tracefile or logtail.latest_trace(ctx.inclogdir, phase, ctx.hostname)
+
+
 def _reports_root(ctx):
     return ctx.reports_root or os.path.join(ctx.inclogdir, "nfupgrader_reports")
 
@@ -103,13 +119,21 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
 
     if path == "/api/progress" and method == "GET":
         running = launcher.upgrader_running(ctx.host)
-        rec = progress.read_progress(ctx.hostname, ctx.phase, ctx.inclogdir, running)
+        rec = progress.read_progress(ctx.hostname, _active_phase(ctx), ctx.inclogdir, running)
         return _json(200, rec)
 
     if path == "/api/log" and method == "GET":
         offset = int((query.get("offset") or ["0"])[0])
         min_sev = (query.get("min") or [None])[0]
-        chunk = logtail.tail_since(ctx.tracefile, offset, min_severity=min_sev)
+        path = _active_tracefile(ctx, _active_phase(ctx))
+        name = os.path.basename(path)
+        # The client echoes the file it has been reading; a different file (a new
+        # run, or the phase switched) restarts it from the top.
+        seen = _q(query, "file")
+        reset = bool(seen) and seen != name
+        chunk = logtail.tail_since(path, 0 if reset else offset, min_severity=min_sev)
+        chunk["file"] = name
+        chunk["reset"] = reset
         return _json(200, chunk)
 
     if path == "/api/info" and method == "GET":
@@ -126,7 +150,7 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
 
     if path == "/api/checks" and method == "GET":
         when = (query.get("when") or ["preflight"])[0]
-        phase = (query.get("phase") or [ctx.phase])[0]
+        phase = (query.get("phase") or [_active_phase(ctx)])[0]
         results = checks.run_checks(ctx.host, _load_checks(ctx), when, phase, _machtype(ctx))
         return _json(200, {"results": results, "blocking": checks.blocking_failures(results)})
 

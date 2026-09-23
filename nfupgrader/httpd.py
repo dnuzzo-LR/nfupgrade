@@ -103,7 +103,9 @@ def launch_side_effect(ctx, mode, ip, perform=None, begin=None):
     upgrade+runner path, (when ctx.state is a dict) an on_error callback is wired so a launch() failure inside the background
     `then` (audited by begin_upgrade as "launch_error") also lands in
     ctx.state for /api/reports/job to surface to the UI. Losing the race with
-    a snapshot already in progress (Busy) is audited as "launch_rejected"."""
+    a snapshot already in progress (Busy) is audited as "launch_rejected".
+    An accepted launch records its mode as ctx.state["phase"], so the progress
+    strip and log follow the phase that was actually launched."""
     perform = perform or perform_launch
     begin = begin or snapjobs.begin_upgrade
     has_state = isinstance(ctx.state, dict)
@@ -120,12 +122,16 @@ def launch_side_effect(ctx, mode, ip, perform=None, begin=None):
             ctx.audit.record("launch_rejected", mode=mode, client=ip,
                              reason="report snapshot in progress")
             return 409, {"error": "report snapshot in progress"}
+        if has_state:
+            ctx.state["phase"] = mode
         return 202, {"accepted": True, "mode": mode, "snapshot": before}
     try:
         perform(ctx, mode)
     except Exception as e:
         ctx.audit.record("launch_error", error=str(e), client=ip)
         return 500, {"error": "launch failed: {}".format(e)}
+    if has_state:
+        ctx.state["phase"] = mode
     return 202, {"accepted": True, "mode": mode}
 
 
@@ -193,11 +199,9 @@ def main(argv=None):
     webdir = os.path.join(here, "web")
     inclogdir = os.environ.get("INCLOGDIR", "/usr/cnc/logs")
     hostname = os.uname()[1]
-    phase = os.environ.get("NFU_PHASE", "stage")
-    tracefile = os.environ.get(
-        "NFU_TRACEFILE",
-        os.path.join(inclogdir, "{}_inc_{}".format(phase, hostname)),
-    )
+    # Unset -> decided per request (last launch / state file / newest trace).
+    phase = os.environ.get("NFU_PHASE") or None
+    tracefile = os.environ.get("NFU_TRACEFILE") or None
     nf_upgrade_path = os.environ.get(
         "NFU_UPGRADE_PATH", os.path.join(here, "..", "nf_upgrade"))
     effective_config = os.environ.get(

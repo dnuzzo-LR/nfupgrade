@@ -143,6 +143,24 @@ class TestLaunchSideEffect(unittest.TestCase):
         self.assertEqual(status, 202)
         self.assertEqual(self.performed, ["upgrade"])
 
+    def test_accepted_launch_remembers_phase(self):
+        ctx = launch_ctx(self.tmp)._replace(state={})
+        httpd.launch_side_effect(ctx, "stage", "ip", perform=self.perform)
+        self.assertEqual(ctx.state["phase"], "stage")
+
+        def begin(runner, launch, read_status, client, audit=None, **kw):
+            return "20260923_140000_before"
+        ctx = launch_ctx(self.tmp, runner=FakeRunner())._replace(state={})
+        httpd.launch_side_effect(ctx, "upgrade", "ip", perform=self.perform, begin=begin)
+        self.assertEqual(ctx.state["phase"], "upgrade")
+
+    def test_failed_launch_does_not_change_phase(self):
+        def boom(ctx, mode):
+            raise OSError("nope")
+        ctx = launch_ctx(self.tmp)._replace(state={"phase": "stage"})
+        httpd.launch_side_effect(ctx, "upgrade", "ip", perform=boom)
+        self.assertEqual(ctx.state["phase"], "stage")
+
     def test_upgrade_status_reads_upgrade_phase(self):
         host = FakeHost({("pgrep", "-f", "nf_upgrader"): RunResult(1, "", "")})
         open(os.path.join(self.tmp, ".h1_STATE"), "w").write("swidone\n")
@@ -182,7 +200,7 @@ class TestLaunchSideEffect(unittest.TestCase):
                 state={"launch_error": "stale", "user_config": "/x.cfg"})
             status, _ = httpd.launch_side_effect(ctx, mode, "ip", perform=self.perform)
             self.assertEqual(status, 202)
-            self.assertEqual(ctx.state, {"user_config": "/x.cfg"})
+            self.assertEqual(ctx.state, {"user_config": "/x.cfg", "phase": mode})
 
     def test_no_state_dict_does_not_pass_on_error_or_raise(self):
         seen = {}
