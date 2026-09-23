@@ -25,6 +25,7 @@
     <button class="tab active" data-tab="overview">Overview</button>
     <button class="tab" data-tab="config">Config</button>
     <button class="tab" data-tab="upgrade">Upgrade</button>
+    <button class="tab" data-tab="reports">Reports</button>
     <button class="tab" data-tab="site">Site</button>
     <button class="tab" data-tab="log">Log</button>
   </nav>
@@ -79,6 +80,33 @@
         </div>
         <h3>Post-flight</h3>
         <div id="postflight">-</div>
+      </div>
+    </section>
+
+    <!-- REPORTS -->
+    <section class="panel" id="tab-reports">
+      <div class="card">
+        <h2>Report snapshots</h2>
+        <div style="margin-bottom:.5rem">
+          <button id="btn-reports-run">Run reports now</button>
+          <span id="reports-job"></span>
+        </div>
+        <table id="reports-list" class="checks">
+          <thead><tr><th>Snapshot</th><th>Label</th><th>Started</th><th>Status</th><th>Note</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h2>Compare</h2>
+        <div style="margin-bottom:.5rem">
+          <label>A: <select id="cmp-a"></select></label>
+          <label>B: <select id="cmp-b"></select></label>
+          <label>View:
+            <select id="cmp-style"><option value="side">Side by side</option><option value="unified">Unified</option></select>
+          </label>
+          <button id="btn-compare">Compare</button>
+        </div>
+        <table id="cmp-table" class="checks"><tbody></tbody></table>
       </div>
     </section>
 

@@ -94,3 +94,22 @@ table.checks tr.fail-WARNING { background: #fff8e1; }
   .cfg-row { grid-template-columns: 1fr; }
   .progress-strip { flex-wrap: wrap; }
 }
+
+/* reports */
+tr.cmp-row { cursor: pointer; }
+tr.cmp-changed { background: #fff8e1; }
+tr.cmp-failed { background: #fdecea; }
+.diff-links { margin: .25rem 0; font-size: .85rem; }
+pre.diff { max-height: 32rem; overflow: auto; font-size: .8rem; margin: 0; }
+pre.diff span { display: block; min-height: 1em; white-space: pre-wrap; }
+pre.diff .add { background: #e6ffed; }
+pre.diff .del { background: #ffeef0; }
+pre.diff .hunk { color: #6a737d; }
+table.diff-side { width: 100%; table-layout: fixed; border-collapse: collapse;
+                  font-family: monospace; font-size: .8rem; }
+table.diff-side td { white-space: pre-wrap; word-break: break-all; vertical-align: top;
+                     padding: 0 .3rem; border-left: 1px solid #ddd; }
+table.diff-side tr.replace td { background: #fff5b1; }
+table.diff-side tr.delete td:first-child { background: #ffeef0; }
+table.diff-side tr.insert td:last-child { background: #e6ffed; }
+table.diff-side tr.skip td { color: #6a737d; text-align: center; background: #f6f8fa; }

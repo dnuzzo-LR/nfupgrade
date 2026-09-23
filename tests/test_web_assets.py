@@ -10,14 +10,16 @@ REQUIRED_IDS = [
     "cfg-preview", "cfg-save", "cfg-msg", "cfg-rendered", "cfg-issues",
     "mode", "btn-check", "btn-launch", "launch-msg", "preflight", "override-box",
     "override-msg", "reason", "postflight", "site-table", "min-sev", "log",
+    "btn-reports-run", "reports-job", "reports-list", "cmp-a", "cmp-b",
+    "cmp-style", "btn-compare", "cmp-table",
 ]
 
 
 class TestWebAssets(unittest.TestCase):
     def setUp(self):
-        self.html = open(os.path.join(WEB, "index.html")).read()
-        self.css = open(os.path.join(WEB, "style.css")).read()
-        self.js = open(os.path.join(WEB, "app.js")).read()
+        self.html = open(os.path.join(WEB, "index.html"), encoding="utf-8").read()
+        self.css = open(os.path.join(WEB, "style.css"), encoding="utf-8").read()
+        self.js = open(os.path.join(WEB, "app.js"), encoding="utf-8").read()
 
     def test_all_required_ids_present(self):
         missing = [i for i in REQUIRED_IDS if ('id="%s"' % i) not in self.html]
@@ -37,6 +39,11 @@ class TestWebAssets(unittest.TestCase):
     def test_launch_posts_per_check_overrides(self):
         self.assertIn("overrides:", self.js)
         self.assertNotIn('id="override"', self.html)
+
+    def test_reports_output_is_escaped(self):
+        self.assertIn("function esc(", self.js)
+        self.assertIn("esc(r.left)", self.js)
+        self.assertIn("esc(r.right)", self.js)
 
 
 if __name__ == "__main__":
