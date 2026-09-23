@@ -74,6 +74,12 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn("else if (status === 409 && body.not_overridden) {", self.js)
         self.assertIn('"Not launched: " + (body.error || status)', self.js)
 
+    def test_default_pair_anchors_on_newest_before(self):
+        # defaultPair() pairs the newest before with the after naming it (not
+        # whichever after is newest, whose before may have been pruned).
+        self.assertIn("snapshots[j].pair_of === before.id", self.js)
+        self.assertNotIn("return [snapshots[i].pair_of, snapshots[i].id]", self.js)
+
     def test_es5_only(self):
         # ES5-only per project constraints: no arrow functions, let/const, or
         # template literals in the shipped JS.

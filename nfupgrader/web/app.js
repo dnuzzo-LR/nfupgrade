@@ -297,11 +297,22 @@ function refreshReportsJob() {
   });
 }
 
+// The pair to compare by default (snapshots is newest first). Anchor on the
+// newest before: its own after if taken, else whatever is newest since it (the
+// upgrade may still be running). Only ids from snapshots are returned.
 function defaultPair() {
-  for (var i = 0; i < snapshots.length; i++) {
-    if (snapshots[i].label === "after" && snapshots[i].pair_of) {
-      return [snapshots[i].pair_of, snapshots[i].id];
+  var bi = -1, i, j;
+  for (i = 0; i < snapshots.length; i++) {
+    if (snapshots[i].label === "before") { bi = i; break; }
+  }
+  if (bi >= 0) {
+    var before = snapshots[bi];
+    for (j = 0; j < bi; j++) {
+      if (snapshots[j].label === "after" && snapshots[j].pair_of === before.id) {
+        return [before.id, snapshots[j].id];
+      }
     }
+    if (bi > 0) return [before.id, snapshots[0].id];
   }
   if (snapshots.length >= 2) return [snapshots[1].id, snapshots[0].id];
   var only = snapshots.length ? snapshots[0].id : "";
