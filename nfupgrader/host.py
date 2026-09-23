@@ -2,7 +2,9 @@
 through a Host (local) or SshHost (peer, read-only), so local vs remote lives in
 one place and tests use FakeHost."""
 import collections
+import os
 import shlex
+import signal
 import subprocess
 
 RunResult = collections.namedtuple("RunResult", ["rc", "out", "err"])
@@ -10,21 +12,37 @@ RunResult = collections.namedtuple("RunResult", ["rc", "out", "err"])
 
 def _exec(argv, timeout=None):
     """Run argv locally, capture output, return a RunResult. Never raises on
-    non-zero exit; a missing binary yields rc 127, a timeout rc 124."""
+    non-zero exit; a missing binary yields rc 127, a timeout rc 124.
+
+    The child runs in its own session/process group so a timeout can kill the
+    whole pipeline: killing only `sh` would leave grandchildren (e.g. the
+    `sleep` in `sh -c 'sleep 6 | cat'`) holding the pipes open, and we would
+    block until they exit. Side effect: a Ctrl-C to the service no longer
+    reaches these children -- acceptable, they are bounded by `timeout`."""
     try:
-        p = subprocess.run(
+        p = subprocess.Popen(
             argv,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             universal_newlines=True,
             errors="replace",
-            timeout=timeout,
+            start_new_session=True,
         )
-        return RunResult(p.returncode, p.stdout, p.stderr)
     except FileNotFoundError:
         return RunResult(127, "", "not found: {}".format(argv[0]))
+    try:
+        out, err = p.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            pass
+        try:
+            p.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass  # something escaped the group and holds the pipe; give up on output
         return RunResult(124, "", "timeout: {}".format(" ".join(argv)))
+    return RunResult(p.returncode, out, err)
 
 
 def build_ssh_argv(name, argv, connect_timeout=5):

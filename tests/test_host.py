@@ -1,3 +1,4 @@
+import time
 import unittest
 from nfupgrader.host import Host, FakeHost, RunResult, build_ssh_argv, SshHost
 
@@ -28,6 +29,20 @@ class TestHost(unittest.TestCase):
         self.assertEqual(r.rc, 0)
         self.assertTrue(r.out.endswith("ok"))
         self.assertIn("�", r.out)
+
+    def test_timeout_kills_whole_pipeline(self):
+        # A grandchild (sleep) holding the pipe must not keep us waiting past
+        # the timeout: the whole process group is killed.
+        t0 = time.time()
+        r = Host().run(["sh", "-c", "sleep 5 | cat"], timeout=1)
+        elapsed = time.time() - t0
+        self.assertEqual(r.rc, 124)
+        self.assertEqual(r.err, "timeout: sh -c sleep 5 | cat")
+        self.assertLess(elapsed, 3)
+
+    def test_missing_binary_is_127(self):
+        r = Host().run(["/nonexistent/nfu-no-such-binary"])
+        self.assertEqual(r.rc, 127)
 
 
 class TestSsh(unittest.TestCase):
