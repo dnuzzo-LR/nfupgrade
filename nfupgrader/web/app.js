@@ -213,7 +213,10 @@ function resetPreflight() {
 function launchConfirmText(mode) {
   var base = "Start the " + mode.toUpperCase() +
              " now? This runs the real upgrade and cannot be paused.";
-  var over = preflight.results.filter(function (r) { return r.blocking; });
+  var ticked = overriddenNames();
+  var over = preflight.results.filter(function (r) {
+    return r.blocking && ticked.indexOf(r.name) >= 0;
+  });
   var warn = preflight.results.filter(function (r) {
     return !r.passed && r.severity !== "ERROR";
   });
@@ -244,6 +247,7 @@ function launch() {
       var msg = document.getElementById("launch-msg");
       if (status === 202) { msg.textContent = "Launched " + mode + "…"; }
       else if (status === 409) {
+        document.getElementById("btn-launch").disabled = true;  // until re-run lands
         msg.textContent = "Blocked — not overridden: " +
           (body.not_overridden || []).join(", ") + ". Checks re-run.";
         runPreflight();

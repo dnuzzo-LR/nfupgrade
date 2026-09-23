@@ -185,6 +185,9 @@ class TestApi(unittest.TestCase):
         status, _ = self._launch({"mode": "upgrade", "overrides": ["staged-present"],
                                   "reason": "   "})
         self.assertEqual(status, 400)
+        status, _ = self._launch({"mode": "upgrade", "overrides": ["staged-present"],
+                                  "reason": 42})
+        self.assertEqual(status, 400)
 
     def test_launch_full_override_with_reason_audits_names(self):
         self.ctx.host.responses[("dbcheck", "-AV")] = RunResult(0, "ERROR: x\n", "")

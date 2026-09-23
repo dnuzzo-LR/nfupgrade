@@ -160,7 +160,8 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
             return _json(409, {"error": "pre-flight checks failed", "blocking": blocking,
                                "not_overridden": missing})
         if blocking:
-            reason = (payload.get("reason") or "").strip()
+            reason = payload.get("reason") or ""
+            reason = reason.strip() if isinstance(reason, str) else ""
             if not reason:
                 return _json(400, {"error": "override requires a reason"})
             ctx.audit.record("override", mode=mode, client=client_ip, reason=reason,
