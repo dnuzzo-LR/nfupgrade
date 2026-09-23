@@ -3,6 +3,7 @@ ReportManager). A snapshot runs every report in a JSON list through Host.run and
 stores one text file per report plus manifest.json. Timestamps and return codes
 live only in the manifest so they never show up in a diff."""
 import datetime
+import difflib
 import json
 import os
 import re
@@ -151,3 +152,109 @@ def report_text(root, snap_id, name):
             except (IOError, OSError):
                 return None
     return None
+
+
+MAX_ROWS = 2000
+CONTEXT = 3
+
+
+def _failed(entry):
+    return entry["error"] is not None or entry["rc"] != 0
+
+
+def _lines(root, snap_id, name):
+    text = report_text(root, snap_id, name)
+    return (text or "").splitlines()
+
+
+def _counts(a_lines, b_lines):
+    """(added, removed) line counts between two texts."""
+    if a_lines == b_lines:
+        return 0, 0
+    added = removed = 0
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a_lines, b_lines).get_opcodes():
+        if tag in ("replace", "delete"):
+            removed += i2 - i1
+        if tag in ("replace", "insert"):
+            added += j2 - j1
+    return added, removed
+
+
+def compare(root, a, b):
+    """Per-report status between snapshots a and b (A's order, then B-only
+    reports), or None if either snapshot is unknown."""
+    ma, mb = read_manifest(root, a), read_manifest(root, b)
+    if ma is None or mb is None:
+        return None
+    ea = dict((r["name"], r) for r in ma["reports"])
+    eb = dict((r["name"], r) for r in mb["reports"])
+    names = [r["name"] for r in ma["reports"]] + \
+            [r["name"] for r in mb["reports"] if r["name"] not in ea]
+    rows = []
+    for name in names:
+        if name not in ea or name not in eb:
+            rows.append({"name": name, "status": "missing", "added": 0, "removed": 0,
+                         "side": "a" if name in ea else "b"})
+            continue
+        added, removed = _counts(_lines(root, a, name), _lines(root, b, name))
+        if _failed(ea[name]) or _failed(eb[name]):
+            status = "failed"
+        elif added or removed:
+            status = "changed"
+        else:
+            status = "unchanged"
+        rows.append({"name": name, "status": status, "added": added, "removed": removed})
+    return {"a": a, "b": b, "reports": rows}
+
+
+def unified_rows(a_lines, b_lines, context=CONTEXT):
+    """Unified-diff rows: {op: ' '|'+'|'-'|'@', text}."""
+    rows = []
+    for i, ln in enumerate(difflib.unified_diff(a_lines, b_lines, lineterm="", n=context)):
+        if i < 2:                       # the ---/+++ file header lines
+            continue
+        if ln.startswith("@@"):
+            rows.append({"op": "@", "text": ln})
+        else:
+            rows.append({"op": ln[:1] or " ", "text": ln[1:]})
+    return rows
+
+
+def side_rows(a_lines, b_lines, context=CONTEXT):
+    """Side-by-side rows: {op: equal|replace|insert|delete, left, right}, with long
+    equal runs collapsed to `context` lines each side around a {op: skip, count}."""
+    rows = []
+    ops = difflib.SequenceMatcher(None, a_lines, b_lines).get_opcodes()
+    last = len(ops) - 1
+    for k, (tag, i1, i2, j1, j2) in enumerate(ops):
+        if tag == "equal":
+            n = i2 - i1
+            head = context if k > 0 else 0
+            tail = context if k < last else 0
+            if n > head + tail:
+                shown = list(range(head)) + [None] + list(range(n - tail, n))
+            else:
+                shown = list(range(n))
+            for off in shown:
+                if off is None:
+                    rows.append({"op": "skip", "count": n - head - tail})
+                else:
+                    rows.append({"op": "equal", "left": a_lines[i1 + off],
+                                 "right": b_lines[j1 + off]})
+            continue
+        for off in range(max(i2 - i1, j2 - j1)):
+            left = a_lines[i1 + off] if i1 + off < i2 else None
+            right = b_lines[j1 + off] if j1 + off < j2 else None
+            rows.append({"op": tag, "left": left, "right": right})
+    return rows
+
+
+def diff(root, a, b, name, style="side", cap=MAX_ROWS):
+    """Diff rows for one report between two snapshots (a side missing the report
+    diffs as empty), or None if neither snapshot has it."""
+    at, bt = report_text(root, a, name), report_text(root, b, name)
+    if at is None and bt is None:
+        return None
+    al, bl = (at or "").splitlines(), (bt or "").splitlines()
+    rows = unified_rows(al, bl) if style == "unified" else side_rows(al, bl)
+    return {"rows": rows[:cap], "truncated": len(rows) > cap}

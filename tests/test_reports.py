@@ -163,5 +163,95 @@ class TestListing(SnapshotBase):
         self.assertIsNone(reports.report_text(self.root, "../x", "Version"))
 
 
+class TestCompare(SnapshotBase):
+    def test_classification(self):
+        a = self.snap(fake_host(), when=T0)
+        b = self.snap(fake_host(version="v2\n", disk=RunResult(1, "/usr4 10%\n", "")),
+                      when=T0 + datetime.timedelta(minutes=1),
+                      report_list=REPS + [{"name": "Extra", "command": "true"}])
+        res = reports.compare(self.root, a, b)
+        self.assertEqual((res["a"], res["b"]), (a, b))
+        rows = dict((r["name"], r) for r in res["reports"])
+        self.assertEqual([r["name"] for r in res["reports"]], ["Version", "Disk Check", "Extra"])
+        self.assertEqual(rows["Version"]["status"], "changed")
+        self.assertEqual((rows["Version"]["added"], rows["Version"]["removed"]), (1, 1))
+        self.assertEqual(rows["Disk Check"]["status"], "failed")
+        self.assertEqual(rows["Extra"]["status"], "missing")
+        self.assertEqual(rows["Extra"]["side"], "b")
+
+    def test_unchanged(self):
+        a = self.snap(fake_host(), when=T0)
+        b = self.snap(fake_host(), when=T0 + datetime.timedelta(minutes=1))
+        statuses = [r["status"] for r in reports.compare(self.root, a, b)["reports"]]
+        self.assertEqual(statuses, ["unchanged", "unchanged"])
+
+    def test_unknown_snapshot(self):
+        a = self.snap(fake_host())
+        self.assertIsNone(reports.compare(self.root, a, "20990101_000000_after"))
+
+
+class TestDiffRows(unittest.TestCase):
+    def test_unified(self):
+        rows = reports.unified_rows(["x", "y", "z"], ["x", "Y", "z"])
+        self.assertEqual([r["op"] for r in rows], ["@", " ", "-", "+", " "])
+        self.assertEqual(rows[2]["text"], "y")
+        self.assertEqual(rows[3]["text"], "Y")
+
+    def test_unified_keeps_content_that_looks_like_headers(self):
+        rows = reports.unified_rows(["--a", "keep"], ["keep"])
+        self.assertIn({"op": "-", "text": "--a"}, rows)
+
+    def test_unified_identical_is_empty(self):
+        self.assertEqual(reports.unified_rows(["a"], ["a"]), [])
+
+    def test_side_collapses_equal_runs(self):
+        a = [str(i) for i in range(20)]
+        b = list(a)
+        b[10] = "TEN"
+        rows = reports.side_rows(a, b)
+        self.assertEqual([r["op"] for r in rows],
+                         ["skip", "equal", "equal", "equal", "replace",
+                          "equal", "equal", "equal", "skip"])
+        self.assertEqual(rows[0]["count"], 7)
+        self.assertEqual(rows[-1]["count"], 6)
+        self.assertEqual((rows[4]["left"], rows[4]["right"]), ("10", "TEN"))
+        self.assertEqual((rows[1]["left"], rows[1]["right"]), ("7", "7"))
+
+    def test_side_uneven_replace_pads_with_none(self):
+        rows = reports.side_rows(["a", "b"], ["c"])
+        self.assertEqual([(r["left"], r["right"]) for r in rows], [("a", "c"), ("b", None)])
+
+    def test_side_identical_is_single_skip(self):
+        self.assertEqual(reports.side_rows(["a", "b"], ["a", "b"]),
+                         [{"op": "skip", "count": 2}])
+
+
+class TestDiff(SnapshotBase):
+    def test_diff_styles_and_cap(self):
+        a = self.snap(fake_host(version="1\n2\n3\n"), when=T0)
+        b = self.snap(fake_host(version="1\nX\nY\n"), when=T0 + datetime.timedelta(minutes=1))
+        side = reports.diff(self.root, a, b, "Version", "side")
+        self.assertFalse(side["truncated"])
+        self.assertEqual([r["op"] for r in side["rows"]], ["equal", "replace", "replace"])
+        uni = reports.diff(self.root, a, b, "Version", "unified")
+        self.assertIn({"op": "+", "text": "X"}, uni["rows"])
+        capped = reports.diff(self.root, a, b, "Version", "side", cap=2)
+        self.assertTrue(capped["truncated"])
+        self.assertEqual(len(capped["rows"]), 2)
+
+    def test_diff_one_sided_report(self):
+        a = self.snap(fake_host(), when=T0)
+        b = self.snap(fake_host(), when=T0 + datetime.timedelta(minutes=1),
+                      report_list=REPS + [{"name": "Extra", "command": "true"}])
+        # FakeHost answers the unmocked "true" with rc 1 and stderr "unmocked", so b's
+        # Extra text is "----- STDERR -----\nunmocked"; a has no Extra -> two inserts.
+        res = reports.diff(self.root, a, b, "Extra", "side")
+        self.assertEqual([r["op"] for r in res["rows"]], ["insert", "insert"])
+
+    def test_diff_unknown_report(self):
+        a = self.snap(fake_host())
+        self.assertIsNone(reports.diff(self.root, a, a, "Nope", "side"))
+
+
 if __name__ == "__main__":
     unittest.main()
