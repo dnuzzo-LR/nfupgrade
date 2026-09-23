@@ -44,7 +44,10 @@ function initTabs() {
   tabs.forEach(function (t) { t.onclick = function () { show(t.getAttribute("data-tab")); }; });
   var saved;
   try { saved = localStorage.getItem("nfu_tab"); } catch (e) {}
-  show(saved || "overview");
+  var names = [];
+  tabs.forEach(function (t) { names.push(t.getAttribute("data-tab")); });
+  // A saved tab that no longer exists (e.g. the old "site" tab) falls back to Overview.
+  show(saved && names.indexOf(saved) >= 0 ? saved : "overview");
 }
 
 function refreshProgress() {
@@ -74,7 +77,30 @@ function refreshLog() {
   });
 }
 
-function cell(v) { return "<td>" + (v === null || v === undefined || v === "" ? "-" : v) + "</td>"; }
+function cell(v) { return "<td>" + (v === null || v === undefined || v === "" ? "-" : esc(v)) + "</td>"; }
+
+var lastInfo = null;   // last /api/info response; used when /api/site lacks this host
+var localOpen = true;
+try { localOpen = localStorage.getItem("nfu_local_open") !== "0"; } catch (e) {}
+
+function applyLocalOpen() {
+  document.getElementById("local-detail").style.display = localOpen ? "" : "none";
+  var t = document.getElementById("local-toggle");
+  if (t) {
+    t.textContent = localOpen ? "▾" : "▸";
+    t.setAttribute("aria-expanded", localOpen ? "true" : "false");
+  }
+}
+
+function toggleLocal() {
+  localOpen = !localOpen;
+  try { localStorage.setItem("nfu_local_open", localOpen ? "1" : "0"); } catch (e) {}
+  applyLocalOpen();
+}
+
+function localFromInfo(i) {
+  return { name: i.host, role: (i.topology || {}).role, reachable: true, is_local: true, info: i };
+}
 
 function refreshSite() {
   if (!loaded.site) spin("site-spin", true);
@@ -82,8 +108,16 @@ function refreshSite() {
     spin("site-spin", false);
     loaded.site = true;
     var tb = document.querySelector("#site-table tbody");
-    tb.innerHTML = "";
-    s.hosts.forEach(function (h) {
+    var detail = document.getElementById("local-detail");
+    // Drop every row except the persistent detail row, which is moved, not rebuilt,
+    // so the host overview survives the 15 s site poll.
+    Array.prototype.slice.call(tb.rows).forEach(function (r) {
+      if (r !== detail) tb.removeChild(r);
+    });
+    var hosts = s.hosts.slice();
+    var hasLocal = hosts.some(function (h) { return h.is_local; });
+    if (!hasLocal && lastInfo) hosts.unshift(localFromInfo(lastInfo));
+    hosts.forEach(function (h) {
       var i = h.info || {};
       var v = i.versions || {}, l = i.loads || {}, g = i.gr || {};
       var tr = document.createElement("tr");
@@ -93,12 +127,18 @@ function refreshSite() {
         : "<span class='pill down'>unreachable</span>";
       var app = !h.reachable ? "<span class='pill unknown'>?</span>"
         : (i.app_up ? "<span class='pill ok'>UP</span>" : "<span class='pill down'>DOWN</span>");
-      tr.innerHTML =
-        cell(h.name + (h.is_local ? " (this)" : "")) + cell(h.role) +
-        "<td>" + reach + "</td><td>" + app + "</td>" +
+      var tog = h.is_local
+        ? "<td class='tog'><button id='local-toggle' class='toggle' type='button' " +
+          "aria-label='Show host details'></button></td>"
+        : "<td class='tog'></td>";
+      tr.innerHTML = tog +
+        "<td class='hostcell'>" + esc(h.name + (h.is_local ? " (this)" : "")) + "</td>" +
+        cell(h.role) + "<td>" + reach + "</td><td>" + app + "</td>" +
         cell(v.core) + cell(l.installed) + cell(l.staged) + cell(g.transfer);
       tb.appendChild(tr);
+      if (h.is_local) tb.appendChild(detail);
     });
+    applyLocalOpen();
   });
 }
 
@@ -108,9 +148,8 @@ function row(label, value) {
 }
 
 function refreshInfo() {
-  if (!loaded.info) spin("overview-spin", true);
   getJSON("/api/info", function (i) {
-    spin("overview-spin", false);
+    lastInfo = i;
     loaded.info = true;
     var t = i.topology, v = i.versions, l = i.loads, g = i.gr;
     var html = "";
@@ -524,6 +563,11 @@ function onCmpSelectionChanged() {
 }
 document.getElementById("cmp-a").onchange = onCmpSelectionChanged;
 document.getElementById("cmp-b").onchange = onCmpSelectionChanged;
+document.getElementById("site-table").onclick = function (ev) {
+  var t = ev.target;
+  if (!t.closest) return;
+  if (t.closest("#local-toggle") || t.closest("tr.local td.hostcell")) toggleLocal();
+};
 document.getElementById("cmp-table").onclick = function (ev) {
   var tr = ev.target.closest ? ev.target.closest("tr.cmp-row") : null;
   if (!tr) return;
@@ -542,8 +586,12 @@ document.getElementById("min-sev").onchange = function () {
 initTabs();
 document.getElementById("about-grid").innerHTML = loadingHTML("Loading host info…");
 document.getElementById("links").textContent = "Loading…";
-document.querySelector("#site-table tbody").innerHTML =
-  "<tr><td colspan='8' class='loading'><span class='spinner'></span> Loading site…</td></tr>";
+(function () {
+  var tb = document.querySelector("#site-table tbody");
+  var tr = tb.insertRow(0);
+  tr.innerHTML = "<td colspan='9' class='loading'><span class='spinner'></span> Loading site…</td>";
+})();
+applyLocalOpen();
 refreshProgress();
 refreshLog();
 refreshInfo();

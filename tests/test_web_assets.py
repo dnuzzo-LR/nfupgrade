@@ -11,7 +11,7 @@ REQUIRED_IDS = [
     "mode", "btn-check", "btn-launch", "launch-msg", "preflight", "override-box",
     "override-msg", "reason", "postflight", "site-table", "min-sev", "log",
     "btn-reports-run", "reports-job", "reports-list", "cmp-a", "cmp-b",
-    "cmp-style", "btn-compare", "cmp-table",
+    "cmp-style", "btn-compare", "cmp-table", "local-detail",
 ]
 
 
@@ -20,6 +20,21 @@ class TestWebAssets(unittest.TestCase):
         self.html = open(os.path.join(WEB, "index.html"), encoding="utf-8").read()
         self.css = open(os.path.join(WEB, "style.css"), encoding="utf-8").read()
         self.js = open(os.path.join(WEB, "app.js"), encoding="utf-8").read()
+
+    def test_site_tab_merged_into_overview(self):
+        self.assertNotIn('data-tab="site"', self.html)
+        self.assertNotIn('id="tab-site"', self.html)
+        overview = self.html.split('id="tab-overview"', 1)[1].split("</section>", 1)[0]
+        for i in ("site-table", "local-detail", "about-grid", "links"):
+            self.assertIn('id="%s"' % i, overview)
+
+    def test_local_detail_toggle_persists_and_is_moved(self):
+        self.assertIn("nfu_local_open", self.js)
+        self.assertIn("function toggleLocal(", self.js)
+        self.assertIn("tb.appendChild(detail)", self.js)
+
+    def test_saved_tab_falls_back_to_overview(self):
+        self.assertIn('names.indexOf(saved) >= 0 ? saved : "overview"', self.js)
 
     def test_all_required_ids_present(self):
         missing = [i for i in REQUIRED_IDS if ('id="%s"' % i) not in self.html]

@@ -113,3 +113,7 @@ table.diff-side tr.replace td { background: #fff5b1; }
 table.diff-side tr.delete td:first-child { background: #ffeef0; }
 table.diff-side tr.insert td:last-child { background: #e6ffed; }
 table.diff-side tr.skip td { color: #6a737d; text-align: center; background: #f6f8fa; }
+#site-table th.tog, #site-table td.tog { width: 1.6rem; padding-right: 0; }
+button.toggle { border: 0; background: none; cursor: pointer; font-size: .9rem; padding: 0 .2rem; }
+tr.local td.hostcell { cursor: pointer; }
+tr.local-detail > td { background: var(--surface); padding: .6rem .8rem 1rem 2rem; font-weight: normal; }

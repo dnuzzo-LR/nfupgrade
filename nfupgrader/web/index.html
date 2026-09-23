@@ -26,7 +26,6 @@
     <button class="tab" data-tab="config">Config</button>
     <button class="tab" data-tab="upgrade">Upgrade</button>
     <button class="tab" data-tab="reports">Reports</button>
-    <button class="tab" data-tab="site">Site</button>
     <button class="tab" data-tab="log">Log</button>
   </nav>
 
@@ -34,10 +33,20 @@
     <!-- OVERVIEW -->
     <section class="panel active" id="tab-overview">
       <div class="card">
-        <h2>About this host <span id="overview-spin" class="spinner" style="display:none"></span></h2>
-        <div id="about-grid" class="grid"></div>
-        <h3>Multibox links</h3>
-        <pre id="links">-</pre>
+        <h2>Site <span id="site-spin" class="spinner" style="display:none"></span></h2>
+        <table id="site-table">
+          <thead><tr>
+            <th class="tog"></th><th>Host</th><th>Role</th><th>Reach</th><th>App</th>
+            <th>CORE</th><th>Installed</th><th>Staged</th><th>GR</th>
+          </tr></thead>
+          <tbody>
+            <tr id="local-detail" class="local-detail"><td colspan="9">
+              <div id="about-grid" class="grid"></div>
+              <h3>Multibox links</h3>
+              <pre id="links">-</pre>
+            </td></tr>
+          </tbody>
+        </table>
       </div>
     </section>
 
@@ -107,20 +116,6 @@
           <button id="btn-compare">Compare</button>
         </div>
         <table id="cmp-table" class="checks"><tbody></tbody></table>
-      </div>
-    </section>
-
-    <!-- SITE -->
-    <section class="panel" id="tab-site">
-      <div class="card">
-        <h2>Site <span id="site-spin" class="spinner" style="display:none"></span></h2>
-        <table id="site-table">
-          <thead><tr>
-            <th>Host</th><th>Role</th><th>Reach</th><th>App</th>
-            <th>CORE</th><th>Installed</th><th>Staged</th><th>GR</th>
-          </tr></thead>
-          <tbody></tbody>
-        </table>
       </div>
     </section>
 
