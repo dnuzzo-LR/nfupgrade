@@ -1,0 +1,86 @@
+[
+  {
+    "name": "RDB Test",
+    "command": "rdb test"
+  },
+  {
+    "name": "RDB Version",
+    "command": "rdb version"
+  },
+  {
+    "name": "Database Check Alarm Count",
+    "command": "/usr/cnc/bin/dbcheck -AV | grep -i error | wc -l"
+  },
+  {
+    "name": "Apache Version",
+    "command": "/sbin/httpd -v"
+  },
+  {
+    "name": "INC Info",
+    "command": "/usr/cnc/bin/incinfo"
+  },
+  {
+    "name": "NE Status",
+    "command": "/usr/cnc/ambin/up"
+  },
+  {
+    "name": "NE Stat Export",
+    "command": "/usr/cnc/mbin/nestat -a"
+  },
+  {
+    "name": "NE SNMP Status Check",
+    "command": "/usr/cnc/mbin/snmpne -A -D"
+  },
+  {
+    "name": "NE CLI Status Check",
+    "command": "/usr/cnc/mbin/snmpne -A -C -D"
+  },
+  {
+    "name": "Equipment Dump",
+    "command": "/usr/cnc/ambin/equdump all"
+  },
+  {
+    "name": "Disk File Check main",
+    "command": "/usr/bin/df -k | awk '{print $6\" is @ \"$5}'"
+  },
+  {
+    "name": "Disk File Check usr4",
+    "command": "/usr/bin/df -k /usr4 | awk '{print $6\" is @ \"$5}'"
+  },
+  {
+    "name": "Disk File Check usr2",
+    "command": "/usr/bin/df -k /usr2 | awk '{print $6\" is @ \"$5}'"
+  },
+  {
+    "name": "Disk File Check tmp",
+    "command": "/usr/bin/df -k /tmp | awk '{print $6\" is @ \"$5}'"
+  },
+  {
+    "name": "Disk File Check var",
+    "command": "/usr/bin/df -k /var | awk '{print $6\" is @ \"$5}'"
+  },
+  {
+    "name": "Database Check",
+    "command": "/usr/cnc/bin/dbcheck -AV"
+  },
+  {
+    "name": "Tie Database Export",
+    "command": "/usr/cnc/mbin/inc_db tie --export"
+  },
+  {
+    "name": "Alarm Database Export",
+    "command": "/usr/cnc/mbin/inc_db alm --export"
+  },
+  {
+    "name": "Alias Database Export",
+    "command": "/usr/cnc/mbin/inc_db alias --export"
+  },
+  {
+    "name": "OPR Database Export",
+    "command": "/usr/cnc/mbin/inc_db opr --export"
+  },
+  {
+    "name": "OPR Notify Database Export",
+    "command": "/usr/cnc/mbin/inc_db opr_notify --export"
+  }
+]
