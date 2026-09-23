@@ -60,6 +60,10 @@ class TestApi(unittest.TestCase):
             self._sid = self.ctx.auth.redeem("TOK", "127.0.0.1")
         return self._sid
 
+    def _set_running(self, running):
+        self.ctx.host.responses[("pgrep", "-f", "nf_upgrader")] = \
+            RunResult(0 if running else 1, "", "")
+
     def test_progress_requires_session(self):
         status, _, _ = api.dispatch("GET", "/api/progress", {}, b"", {}, "127.0.0.1", self.ctx)
         self.assertEqual(status, 401)
@@ -101,6 +105,7 @@ class TestApi(unittest.TestCase):
         self.assertEqual(status, 401)
 
     def test_launch_records_audit_and_accepts(self):
+        self._set_running(False)
         sid = self._session()
         status, _, body = api.dispatch(
             "POST", "/api/launch", {}, json.dumps({"mode": "stage"}).encode(),
@@ -151,6 +156,7 @@ class TestApi(unittest.TestCase):
         self.assertIn("blocking", data)
 
     def test_launch_blocked_by_preflight_error(self):
+        self._set_running(False)
         sid = self._session()
         status, _, body = api.dispatch(
             "POST", "/api/launch", {}, json.dumps({"mode": "upgrade"}).encode(),
@@ -160,6 +166,9 @@ class TestApi(unittest.TestCase):
         self.assertTrue(len(data["blocking"]) >= 1)
 
     def _launch(self, payload):
+        # make_ctx defaults to nf_upgrader running (the progress tests rely on
+        # it); launches are refused while it runs, so exercise them idle.
+        self._set_running(False)
         sid = self._session()
         status, _, body = api.dispatch(
             "POST", "/api/launch", {}, json.dumps(payload).encode(),
@@ -284,6 +293,18 @@ class TestApi(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertTrue(len(json.loads(body.decode())["issues"]) >= 1)
 
+    def test_launch_409_while_upgrader_running(self):
+        self._set_running(True)
+        sid = self._session()
+        status, _, body = api.dispatch(
+            "POST", "/api/launch", {}, json.dumps({"mode": "stage"}).encode(),
+            {"nfu_sid": sid}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 409)
+        data = json.loads(body.decode())
+        self.assertEqual(data, {"error": "upgrade already running"})
+        self.assertNotIn("not_overridden", data)
+        self.assertNotIn("launch", [r["event"] for r in self._audit()])
+
     def test_launch_bad_mode_400(self):
         sid = self._session()
         status, _, _ = api.dispatch(
@@ -298,7 +319,7 @@ REPORTS_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "reports.t
 class TestReportsApi(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
-        base = make_ctx(self.tmp)
+        base = make_ctx(self.tmp, running=False)
         base.host.responses[("sh", "-c", "echo v")] = RunResult(0, "v1\n", "")
         base.host.responses[("sh", "-c", "df")] = RunResult(0, "/usr4 10%\n", "")
         self.root = os.path.join(self.tmp, "nfupgrader_reports")
@@ -346,6 +367,32 @@ class TestReportsApi(unittest.TestCase):
         self.assertEqual(self._json(resp)["error"], "report snapshot in progress")
         held[0]()
         self.assertEqual(self._post("/api/launch", {"mode": "stage"})[0], 202)
+
+    def _set_running(self, running):
+        self.ctx.host.responses[("pgrep", "-f", "nf_upgrader")] = \
+            RunResult(0 if running else 1, "", "")
+
+    def test_run_409_while_upgrader_running(self):
+        self._set_running(True)
+        resp = self._post("/api/reports/run")
+        self.assertEqual(resp[0], 409)
+        self.assertEqual(self._json(resp), {"error": "upgrade in progress"})
+        self.assertEqual(self._json(self._get("/api/reports"))["snapshots"], [])
+        self._set_running(False)
+        self.assertEqual(self._post("/api/reports/run")[0], 202)
+
+    def test_launch_snapshot_busy_checked_before_upgrader(self):
+        held = []
+        self.runner.spawn = held.append
+        self.assertEqual(self._post("/api/reports/run")[0], 202)
+        self._set_running(True)
+        resp = self._post("/api/launch", {"mode": "stage"})
+        self.assertEqual((resp[0], self._json(resp)["error"]),
+                         (409, "report snapshot in progress"))
+        held[0]()
+        resp = self._post("/api/launch", {"mode": "stage"})
+        self.assertEqual((resp[0], self._json(resp)["error"]),
+                         (409, "upgrade already running"))
 
     def test_compare_diff_raw(self):
         a = self._json(self._post("/api/reports/run"))["id"]

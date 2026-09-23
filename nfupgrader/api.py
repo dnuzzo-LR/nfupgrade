@@ -165,6 +165,10 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
     if path == "/api/reports/run" and method == "POST":
         if ctx.runner is None:
             return _json(503, {"error": "reports unavailable"})
+        # A manual snapshot mid-upgrade would capture a half-upgraded system and
+        # could hold the runner when the watcher wants the after snapshot.
+        if launcher.upgrader_running(ctx.host):
+            return _json(409, {"error": "upgrade in progress"})
         try:
             snap_id = ctx.runner.start("manual", client=client_ip)
         except snapjobs.Busy:
@@ -207,6 +211,8 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
             return _json(400, {"error": "mode must be stage or upgrade"})
         if _snapshot_busy(ctx):
             return _json(409, {"error": "report snapshot in progress"})
+        if launcher.upgrader_running(ctx.host):
+            return _json(409, {"error": "upgrade already running"})
         overrides = payload.get("overrides", [])
         if not isinstance(overrides, list):
             return _json(400, {"error": "overrides must be a list of check names"})
