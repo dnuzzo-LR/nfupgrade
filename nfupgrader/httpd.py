@@ -83,18 +83,18 @@ def launch_side_effect(ctx, mode, ip, perform=None, begin=None):
     any launch without a snapshot runner, spawn nf_upgrade directly — a spawn
     failure (missing/non-executable script, missing config) becomes a clean 500.
 
-    For the upgrade+runner path, any stale ctx.state["launch_error"] from a
-    previous launch is cleared up front, and (when ctx.state is a dict) an
-    on_error callback is wired so a launch() failure inside the background
+    Any stale ctx.state["launch_error"] from a previous launch is cleared up
+    front on every accepted launch (whatever the mode/path). For the
+    upgrade+runner path, (when ctx.state is a dict) an on_error callback is wired so a launch() failure inside the background
     `then` (audited by begin_upgrade as "launch_error") also lands in
     ctx.state for /api/reports/job to surface to the UI. Losing the race with
     a snapshot already in progress (Busy) is audited as "launch_rejected"."""
     perform = perform or perform_launch
     begin = begin or snapjobs.begin_upgrade
+    has_state = isinstance(ctx.state, dict)
+    if has_state:
+        ctx.state.pop("launch_error", None)
     if mode == "upgrade" and ctx.runner is not None:
-        has_state = isinstance(ctx.state, dict)
-        if has_state:
-            ctx.state.pop("launch_error", None)
         kwargs = {"client": ip, "audit": ctx.audit}
         if has_state:
             kwargs["on_error"] = lambda msg: ctx.state.__setitem__("launch_error", msg)

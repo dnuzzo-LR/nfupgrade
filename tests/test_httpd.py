@@ -148,6 +148,14 @@ class TestLaunchSideEffect(unittest.TestCase):
         httpd.launch_side_effect(ctx, "upgrade", "ip", perform=self.perform, begin=begin_ok)
         self.assertNotIn("launch_error", ctx.state)
 
+    def test_stale_launch_error_cleared_on_direct_launch(self):
+        for runner, mode in ((FakeRunner(), "stage"), (None, "upgrade"), (None, "stage")):
+            ctx = launch_ctx(self.tmp, runner=runner)._replace(
+                state={"launch_error": "stale", "user_config": "/x.cfg"})
+            status, _ = httpd.launch_side_effect(ctx, mode, "ip", perform=self.perform)
+            self.assertEqual(status, 202)
+            self.assertEqual(ctx.state, {"user_config": "/x.cfg"})
+
     def test_no_state_dict_does_not_pass_on_error_or_raise(self):
         seen = {}
 
