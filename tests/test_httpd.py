@@ -32,6 +32,34 @@ class TestUrlHost(unittest.TestCase):
         self.assertEqual(httpd.resolve_url_host("127.0.0.1", None, "h"), "127.0.0.1")
 
 
+class TestDepotDirs(unittest.TestCase):
+    def test_explicit_env_wins(self):
+        self.assertEqual(httpd.resolve_depot_dirs("/a:/b", "/start"), ["/a", "/b"])
+
+    def test_explicit_env_skips_empty_segments(self):
+        self.assertEqual(httpd.resolve_depot_dirs("/a::/b:", "/start"), ["/a", "/b"])
+
+    def test_defaults_to_start_dir_then_opt_apt_upgrade(self):
+        self.assertEqual(httpd.resolve_depot_dirs(None, "/opt/nfupgrader"),
+                         ["/opt/nfupgrader", "/opt/apt/upgrade"])
+        self.assertEqual(httpd.resolve_depot_dirs("", "/opt/nfupgrader"),
+                         ["/opt/nfupgrader", "/opt/apt/upgrade"])
+
+    def test_default_not_duplicated(self):
+        self.assertEqual(httpd.resolve_depot_dirs(None, "/opt/apt/upgrade"), ["/opt/apt/upgrade"])
+
+    def test_no_start_dir(self):
+        self.assertEqual(httpd.resolve_depot_dirs(None, None), ["/opt/apt/upgrade"])
+
+
+class TestRunSh(unittest.TestCase):
+    def test_records_start_dir_before_cd(self):
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "run.sh")
+        text = open(path, encoding="utf-8").read()
+        self.assertIn("NFU_START_DIR", text)
+        self.assertLess(text.index("NFU_START_DIR"), text.index('cd "$(dirname "$0")"'))
+
+
 class TestLaunchCwd(unittest.TestCase):
     def test_explicit_env_wins(self):
         self.assertEqual(httpd.resolve_launch_cwd("/opt/depot", "/x/my.cfg"), "/opt/depot")

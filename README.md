@@ -32,8 +32,10 @@ the `nf_upgrade` / `nf_upgrader` / `nf_log.ksh` scripts must stay siblings), the
 cd /opt/nfupgrader && ./run.sh
 ```
 
-`run.sh` cd's to its own directory, so it can be invoked from anywhere. It prints
-a single-use `/auth?token=…` URL. Run it as root on the host being upgraded.
+`run.sh` cd's to its own directory, so it can be invoked from anywhere; the
+directory you run it from is remembered as the default RPM depot (see
+`NFU_DEPOT_DIRS`). It prints a single-use `/auth?token=…` URL. Run it as root on
+the host being upgraded.
 
 ### Environment variables
 
@@ -48,6 +50,7 @@ a single-use `/auth?token=…` URL. Run it as root on the host being upgraded.
 | `NFU_USER_CONFIG` | (unset) | Customer's upgrade `.cfg`. On Launch, an effective copy is generated that sources it and forces `PROMPTFORVALIDATE=NO`; the original is never edited. Required to use the Launch buttons. |
 | `NFU_EFFECTIVE_CONFIG` | `${INCLOGDIR}/nfupgrader_effective.cfg` | Where the generated effective config is written and read. |
 | `NFU_LAUNCH_CWD` | dir of `NFU_USER_CONFIG` | Directory `nf_upgrade` runs from (for relative `DEPOTFILE`/`linux_packages` lookup). |
+| `NFU_DEPOT_DIRS` | directory `run.sh` was started from, then `/opt/apt/upgrade` | Colon-separated directories scanned (top level only) for `netFLEX-CORE*.rpm`. The Config tab lists them automatically on page load; **Refresh depots** re-scans. Picking one fills `DEPOTFILE`, `NEW_GENERIC` and `NEW_LOAD` from the filename. Missing directories are skipped. |
 | `NFU_REPORTS` | `nfupgrader/reports.default.json` | Report list for the Reports tab. Snapshots go to `${INCLOGDIR}/nfupgrader_reports/` (newest 20 kept); an Upgrade launch takes a *before* snapshot first and an *after* snapshot when the upgrade ends. |
 
 **Loopback (default):** print shows an `ssh -L` tunnel hint. **Non-loopback:** the

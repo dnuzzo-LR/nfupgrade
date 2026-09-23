@@ -61,6 +61,21 @@ def resolve_launch_cwd(env_cwd, user_config):
     return None
 
 
+DEFAULT_DEPOT_DIR = "/opt/apt/upgrade"
+
+
+def resolve_depot_dirs(env_dirs, start_dir):
+    """Directories scanned for netFLEX-CORE RPMs. An explicit NFU_DEPOT_DIRS
+    (colon-separated) wins; otherwise the directory run.sh was started from,
+    then /opt/apt/upgrade. Missing directories are skipped by the scan."""
+    if env_dirs:
+        return [d for d in env_dirs.split(":") if d]
+    dirs = [start_dir] if start_dir else []
+    if DEFAULT_DEPOT_DIR not in dirs:
+        dirs.append(DEFAULT_DEPOT_DIR)
+    return dirs
+
+
 def perform_launch(ctx, mode):
     """Spawn nf_upgrade. The active config is one chosen in the UI (state), else
     NFU_USER_CONFIG; an effective config is generated from it (sources it + forces
@@ -191,7 +206,9 @@ def main(argv=None):
     launch_cwd = resolve_launch_cwd(os.environ.get("NFU_LAUNCH_CWD"), user_config)
     cnc_cnfg_path = os.environ.get("NFU_CNC_CNFG", "/usr/cnc/features/cnc.cnfg")
     checks_path = os.environ.get("NFU_CHECKS", os.path.join(here, "checks.default.json"))
-    depot_dirs = os.environ.get("NFU_DEPOT_DIRS", "/opt/apt/upgrade").split(":")
+    # run.sh cd's to its own directory, so it passes the caller's directory along.
+    depot_dirs = resolve_depot_dirs(os.environ.get("NFU_DEPOT_DIRS"),
+                                    os.environ.get("NFU_START_DIR") or os.getcwd())
     state = {}
     if user_config:
         state["user_config"] = user_config
