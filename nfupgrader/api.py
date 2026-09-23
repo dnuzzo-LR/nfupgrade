@@ -63,6 +63,24 @@ def _snapshot_busy(ctx):
     return ctx.runner is not None and ctx.runner.busy()
 
 
+def _interrupted_notice(ctx):
+    """A notice when the newest snapshot is a before that was interrupted (e.g.
+    the service restarted mid-snapshot): its `then` never ran, so nf_upgrade
+    was never launched. None otherwise. Call only when no job is running."""
+    snaps = reports.list_snapshots(_reports_root(ctx), None)
+    if not snaps:
+        return None
+    newest = snaps[0]
+    if newest["label"] != "before" or newest["status"] != "incomplete":
+        return None
+    if any(s.get("pair_of") == newest["id"] for s in snaps if s["label"] == "after"):
+        return None
+    if launcher.upgrader_running(ctx.host):
+        return None
+    return "Before snapshot {} was interrupted \u2014 the upgrade was not launched.".format(
+        newest["id"])
+
+
 def dispatch(method, path, query, body, cookies, client_ip, ctx):
     """Return (status, headers, body_bytes) for a request."""
     # --- auth redemption (no session required) ---
@@ -159,8 +177,10 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         return _json(200, {"snapshots": reports.list_snapshots(_reports_root(ctx), live)})
 
     if path == "/api/reports/job" and method == "GET":
-        return _json(200, {"job": ctx.runner.job() if ctx.runner is not None else None,
-                           "launch_error": (ctx.state or {}).get("launch_error")})
+        job = ctx.runner.job() if ctx.runner is not None else None
+        return _json(200, {"job": job,
+                           "launch_error": (ctx.state or {}).get("launch_error"),
+                           "notice": None if job else _interrupted_notice(ctx)})
 
     if path == "/api/reports/run" and method == "POST":
         if ctx.runner is None:

@@ -294,6 +294,10 @@ function refreshReportsJob() {
     else if (was && was.label === "before") msg.textContent = "Before snapshot done — upgrade starting.";
     if (was && !reportsJob) refreshReports();
     if (d.launch_error) msg.textContent = "Launch failed: " + d.launch_error;
+    else if (!reportsJob && d.notice) {
+      msg.textContent = d.notice;
+      document.getElementById("reports-job").textContent = d.notice;
+    }
   });
 }
 

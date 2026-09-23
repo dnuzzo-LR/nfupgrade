@@ -80,6 +80,10 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn("snapshots[j].pair_of === before.id", self.js)
         self.assertNotIn("return [snapshots[i].pair_of, snapshots[i].id]", self.js)
 
+    def test_interrupted_before_notice_shown(self):
+        self.assertIn("else if (!reportsJob && d.notice) {", self.js)
+        self.assertIn('getElementById("reports-job").textContent = d.notice', self.js)
+
     def test_es5_only(self):
         # ES5-only per project constraints: no arrow functions, let/const, or
         # template literals in the shipped JS.

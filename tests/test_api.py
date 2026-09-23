@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 from nfupgrader import api
-from nfupgrader import snapjobs
+from nfupgrader import reports, snapjobs
 from nfupgrader.auth import TokenAuth
 from nfupgrader.audit import AuditLog
 from nfupgrader.host import FakeHost, RunResult
@@ -354,7 +354,7 @@ class TestReportsApi(unittest.TestCase):
         self.assertEqual([(s["id"], s["label"], s["status"]) for s in snaps],
                          [(sid, "manual", "complete")])
         self.assertEqual(self._json(self._get("/api/reports/job")),
-                         {"job": None, "launch_error": None})
+                         {"job": None, "launch_error": None, "notice": None})
 
     def test_busy_run_and_launch_409(self):
         held = []
@@ -411,6 +411,46 @@ class TestReportsApi(unittest.TestCase):
         self.assertIn(("Content-Type", "text/plain; charset=utf-8"), headers)
         self.assertIn(("X-Content-Type-Options", "nosniff"), headers)
         self.assertEqual(body, b"v1\n")
+
+    def _interrupted_before(self):
+        """A before snapshot whose job died mid-run (manifest still 'running',
+        no live job) -- as left behind by a service restart."""
+        sid = reports.new_snapshot_id(self.root, "before",
+                                      datetime.datetime(2026, 9, 23, 15, 0, 0))
+        os.makedirs(self.root, exist_ok=True)
+        reports.take_snapshot(self.ctx.host, [], self.root, sid, "before", mode="upgrade")
+        m = reports.read_manifest(self.root, sid)
+        m["status"] = "running"
+        reports._write_manifest(os.path.join(self.root, sid), m)
+        return sid
+
+    def test_reports_job_notice_for_interrupted_before(self):
+        sid = self._interrupted_before()
+        d = self._json(self._get("/api/reports/job"))
+        self.assertIsNone(d["job"])
+        self.assertEqual(d["notice"], "Before snapshot {} was interrupted \u2014 "
+                                      "the upgrade was not launched.".format(sid))
+
+    def test_reports_job_no_notice_while_upgrader_running(self):
+        self._interrupted_before()
+        self._set_running(True)
+        self.assertIsNone(self._json(self._get("/api/reports/job"))["notice"])
+
+    def test_reports_job_no_notice_for_complete_before_or_manual(self):
+        self._post("/api/reports/run")
+        self.assertIsNone(self._json(self._get("/api/reports/job"))["notice"])
+        snapjobs.begin_upgrade(self.runner, lambda: None, lambda: "done", client="ip",
+                               spawn=lambda fn: None)
+        self.assertIsNone(self._json(self._get("/api/reports/job"))["notice"])
+
+    def test_reports_job_no_notice_while_job_running(self):
+        sid = self._interrupted_before()
+        held = []
+        self.runner.spawn = held.append
+        self.runner.start("manual")
+        d = self._json(self._get("/api/reports/job"))
+        self.assertEqual(d["job"]["label"], "manual")
+        self.assertIsNone(d["notice"])
 
     def test_reports_job_surfaces_launch_error(self):
         self.ctx.state["launch_error"] = "no nf_upgrade"
