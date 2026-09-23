@@ -153,39 +153,101 @@ function refreshInfo() {
   });
 }
 
-function renderChecks(el, data) {
-  var html = "<table class='checks'><tr><th></th><th>Check</th><th>Detail</th></tr>";
+function renderChecks(el, data, overridable) {
+  var html = "<table class='checks'><tr><th></th><th>Check</th><th>Detail</th>" +
+             (overridable ? "<th>Override</th>" : "") + "</tr>";
   data.results.forEach(function (r) {
     var mark = r.passed ? "✅" : (r.severity === "ERROR" ? "❌" : "⚠️");
+    var ovr = "";
+    if (overridable) {
+      ovr = "<td>" + (r.blocking
+        ? "<input type='checkbox' class='ovr' data-name='" + r.name + "'>" : "") + "</td>";
+    }
     html += "<tr class='" + (r.passed ? "pass" : "fail-" + r.severity) + "'>" +
             "<td>" + mark + "</td><td>" + r.name + " — " + r.description + "</td>" +
-            "<td>" + (r.detail || "") + "</td></tr>";
+            "<td>" + (r.detail || "") + "</td>" + ovr + "</tr>";
   });
   html += "</table>";
   el.innerHTML = html;
 }
 
+var preflight = null;  // last pre-flight /api/checks response for the selected mode
+
+function overriddenNames() {
+  var boxes = document.querySelectorAll("#preflight input.ovr:checked");
+  return Array.prototype.map.call(boxes, function (b) { return b.getAttribute("data-name"); });
+}
+
+function updateLaunchState() {
+  var btn = document.getElementById("btn-launch");
+  var why = document.getElementById("override-msg");
+  if (!preflight) { btn.disabled = true; why.textContent = ""; return; }
+  var total = preflight.blocking.length;
+  var missing = total - overriddenNames().length;
+  var reason = document.getElementById("reason").value.trim();
+  var msg = "";
+  if (missing > 0) msg = missing + " of " + total + " blocking checks not overridden";
+  else if (total > 0 && !reason) msg = "reason required to override";
+  why.textContent = msg;
+  btn.disabled = msg !== "";
+}
+
 function runPreflight() {
   var mode = document.getElementById("mode").value;
   getJSON("/api/checks?when=preflight&phase=" + mode, function (data) {
-    renderChecks(document.getElementById("preflight"), data);
-    var blocked = data.blocking.length > 0;
-    document.getElementById("override-box").style.display = blocked ? "block" : "none";
-    document.getElementById("btn-launch").disabled = false;  // enabled; server re-checks
+    preflight = data;
+    renderChecks(document.getElementById("preflight"), data, true);
+    document.getElementById("override-box").style.display =
+      data.blocking.length > 0 ? "block" : "none";
+    updateLaunchState();
   });
+}
+
+function resetPreflight() {
+  preflight = null;
+  document.getElementById("preflight").innerHTML = "";
+  document.getElementById("override-box").style.display = "none";
+  updateLaunchState();
+}
+
+function launchConfirmText(mode) {
+  var base = "Start the " + mode.toUpperCase() +
+             " now? This runs the real upgrade and cannot be paused.";
+  var over = preflight.results.filter(function (r) { return r.blocking; });
+  var warn = preflight.results.filter(function (r) {
+    return !r.passed && r.severity !== "ERROR";
+  });
+  if (!over.length && !warn.length) return base;
+  var lines = ["WARNING: launching with unresolved pre-flight failures.", ""];
+  if (over.length) {
+    lines.push("Overridden:");
+    over.forEach(function (r) { lines.push("  - " + r.name + " — " + (r.detail || "")); });
+    lines.push("");
+  }
+  if (warn.length) {
+    lines.push("Warnings:");
+    warn.forEach(function (r) { lines.push("  - " + r.name + " — " + (r.detail || "")); });
+    lines.push("");
+  }
+  lines.push("Upgrading with unresolved pre-flight failures may leave the system " +
+             "in an unsupported state.", "", base);
+  return lines.join("\n");
 }
 
 function launch() {
   var mode = document.getElementById("mode").value;
-  var override = document.getElementById("override").checked;
   var reason = document.getElementById("reason").value;
-  if (!window.confirm("Start the " + mode.toUpperCase() +
-      " now? This runs the real upgrade and cannot be paused.")) return;
-  postJSON("/api/launch", { mode: mode, override: override, reason: reason },
+  if (!preflight) return;
+  if (!window.confirm(launchConfirmText(mode))) return;
+  postJSON("/api/launch", { mode: mode, overrides: overriddenNames(), reason: reason },
     function (status, body) {
       var msg = document.getElementById("launch-msg");
       if (status === 202) { msg.textContent = "Launched " + mode + "…"; }
-      else if (status === 409) { msg.textContent = "Blocked by pre-flight checks — override to proceed."; }
+      else if (status === 409) {
+        msg.textContent = "Blocked — not overridden: " +
+          (body.not_overridden || []).join(", ") + ". Checks re-run.";
+        runPreflight();
+      }
       else { msg.textContent = "Error: " + (body.error || status); }
     });
 }
@@ -276,6 +338,9 @@ buildForm();
 
 document.getElementById("btn-check").onclick = runPreflight;
 document.getElementById("btn-launch").onclick = launch;
+document.getElementById("preflight").onchange = updateLaunchState;
+document.getElementById("reason").oninput = updateLaunchState;
+document.getElementById("mode").onchange = resetPreflight;
 document.getElementById("min-sev").onchange = function () {
   logOffset = 0;
   document.getElementById("log").innerHTML = "";

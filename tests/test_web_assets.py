@@ -9,7 +9,7 @@ REQUIRED_IDS = [
     "about-grid", "links", "cfg-load-depots", "cfg-depot", "cfg-form",
     "cfg-preview", "cfg-save", "cfg-msg", "cfg-rendered", "cfg-issues",
     "mode", "btn-check", "btn-launch", "launch-msg", "preflight", "override-box",
-    "override", "reason", "postflight", "site-table", "min-sev", "log",
+    "override-msg", "reason", "postflight", "site-table", "min-sev", "log",
 ]
 
 
@@ -33,6 +33,10 @@ class TestWebAssets(unittest.TestCase):
         tabs = set(re.findall(r'data-tab="([a-z]+)"', self.html))
         panels = set(re.findall(r'id="tab-([a-z]+)"', self.html))
         self.assertEqual(tabs, panels, "tab buttons and panels differ")
+
+    def test_launch_posts_per_check_overrides(self):
+        self.assertIn("overrides:", self.js)
+        self.assertNotIn('id="override"', self.html)
 
 
 if __name__ == "__main__":
