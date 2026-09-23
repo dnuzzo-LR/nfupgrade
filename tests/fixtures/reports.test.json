@@ -1,0 +1,5 @@
+[
+  {"name": "Manage", "command": "manage_reports", "type": "function"},
+  {"name": "Version", "command": "echo v", "type": "shell"},
+  {"name": "Disk Check", "command": "df", "type": "shell"}
+]
