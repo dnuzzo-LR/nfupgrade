@@ -67,6 +67,13 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn("d.launch_error", self.js)
         self.assertIn("Launch failed: ", self.js)
 
+    def test_busy_409_is_not_a_preflight_block(self):
+        # Only a 409 carrying not_overridden is a pre-flight block; any other
+        # 409 (snapshot busy, upgrade already running) must not disable Launch
+        # or re-run pre-flight.
+        self.assertIn("else if (status === 409 && body.not_overridden) {", self.js)
+        self.assertIn('"Not launched: " + (body.error || status)', self.js)
+
     def test_es5_only(self):
         # ES5-only per project constraints: no arrow functions, let/const, or
         # template literals in the shipped JS.

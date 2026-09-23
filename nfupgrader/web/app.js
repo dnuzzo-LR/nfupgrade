@@ -249,12 +249,15 @@ function launch() {
         if (body.snapshot) { msg.textContent = "Taking before snapshot…"; refreshReportsJob(); }
         else { msg.textContent = "Launched " + mode + "…"; }
       }
-      else if (status === 409) {
+      else if (status === 409 && body.not_overridden) {
         document.getElementById("btn-launch").disabled = true;  // until re-run lands
         msg.textContent = "Blocked — not overridden: " +
-          (body.not_overridden || []).join(", ") + ". Checks re-run.";
+          body.not_overridden.join(", ") + ". Checks re-run.";
         runPreflight();
       }
+      // Any other 409 (snapshot in progress, upgrade already running) is not a
+      // pre-flight verdict: leave the button and checks alone.
+      else if (status === 409) { msg.textContent = "Not launched: " + (body.error || status); }
       else { msg.textContent = "Error: " + (body.error || status); }
     });
 }
