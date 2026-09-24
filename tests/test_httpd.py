@@ -69,6 +69,16 @@ class TestIncLogDir(unittest.TestCase):
         self.assertEqual(httpd.ensure_dir(d), d)       # already there: fine
 
 
+class TestStaticHeaders(unittest.TestCase):
+    def test_static_files_are_not_cached_stale(self):
+        for ext in (".html", ".js", ".css"):
+            h = dict(httpd.static_headers(ext, 10))
+            self.assertEqual(h["Cache-Control"], "no-cache")
+            self.assertEqual(h["Content-Length"], "10")
+        self.assertEqual(dict(httpd.static_headers(".js", 1))["Content-Type"],
+                         "application/javascript")
+
+
 class TestRunSh(unittest.TestCase):
     def test_records_start_dir_before_cd(self):
         path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "run.sh")

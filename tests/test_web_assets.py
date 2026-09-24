@@ -86,6 +86,22 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn('aria-modal="true"', self.html)
         self.assertNotIn("inset:", self.css)   # older Firefox on RHEL 7
 
+    def test_load_errors_are_visible_and_tabs_wired_first(self):
+        self.assertIn("window.onerror = function", self.js.split("\nfunction ", 1)[0])
+        first_binding = self.js.index('document.getElementById("cfg-load-depots").onclick')
+        self.assertLess(self.js.index("\ninitTabs();"), first_binding)
+        self.assertEqual(self.js.count("\ninitTabs();"), 1)
+        self.assertIn('rel="icon"', self.html)
+
+    def test_elements_used_by_app_js_come_before_the_script_tag(self):
+        # app.js runs as soon as the parser reaches its <script> tag (no defer), so
+        # every element it looks up at startup must already be in the document.
+        before = self.html.split('<script src="/app.js">', 1)[0]
+        used = set(re.findall(r'getElementById\("([^"]+)"\)', self.js))
+        created = set(re.findall(r"id='([^']+)'", self.js)) | {"load-error"}
+        late = sorted(i for i in used - created if ('id="%s"' % i) not in before)
+        self.assertEqual(late, [], "defined after the app.js <script> tag: %s" % late)
+
     def test_all_required_ids_present(self):
         missing = [i for i in REQUIRED_IDS if ('id="%s"' % i) not in self.html]
         self.assertEqual(missing, [], "index.html missing IDs: %s" % missing)

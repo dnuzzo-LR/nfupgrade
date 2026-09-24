@@ -1,4 +1,19 @@
 "use strict";
+
+// If anything below throws while the page starts, say so instead of leaving a
+// dead page (typically a stale cached index.html next to a newer app.js).
+// Built with plain DOM calls so it works whatever index.html is loaded.
+window.onerror = function (msg, src, line) {
+  var b = document.getElementById("load-error");
+  if (!b) {
+    b = document.createElement("div");
+    b.id = "load-error";
+    b.style.cssText = "background:#b3261e;color:#fff;padding:.6rem 1.2rem;font-weight:600";
+    document.body.insertBefore(b, document.body.firstChild);
+  }
+  b.textContent = "The page failed to load (" + msg + (line ? ", app.js:" + line : "") +
+    "). Reload with Ctrl+Shift+R; if it persists, the web files on the server are out of date.";
+};
 var logOffset = 0;
 var logFile = "";   // trace file the log pane is showing (server picks the newest)
 
@@ -659,6 +674,9 @@ function loadDepots() {
   });
 }
 
+// Tabs first, so a failure in a later binding can't leave the user stuck on one tab.
+initTabs();
+
 document.getElementById("cfg-load-depots").onclick = loadDepots;
 
 document.getElementById("cfg-depot").onchange = function () {
@@ -761,7 +779,6 @@ document.getElementById("min-sev").onchange = function () {
   refreshLog();
 };
 
-initTabs();
 document.getElementById("about-grid").innerHTML = loadingHTML("Loading host info…");
 document.getElementById("links").textContent = "Loading…";
 (function () {

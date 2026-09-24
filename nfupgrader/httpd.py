@@ -210,6 +210,15 @@ def safe_dispatch(method, path, query, body, cookies, ip, ctx, dispatch=None, la
             type(e).__name__, e)})
 
 
+def static_headers(ext, length):
+    """Headers for a static web file. no-cache makes the browser revalidate
+    every load, so index.html, app.js and style.css always come from the same
+    install (a stale cached page with a newer app.js leaves the UI dead)."""
+    return [("Content-Type", _CTYPES.get(ext, "application/octet-stream")),
+            ("Content-Length", str(length)),
+            ("Cache-Control", "no-cache")]
+
+
 def make_handler(ctx):
     class Handler(BaseHTTPRequestHandler):
         def _serve_static(self, path):
@@ -226,8 +235,8 @@ def make_handler(ctx):
             with open(full, "rb") as fh:
                 data = fh.read()
             self.send_response(200)
-            self.send_header("Content-Type", _CTYPES.get(ext, "application/octet-stream"))
-            self.send_header("Content-Length", str(len(data)))
+            for k, v in static_headers(ext, len(data)):
+                self.send_header(k, v)
             self.end_headers()
             self.wfile.write(data)
 
