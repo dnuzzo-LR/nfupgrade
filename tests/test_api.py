@@ -306,6 +306,22 @@ class TestApi(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertTrue(len(json.loads(body.decode())["issues"]) >= 1)
 
+    def test_config_preview_rejects_non_object_body(self):
+        sid = self._session()
+        for raw in (b"[1]", b'"x"', b"7", b"null", b"{", b"\xff"):
+            status, _, body = api.dispatch("POST", "/api/config/preview", {}, raw,
+                                           {"nfu_sid": sid}, "127.0.0.1", self.ctx)
+            self.assertEqual((status, json.loads(body.decode())),
+                             (400, {"error": "bad json"}), raw)
+
+    def test_config_save_rejects_non_object_body(self):
+        sid = self._session()
+        for raw in (b"[1]", b'"x"', b"7", b"null", b"{", b"\xff"):
+            status, _, body = api.dispatch("POST", "/api/config/save", {}, raw,
+                                           {"nfu_sid": sid}, "127.0.0.1", self.ctx)
+            self.assertEqual((status, json.loads(body.decode())),
+                             (400, {"error": "bad json"}), raw)
+
     def test_launch_409_while_upgrader_running(self):
         self._set_running(True)
         sid = self._session()
@@ -375,7 +391,8 @@ class TestReportsApi(unittest.TestCase):
         self.assertEqual([(s["id"], s["label"], s["status"]) for s in snaps],
                          [(sid, "manual", "complete")])
         self.assertEqual(self._json(self._get("/api/reports/job")),
-                         {"job": None, "launch_error": None, "notice": None})
+                         {"job": None, "launch_error": None, "notice": None,
+                          "interrupted_fix": None})
 
     def test_busy_run_and_launch_409(self):
         held = []
@@ -491,6 +508,14 @@ class TestReportsApi(unittest.TestCase):
         self.ctx.state["launch_error"] = "no nf_upgrade"
         self.assertEqual(self._json(self._get("/api/reports/job"))["launch_error"],
                          "no nf_upgrade")
+
+    def test_reports_job_interrupted_fix_null_by_default(self):
+        self.assertIsNone(self._json(self._get("/api/reports/job"))["interrupted_fix"])
+
+    def test_reports_job_surfaces_interrupted_fix(self):
+        self.ctx.state["interrupted_fix"] = {"name": "pkg-ksh", "kind": "rpm", "ts": "t1"}
+        self.assertEqual(self._json(self._get("/api/reports/job"))["interrupted_fix"],
+                         {"name": "pkg-ksh", "kind": "rpm", "ts": "t1"})
 
     def test_errors(self):
         a = self._json(self._post("/api/reports/run"))["id"]
@@ -714,6 +739,62 @@ class TestCheckFix(unittest.TestCase):
         finally:
             api._FIX_LOCK.release()
         self.assertEqual((status, d["error"]), (409, "another fix is running"))
+
+    def test_refused_just_after_launch(self):
+        self.ctx.state["launched_at"] = api._now() - 1
+        status, d = self.fix({"name": "pkg-ksh"})
+        self.assertEqual((status, d), (409, {"error": "upgrade just launched"}))
+        self.assertFalse(api._FIX_LOCK.locked())
+
+    def test_proceeds_once_grace_period_elapses(self):
+        self.ctx.state["launched_at"] = api._now() - api.FIX_LAUNCH_GRACE - 1
+        status, d = self.fix({"name": "pkg-ksh"})
+        self.assertEqual(status, 200)
+
+    def test_unaffected_when_never_launched(self):
+        self.assertNotIn("launched_at", self.ctx.state)
+        status, d = self.fix({"name": "pkg-ksh"})
+        self.assertEqual(status, 200)
+
+    def test_grace_period_uses_injectable_clock(self):
+        self.ctx.state["launched_at"] = 1000.0
+        orig_now = api._now
+        api._now = lambda: 1000.0 + api.FIX_LAUNCH_GRACE - 1
+        try:
+            status, d = self.fix({"name": "pkg-ksh"})
+        finally:
+            api._now = orig_now
+        self.assertEqual((status, d), (409, {"error": "upgrade just launched"}))
+
+    def test_fix_clears_interrupted_fix_for_same_name(self):
+        self.ctx.state["interrupted_fix"] = {"name": "pkg-ksh", "kind": "rpm", "ts": "t1"}
+        status, d = self.fix({"name": "pkg-ksh"})
+        self.assertEqual(status, 200)
+        self.assertIsNone(self.ctx.state["interrupted_fix"])
+
+    def test_fix_leaves_interrupted_fix_for_other_name(self):
+        self.ctx.state["interrupted_fix"] = {"name": "sdi-mode", "kind": "cfg", "ts": "t1"}
+        status, d = self.fix({"name": "pkg-ksh"})
+        self.assertEqual(status, 200)
+        self.assertEqual(self.ctx.state["interrupted_fix"],
+                         {"name": "sdi-mode", "kind": "cfg", "ts": "t1"})
+
+    def test_fix_failure_also_clears_interrupted_fix(self):
+        self.ctx.host.responses[("dnf", "install", "-y", "ksh")] = RunResult(1, "", "boom")
+        self.ctx.state["interrupted_fix"] = {"name": "pkg-ksh", "kind": "rpm", "ts": "t1"}
+        status, d = self.fix({"name": "pkg-ksh"})
+        self.assertEqual(status, 200)
+        self.assertFalse(d["fix"]["ok"])
+        self.assertIsNone(self.ctx.state["interrupted_fix"])
+
+    def test_already_passing_leaves_interrupted_fix_untouched(self):
+        self.ctx.host.responses[("rpm", "-q", "ksh")] = RunResult(0, "ksh-1\n", "")
+        self.ctx.state["interrupted_fix"] = {"name": "pkg-ksh", "kind": "rpm", "ts": "t1"}
+        status, d = self.fix({"name": "pkg-ksh"})
+        self.assertEqual(status, 200)
+        self.assertIsNone(d["fix"])
+        self.assertEqual(self.ctx.state["interrupted_fix"],
+                         {"name": "pkg-ksh", "kind": "rpm", "ts": "t1"})
 
 
 if __name__ == "__main__":

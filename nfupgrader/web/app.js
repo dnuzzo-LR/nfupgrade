@@ -407,6 +407,11 @@ function refreshReportsJob() {
       msg.textContent = d.notice;
       document.getElementById("reports-job").textContent = d.notice;
     }
+    var fixMsg = document.getElementById("fix-msg");
+    if (d.interrupted_fix && !fixMsg.textContent) {
+      fixMsg.textContent = "⚠️ A fix for " + d.interrupted_fix.name +
+        " was interrupted (service restarted) — re-run pre-flight to see its state.";
+    }
   });
 }
 

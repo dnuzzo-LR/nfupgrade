@@ -111,6 +111,13 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn("else if (!reportsJob && d.notice) {", self.js)
         self.assertIn('getElementById("reports-job").textContent = d.notice', self.js)
 
+    def test_interrupted_fix_notice_shown(self):
+        rj = self._fn("refreshReportsJob")
+        self.assertIn("d.interrupted_fix", rj)
+        self.assertIn('getElementById("fix-msg")', rj)
+        self.assertIn("was interrupted (service restarted)", rj)
+        self.assertIn("re-run pre-flight to see its state.", rj)
+
     def test_preflight_fix_buttons(self):
         self.assertIn("esc(r.fix)", self.js)
         self.assertIn("function runFix(", self.js)

@@ -5,6 +5,7 @@ import os
 import posixpath
 import socketserver
 import sys
+import time
 import traceback
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -18,7 +19,7 @@ class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
 
 from nfupgrader import api, launcher, progress, snapjobs
 from nfupgrader.auth import TokenAuth
-from nfupgrader.audit import AuditLog
+from nfupgrader.audit import AuditLog, last_unfinished_fix
 from nfupgrader.host import Host, SshHost
 
 _CTYPES = {".html": "text/html", ".js": "application/javascript", ".css": "text/css"}
@@ -87,6 +88,16 @@ def perform_launch(ctx, mode):
     launcher.launch(ctx.nf_upgrade_path, ctx.effective_config, mode, cwd=ctx.launch_cwd)
 
 
+def load_interrupted_fix(audit, path):
+    """Detect a check fix left unfinished by a service restart mid-fix (see
+    audit.last_unfinished_fix), audit it once as "check_fix_interrupted", and
+    return it (or None) for state["interrupted_fix"]. Called once at startup."""
+    interrupted = last_unfinished_fix(path)
+    if interrupted:
+        audit.record("check_fix_interrupted", **interrupted)
+    return interrupted
+
+
 def upgrade_status(ctx):
     """The upgrade-phase progress status (done/running/died/not_started)."""
     running = launcher.upgrader_running(ctx.host)
@@ -110,7 +121,13 @@ def launch_side_effect(ctx, mode, ip, perform=None, begin=None):
 
     A launch is refused (409, audited "launch_rejected") while a check fix is
     running. The fix lock is held while spawning / starting the before snapshot,
-    so a fix cannot start in between either."""
+    so a fix cannot start in between either.
+
+    On every accepted (202) launch, ctx.state["launched_at"] (when ctx.state is
+    a dict) is stamped with the current time. api dispatch's /api/checks/fix
+    refuses fixes for a short grace period after this, since there is a window
+    between an accepted launch and nf_upgrader actually showing up in pgrep
+    where a fix could otherwise race the launch it just accepted."""
     perform = perform or perform_launch
     begin = begin or snapjobs.begin_upgrade
     has_state = isinstance(ctx.state, dict)
@@ -120,7 +137,10 @@ def launch_side_effect(ctx, mode, ip, perform=None, begin=None):
         ctx.audit.record("launch_rejected", mode=mode, client=ip, reason="check fix in progress")
         return 409, {"error": "check fix in progress"}
     try:
-        return _launch_locked(ctx, mode, ip, perform, begin, has_state)
+        status, body = _launch_locked(ctx, mode, ip, perform, begin, has_state)
+        if has_state and status == 202:
+            ctx.state["launched_at"] = time.time()
+        return status, body
     finally:
         api._FIX_LOCK.release()
 
@@ -253,7 +273,11 @@ def main(argv=None):
         state["user_config"] = user_config
 
     host = Host()
-    audit = AuditLog(os.path.join(inclogdir, "nfupgrader_audit.jsonl"))
+    audit_path = os.path.join(inclogdir, "nfupgrader_audit.jsonl")
+    audit = AuditLog(audit_path)
+    # A fix interrupted by a prior restart (mid-fix) shows up as a
+    # check_fix_start with no matching check_fix; flag it once, for the UI.
+    state["interrupted_fix"] = load_interrupted_fix(audit, audit_path)
     reports_path = os.environ.get("NFU_REPORTS", os.path.join(here, "reports.default.json"))
     reports_root = os.path.join(inclogdir, "nfupgrader_reports")
     runner = snapjobs.SnapshotRunner(host, reports_path, reports_root, audit=audit)

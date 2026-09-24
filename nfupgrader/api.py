@@ -4,6 +4,7 @@ unit-testable without sockets."""
 import collections
 import json
 import threading
+import time
 
 import os
 
@@ -26,6 +27,14 @@ Context.__new__.__defaults__ = (None,) * 11
 # Held for the whole fix request, so launches and snapshots are refused meanwhile
 # (and httpd holds it while spawning a launch, so a fix cannot start then).
 _FIX_LOCK = threading.Lock()
+
+# Seconds after an accepted launch during which /api/checks/fix is refused, even
+# if launcher.upgrader_running() has not yet caught up (there is a short window
+# between an accepted launch and nf_upgrader actually showing up in pgrep).
+FIX_LAUNCH_GRACE = 120
+
+# Injectable clock: tests patch api._now to move time without sleeping.
+_now = time.time
 
 
 def fix_in_progress():
@@ -177,6 +186,10 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         if not _FIX_LOCK.acquire(False):
             return _json(409, {"error": "another fix is running"})
         try:
+            state = ctx.state if isinstance(ctx.state, dict) else {}
+            launched_at = state.get("launched_at")
+            if launched_at is not None and _now() - launched_at < FIX_LAUNCH_GRACE:
+                return _json(409, {"error": "upgrade just launched"})
             if launcher.upgrader_running(ctx.host):
                 return _json(409, {"error": "upgrade in progress"})
             if _snapshot_busy(ctx):
@@ -200,6 +213,10 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
             ok, detail = checks.apply_fix(ctx.host, check)
             ctx.audit.record("check_fix", name=name, kind=check["kind"], ok=ok, detail=detail,
                              client=client_ip)
+            # A completed attempt (success or failure) for this check resolves
+            # any startup-detected interrupted fix of the same name.
+            if isinstance(ctx.state, dict) and (ctx.state.get("interrupted_fix") or {}).get("name") == name:
+                ctx.state["interrupted_fix"] = None
             after = checks.evaluate(ctx.host, check, "preflight")
             return _json(200, {"fix": {"ok": ok, "detail": detail}, "result": after})
         finally:
@@ -219,10 +236,10 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         return _json(200, {"depots": cfg.list_depots(ctx.host, dirs), "dirs": dirs})
 
     if path == "/api/config/preview" and method == "POST":
-        try:
-            values = json.loads(body.decode("utf-8") or "{}").get("values", {})
-        except ValueError:
+        payload = _json_object(body)
+        if payload is None:
             return _json(400, {"error": "bad json"})
+        values = payload.get("values", {})
         return _json(200, {"issues": cfg.validate(values), "rendered": cfg.render_cfg(values)})
 
     if path == "/api/config/import" and method == "GET":
@@ -238,10 +255,10 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
                            "issues": cfg.validate(values)})
 
     if path == "/api/config/save" and method == "POST":
-        try:
-            values = json.loads(body.decode("utf-8") or "{}").get("values", {})
-        except ValueError:
+        payload = _json_object(body)
+        if payload is None:
             return _json(400, {"error": "bad json"})
+        values = payload.get("values", {})
         issues = cfg.validate(values)
         if any(i["level"] == "ERROR" for i in issues):
             return _json(400, {"error": "config invalid", "issues": issues})
@@ -261,7 +278,8 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         job = ctx.runner.job() if ctx.runner is not None else None
         return _json(200, {"job": job,
                            "launch_error": (ctx.state or {}).get("launch_error"),
-                           "notice": None if job else _interrupted_notice(ctx)})
+                           "notice": None if job else _interrupted_notice(ctx),
+                           "interrupted_fix": (ctx.state or {}).get("interrupted_fix")})
 
     if path == "/api/reports/run" and method == "POST":
         if ctx.runner is None:

@@ -1,6 +1,7 @@
 import json
 import os
 import tempfile
+import time
 import unittest
 from nfupgrader import api, httpd, snapjobs
 from nfupgrader.audit import AuditLog
@@ -200,6 +201,8 @@ class TestLaunchSideEffect(unittest.TestCase):
                 state={"launch_error": "stale", "user_config": "/x.cfg"})
             status, _ = httpd.launch_side_effect(ctx, mode, "ip", perform=self.perform)
             self.assertEqual(status, 202)
+            self.assertIn("launched_at", ctx.state)
+            del ctx.state["launched_at"]
             self.assertEqual(ctx.state, {"user_config": "/x.cfg", "phase": mode})
 
     def test_refused_while_fix_in_progress(self):
@@ -249,6 +252,77 @@ class TestLaunchSideEffect(unittest.TestCase):
                                                 begin=begin)
         self.assertEqual(status, 202)
         self.assertTrue(seen["called"])
+
+    def test_accepted_direct_launch_records_launched_at(self):
+        ctx = launch_ctx(self.tmp)._replace(state={})
+        before = time.time()
+        httpd.launch_side_effect(ctx, "stage", "ip", perform=self.perform)
+        self.assertGreaterEqual(ctx.state["launched_at"], before)
+        self.assertLessEqual(ctx.state["launched_at"], time.time())
+
+    def test_accepted_upgrade_launch_records_launched_at(self):
+        def begin(runner, launch, read_status, client, audit=None, **kw):
+            launch()
+            return "20260923_140400_before"
+        ctx = launch_ctx(self.tmp, runner=FakeRunner())._replace(state={})
+        httpd.launch_side_effect(ctx, "upgrade", "ip", perform=self.perform, begin=begin)
+        self.assertIn("launched_at", ctx.state)
+
+    def test_failed_launch_does_not_record_launched_at(self):
+        def boom(ctx, mode):
+            raise OSError("nope")
+        ctx = launch_ctx(self.tmp)._replace(state={})
+        status, _ = httpd.launch_side_effect(ctx, "stage", "ip", perform=boom)
+        self.assertEqual(status, 500)
+        self.assertNotIn("launched_at", ctx.state)
+
+    def test_busy_launch_does_not_record_launched_at(self):
+        def begin(*a, **kw):
+            raise snapjobs.Busy()
+        ctx = launch_ctx(self.tmp, runner=FakeRunner())._replace(state={})
+        status, _ = httpd.launch_side_effect(ctx, "upgrade", "ip", perform=self.perform,
+                                             begin=begin)
+        self.assertEqual(status, 409)
+        self.assertNotIn("launched_at", ctx.state)
+
+    def test_no_state_dict_launched_at_does_not_raise(self):
+        ctx = launch_ctx(self.tmp)  # ctx.state is None
+        status, body = httpd.launch_side_effect(ctx, "stage", "ip", perform=self.perform)
+        self.assertEqual(status, 202)
+
+
+class TestLoadInterruptedFix(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.path = os.path.join(self.tmp, "audit.jsonl")
+        self.audit = AuditLog(self.path)
+
+    def _write(self, entries):
+        with open(self.path, "w") as fh:
+            for e in entries:
+                fh.write(json.dumps(e) + "\n")
+
+    def _events(self):
+        return [json.loads(l) for l in open(self.path)]
+
+    def test_none_when_no_unfinished_fix(self):
+        self._write([{"ts": "t1", "event": "check_fix_start", "name": "a", "kind": "rpm"},
+                     {"ts": "t2", "event": "check_fix", "name": "a", "kind": "rpm", "ok": True}])
+        self.assertIsNone(httpd.load_interrupted_fix(self.audit, self.path))
+        self.assertNotIn("check_fix_interrupted", [e["event"] for e in self._events()])
+
+    def test_missing_audit_file_returns_none(self):
+        self.assertIsNone(httpd.load_interrupted_fix(
+            self.audit, os.path.join(self.tmp, "nope.jsonl")))
+
+    def test_records_and_returns_interrupted_fix_once(self):
+        self._write([{"ts": "t1", "event": "check_fix_start", "name": "pkg-ksh", "kind": "rpm"}])
+        result = httpd.load_interrupted_fix(self.audit, self.path)
+        self.assertEqual(result, {"name": "pkg-ksh", "kind": "rpm", "ts": "t1"})
+        interrupted = [e for e in self._events() if e["event"] == "check_fix_interrupted"]
+        self.assertEqual(len(interrupted), 1)
+        self.assertEqual(interrupted[0]["name"], "pkg-ksh")
+        self.assertEqual(interrupted[0]["kind"], "rpm")
 
 
 
