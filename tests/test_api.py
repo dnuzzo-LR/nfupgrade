@@ -325,6 +325,14 @@ class TestApi(unittest.TestCase):
             {"nfu_sid": sid}, "127.0.0.1", self.ctx)
         self.assertEqual(status, 400)
 
+    def test_launch_non_object_json_400(self):
+        sid = self._session()
+        for raw in (b'["stage"]', b'"stage"', b"3", b"null"):
+            status, _, body = api.dispatch("POST", "/api/launch", {}, raw,
+                                           {"nfu_sid": sid}, "127.0.0.1", self.ctx)
+            self.assertEqual((status, json.loads(body.decode())), (400, {"error": "bad json"}),
+                             raw)
+
 
 REPORTS_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "reports.test.json")
 
@@ -405,6 +413,21 @@ class TestReportsApi(unittest.TestCase):
         resp = self._post("/api/launch", {"mode": "stage"})
         self.assertEqual((resp[0], self._json(resp)["error"]),
                          (409, "upgrade already running"))
+
+    def test_launch_and_run_409_while_fix_in_progress(self):
+        self.assertFalse(api.fix_in_progress())
+        self.assertTrue(api._FIX_LOCK.acquire(False))
+        try:
+            self.assertTrue(api.fix_in_progress())
+            launch = self._post("/api/launch", {"mode": "stage"})
+            run = self._post("/api/reports/run")
+        finally:
+            api._FIX_LOCK.release()
+        self.assertEqual((launch[0], self._json(launch)), (409, {"error": "check fix in progress"}))
+        self.assertEqual((run[0], self._json(run)), (409, {"error": "check fix in progress"}))
+        self.assertEqual(self._json(self._get("/api/reports"))["snapshots"], [])
+        self.assertFalse(api.fix_in_progress())
+        self.assertEqual(self._post("/api/launch", {"mode": "stage"})[0], 202)
 
     def test_compare_diff_raw(self):
         a = self._json(self._post("/api/reports/run"))["id"]
@@ -639,6 +662,50 @@ class TestCheckFix(unittest.TestCase):
         self.ctx = self.ctx._replace(runner=BusyRunner())
         status, d = self.fix({"name": "pkg-ksh"})
         self.assertEqual((status, d["error"]), (409, "report snapshot in progress"))
+
+    def raw_fix(self, raw):
+        status, _, body = api.dispatch("POST", "/api/checks/fix", {}, raw,
+                                       {"nfu_sid": self.sid}, "127.0.0.1", self.ctx)
+        return status, json.loads(body.decode())
+
+    def test_non_object_json_400(self):
+        for raw in (b"[1]", b'"pkg-ksh"', b"7", b"null", b"{", b"\xff"):
+            self.assertEqual(self.raw_fix(raw), (400, {"error": "bad json"}), raw)
+        self.assertFalse(api._FIX_LOCK.locked())
+
+    def test_lock_released_after_every_outcome(self):
+        cases = [({"name": "nope"}, 404), ({"name": "sdi-mode"}, 400),
+                 ({"name": "pkg-ksh", "phase": "weird"}, 400), ({"name": "pkg-ksh"}, 200),
+                 ({"name": "pkg-ksh"}, 200)]          # second: already passing
+        for payload, want in cases:
+            self.assertEqual(self.fix(payload)[0], want, payload)
+            self.assertFalse(api._FIX_LOCK.locked(), payload)
+        self.ctx.host.responses.update(running_responses(True))
+        self.assertEqual(self.fix({"name": "pkg-ksh"})[0], 409)
+        self.assertFalse(api._FIX_LOCK.locked())
+
+    def test_lock_held_while_checking_state_and_fixing(self):
+        seen = []
+
+        class Watching(InstallingHost):
+            def run(self, argv, timeout=None):
+                seen.append((list(argv), api.fix_in_progress()))
+                return InstallingHost.run(self, argv, timeout)
+        self.ctx = self.ctx._replace(host=Watching(dict(self.ctx.host.responses)))
+        self.assertEqual(self.fix({"name": "pkg-ksh"})[0], 200)
+        self.assertTrue(seen)
+        # Every command, including the upgrader_running probe, ran under the lock.
+        self.assertEqual([argv for argv, held in seen if not held], [])
+        self.assertIn(["pgrep", "-f", "nf_upgrader"], [argv for argv, _ in seen])
+
+    def test_lock_checked_before_upgrade_running(self):
+        self.ctx.host.responses.update(running_responses(True))
+        self.assertTrue(api._FIX_LOCK.acquire(False))
+        try:
+            status, d = self.fix({"name": "pkg-ksh"})
+        finally:
+            api._FIX_LOCK.release()
+        self.assertEqual((status, d["error"]), (409, "another fix is running"))
 
     def test_one_fix_at_a_time(self):
         self.assertTrue(api._FIX_LOCK.acquire(False))

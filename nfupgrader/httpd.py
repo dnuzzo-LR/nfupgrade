@@ -5,6 +5,7 @@ import os
 import posixpath
 import socketserver
 import sys
+import traceback
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -105,12 +106,27 @@ def launch_side_effect(ctx, mode, ip, perform=None, begin=None):
     ctx.state for /api/reports/job to surface to the UI. Losing the race with
     a snapshot already in progress (Busy) is audited as "launch_rejected".
     An accepted launch records its mode as ctx.state["phase"], so the progress
-    strip and log follow the phase that was actually launched."""
+    strip and log follow the phase that was actually launched.
+
+    A launch is refused (409, audited "launch_rejected") while a check fix is
+    running. The fix lock is held while spawning / starting the before snapshot,
+    so a fix cannot start in between either."""
     perform = perform or perform_launch
     begin = begin or snapjobs.begin_upgrade
     has_state = isinstance(ctx.state, dict)
     if has_state:
         ctx.state.pop("launch_error", None)
+    if not api._FIX_LOCK.acquire(False):
+        ctx.audit.record("launch_rejected", mode=mode, client=ip, reason="check fix in progress")
+        return 409, {"error": "check fix in progress"}
+    try:
+        return _launch_locked(ctx, mode, ip, perform, begin, has_state)
+    finally:
+        api._FIX_LOCK.release()
+
+
+def _launch_locked(ctx, mode, ip, perform, begin, has_state):
+    """launch_side_effect's body, run while holding api._FIX_LOCK."""
     if mode == "upgrade" and ctx.runner is not None:
         kwargs = {"client": ip, "audit": ctx.audit}
         if has_state:
@@ -133,6 +149,31 @@ def launch_side_effect(ctx, mode, ip, perform=None, begin=None):
     if has_state:
         ctx.state["phase"] = mode
     return 202, {"accepted": True, "mode": mode}
+
+
+def _json_response(status, obj):
+    return status, [("Content-Type", "application/json")], json.dumps(obj).encode("utf-8")
+
+
+def safe_dispatch(method, path, query, body, cookies, ip, ctx, dispatch=None, launch=None):
+    """api.dispatch plus the launch side effect after an accepted (202) launch.
+    Any exception becomes a 500 JSON error (traceback to stderr) so the client
+    gets an answer instead of a dropped connection."""
+    dispatch = dispatch or api.dispatch
+    launch = launch or launch_side_effect
+    try:
+        status, headers, out = dispatch(method, path, query, body, cookies, ip, ctx)
+        if path == "/api/launch" and status == 202:
+            mode = json.loads(body.decode("utf-8") or "{}").get("mode")
+            status, obj = launch(ctx, mode, ip)
+            status, headers, out = _json_response(status, obj)
+        return status, headers, out
+    except Exception as e:
+        sys.stderr.write("nfupgrader: error handling {} {}:\n{}".format(
+            method, path, traceback.format_exc()))
+        sys.stderr.flush()
+        return _json_response(500, {"error": "internal error: {}: {}".format(
+            type(e).__name__, e)})
 
 
 def make_handler(ctx):
@@ -167,13 +208,7 @@ def make_handler(ctx):
             body = self.rfile.read(length) if length else b""
             cookies = parse_cookies(self.headers.get("Cookie", ""))
             ip = client_ip_from(self.client_address)
-            status, headers, out = api.dispatch(method, path, query, body, cookies, ip, ctx)
-            # Perform the launch side effect after a recorded 202 (see launch_side_effect).
-            if path == "/api/launch" and status == 202:
-                mode = json.loads(body.decode() or "{}").get("mode")
-                status, obj = launch_side_effect(ctx, mode, ip)
-                out = json.dumps(obj).encode("utf-8")
-                headers = [("Content-Type", "application/json")]
+            status, headers, out = safe_dispatch(method, path, query, body, cookies, ip, ctx)
             self.send_response(status)
             for k, v in headers:
                 self.send_header(k, v)

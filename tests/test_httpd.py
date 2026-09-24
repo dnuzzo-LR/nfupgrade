@@ -202,6 +202,41 @@ class TestLaunchSideEffect(unittest.TestCase):
             self.assertEqual(status, 202)
             self.assertEqual(ctx.state, {"user_config": "/x.cfg", "phase": mode})
 
+    def test_refused_while_fix_in_progress(self):
+        def begin(*a, **kw):
+            raise AssertionError("before snapshot must not start during a fix")
+        self.assertTrue(api._FIX_LOCK.acquire(False))
+        try:
+            results = [httpd.launch_side_effect(launch_ctx(self.tmp, runner=runner), mode, "ip",
+                                                perform=self.perform, begin=begin)
+                       for runner, mode in ((None, "stage"), (FakeRunner(), "upgrade"))]
+        finally:
+            api._FIX_LOCK.release()
+        self.assertEqual(results, [(409, {"error": "check fix in progress"})] * 2)
+        self.assertEqual(self.performed, [])
+        rej = [json.loads(l) for l in open(os.path.join(self.tmp, "audit.jsonl"))]
+        self.assertEqual([(e["event"], e["reason"]) for e in rej],
+                         [("launch_rejected", "check fix in progress")] * 2)
+
+    def test_fix_cannot_start_while_launch_spawns(self):
+        held = []
+
+        def perform(ctx, mode):
+            held.append(api.fix_in_progress())
+        httpd.launch_side_effect(launch_ctx(self.tmp), "stage", "ip", perform=perform)
+
+        def begin(runner, launch, read_status, client, audit=None):
+            held.append(api.fix_in_progress())
+            return "20260923_140300_before"
+        httpd.launch_side_effect(launch_ctx(self.tmp, runner=FakeRunner()), "upgrade", "ip",
+                                 perform=perform, begin=begin)
+
+        def boom(ctx, mode):
+            raise OSError("nope")
+        httpd.launch_side_effect(launch_ctx(self.tmp), "stage", "ip", perform=boom)
+        self.assertEqual(held, [True, True])
+        self.assertFalse(api.fix_in_progress())
+
     def test_no_state_dict_does_not_pass_on_error_or_raise(self):
         seen = {}
 
@@ -214,6 +249,49 @@ class TestLaunchSideEffect(unittest.TestCase):
                                                 begin=begin)
         self.assertEqual(status, 202)
         self.assertTrue(seen["called"])
+
+
+
+class TestSafeDispatch(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def test_exception_becomes_500_json(self):
+        def boom(*a):
+            raise KeyError("x")
+        import io
+        import sys
+        saved, sys.stderr = sys.stderr, io.StringIO()
+        try:
+            status, headers, out = httpd.safe_dispatch("GET", "/api/info", {}, b"", {}, "ip",
+                                                       launch_ctx(self.tmp), dispatch=boom)
+            logged = sys.stderr.getvalue()
+        finally:
+            sys.stderr = saved
+        self.assertEqual(status, 500)
+        self.assertIn(("Content-Type", "application/json"), headers)
+        self.assertEqual(json.loads(out.decode()), {"error": "internal error: KeyError: 'x'"})
+        self.assertIn("Traceback", logged)
+        self.assertIn("/api/info", logged)
+
+    def test_passes_through_and_runs_launch_side_effect(self):
+        def disp(method, path, query, body, cookies, ip, ctx):
+            return 202, [("Content-Type", "application/json")], b'{"accepted": true}'
+        seen = []
+
+        def side(ctx, mode, ip):
+            seen.append((mode, ip))
+            return 202, {"accepted": True, "mode": mode}
+        ctx = launch_ctx(self.tmp)
+        r = httpd.safe_dispatch("POST", "/api/launch", {}, b'{"mode": "stage"}', {}, "ip", ctx,
+                                dispatch=disp, launch=side)
+        self.assertEqual(seen, [("stage", "ip")])
+        self.assertEqual((r[0], json.loads(r[2].decode())),
+                         (202, {"accepted": True, "mode": "stage"}))
+        r = httpd.safe_dispatch("GET", "/api/x", {}, b"", {}, "ip", ctx, dispatch=disp,
+                                launch=side)
+        self.assertEqual((r[0], r[2]), (202, b'{"accepted": true}'))
+        self.assertEqual(len(seen), 1)
 
 
 if __name__ == "__main__":

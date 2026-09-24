@@ -23,7 +23,23 @@ Context = collections.namedtuple("Context", [
 Context.__new__.__defaults__ = (None,) * 11
 
 # One check fix at a time: fixes change system state as root (dnf, sysctl, limits).
+# Held for the whole fix request, so launches and snapshots are refused meanwhile
+# (and httpd holds it while spawning a launch, so a fix cannot start then).
 _FIX_LOCK = threading.Lock()
+
+
+def fix_in_progress():
+    """True while a check fix (or a launch spawn) holds _FIX_LOCK."""
+    return _FIX_LOCK.locked()
+
+
+def _json_object(body):
+    """The request body parsed as a JSON object, or None if it is not one."""
+    try:
+        payload = json.loads(body.decode("utf-8") or "{}")
+    except ValueError:                       # includes UnicodeDecodeError
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def _default_peer_factory(name):
@@ -153,39 +169,41 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         return _json(200, view)
 
     if path == "/api/checks/fix" and method == "POST":
-        try:
-            payload = json.loads(body.decode("utf-8") or "{}")
-        except ValueError:
+        payload = _json_object(body)
+        if payload is None:
             return _json(400, {"error": "bad json"})
-        if launcher.upgrader_running(ctx.host):
-            return _json(409, {"error": "upgrade in progress"})
-        if _snapshot_busy(ctx):
-            return _json(409, {"error": "report snapshot in progress"})
-        phase = payload.get("phase") or _active_phase(ctx)
-        if phase not in ("stage", "upgrade"):
-            return _json(400, {"error": "phase must be stage or upgrade"})
-        name = payload.get("name") or ""
-        check = checks.find_check(_load_checks(ctx), name, "preflight", phase, _machtype(ctx))
-        if check is None:
-            return _json(404, {"error": "unknown check"})
-        what = checks.describe_fix(check)
-        if what is None:
-            return _json(400, {"error": "no fix for this check"})
-        before = checks.evaluate(ctx.host, check, "preflight")
-        if before["passed"]:
-            return _json(200, {"fix": None, "result": before})
+        # Take the lock before looking at system state, so no launch or snapshot
+        # can slip in between these checks and the fix itself.
         if not _FIX_LOCK.acquire(False):
             return _json(409, {"error": "another fix is running"})
         try:
+            if launcher.upgrader_running(ctx.host):
+                return _json(409, {"error": "upgrade in progress"})
+            if _snapshot_busy(ctx):
+                return _json(409, {"error": "report snapshot in progress"})
+            phase = payload.get("phase") or _active_phase(ctx)
+            if phase not in ("stage", "upgrade"):
+                return _json(400, {"error": "phase must be stage or upgrade"})
+            name = payload.get("name") or ""
+            check = checks.find_check(_load_checks(ctx), name, "preflight", phase,
+                                      _machtype(ctx))
+            if check is None:
+                return _json(404, {"error": "unknown check"})
+            what = checks.describe_fix(check)
+            if what is None:
+                return _json(400, {"error": "no fix for this check"})
+            before = checks.evaluate(ctx.host, check, "preflight")
+            if before["passed"]:
+                return _json(200, {"fix": None, "result": before})
             ctx.audit.record("check_fix_start", name=name, kind=check["kind"], fix=what,
                              client=client_ip)
             ok, detail = checks.apply_fix(ctx.host, check)
             ctx.audit.record("check_fix", name=name, kind=check["kind"], ok=ok, detail=detail,
                              client=client_ip)
             after = checks.evaluate(ctx.host, check, "preflight")
+            return _json(200, {"fix": {"ok": ok, "detail": detail}, "result": after})
         finally:
             _FIX_LOCK.release()
-        return _json(200, {"fix": {"ok": ok, "detail": detail}, "result": after})
 
     if path == "/api/checks" and method == "GET":
         when = (query.get("when") or ["preflight"])[0]
@@ -252,10 +270,16 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         # could hold the runner when the watcher wants the after snapshot.
         if launcher.upgrader_running(ctx.host):
             return _json(409, {"error": "upgrade in progress"})
+        # Held only while the job is registered: a fix that arrives afterwards
+        # sees the runner busy, and one already running makes this a 409.
+        if not _FIX_LOCK.acquire(False):
+            return _json(409, {"error": "check fix in progress"})
         try:
             snap_id = ctx.runner.start("manual", client=client_ip)
         except snapjobs.Busy:
             return _json(409, {"error": "report snapshot in progress"})
+        finally:
+            _FIX_LOCK.release()
         return _json(202, {"id": snap_id})
 
     if path == "/api/reports/compare" and method == "GET":
@@ -285,15 +309,16 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         return 200, headers, text.encode("utf-8")
 
     if path == "/api/launch" and method == "POST":
-        try:
-            payload = json.loads(body.decode("utf-8") or "{}")
-        except ValueError:
+        payload = _json_object(body)
+        if payload is None:
             return _json(400, {"error": "bad json"})
         mode = payload.get("mode")
         if mode not in ("stage", "upgrade"):
             return _json(400, {"error": "mode must be stage or upgrade"})
         if _snapshot_busy(ctx):
             return _json(409, {"error": "report snapshot in progress"})
+        if fix_in_progress():
+            return _json(409, {"error": "check fix in progress"})
         if launcher.upgrader_running(ctx.host):
             return _json(409, {"error": "upgrade already running"})
         overrides = payload.get("overrides", [])
