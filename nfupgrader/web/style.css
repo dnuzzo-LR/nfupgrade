@@ -117,3 +117,4 @@ table.diff-side tr.skip td { color: #6a737d; text-align: center; background: #f6
 button.toggle { border: 0; background: none; cursor: pointer; font-size: .9rem; padding: 0 .2rem; }
 tr.local td.hostcell { cursor: pointer; }
 tr.local-detail > td { background: var(--surface); padding: .6rem .8rem 1rem 2rem; font-weight: normal; }
+.muted { color: var(--muted); font-family: inherit; }

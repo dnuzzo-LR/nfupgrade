@@ -101,7 +101,8 @@ def load_interrupted_fix(audit, path):
 def upgrade_status(ctx):
     """The upgrade-phase progress status (done/running/died/not_started)."""
     running = launcher.upgrader_running(ctx.host)
-    return progress.read_progress(ctx.hostname, "upgrade", ctx.inclogdir, running)["status"]
+    return progress.read_progress(ctx.hostname, "upgrade", api.upgrade_logdir(ctx),
+                                  running)["status"]
 
 
 def launch_side_effect(ctx, mode, ip, perform=None, begin=None):

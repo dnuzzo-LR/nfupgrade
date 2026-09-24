@@ -797,5 +797,58 @@ class TestCheckFix(unittest.TestCase):
                          {"name": "pkg-ksh", "kind": "rpm", "ts": "t1"})
 
 
+
+class TestUpgradeLogdir(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()           # nfupgrader's own INCLOGDIR
+        self.updir = tempfile.mkdtemp()         # where the upgrade scripts log
+        self.ctx = make_ctx(self.tmp, running=False)._replace(phase=None, tracefile=None)
+        self.sid = self.ctx.auth.redeem("TOK", "127.0.0.1")
+
+    def cfg(self, text):
+        path = os.path.join(self.tmp, "my.cfg")
+        with open(path, "w") as fh:
+            fh.write(text)
+        return path
+
+    def get(self, path, **q):
+        status, _, body = api.dispatch("GET", path, dict((k, [v]) for k, v in q.items()), b"",
+                                       {"nfu_sid": self.sid}, "127.0.0.1", self.ctx)
+        return json.loads(body.decode())
+
+    def test_defaults_to_own_inclogdir(self):
+        self.assertEqual(api.upgrade_logdir(self.ctx), self.tmp)
+
+    def test_uses_inclogdir_from_saved_config_then_env_config(self):
+        saved = self.cfg('INCLOGDIR="%s"\nNEW_GENERIC=5.4.1\n' % self.updir)
+        self.ctx.state["user_config"] = saved
+        self.assertEqual(api.upgrade_logdir(self.ctx), self.updir)
+        del self.ctx.state["user_config"]
+        ctx = self.ctx._replace(user_config=saved)
+        self.assertEqual(api.upgrade_logdir(ctx), self.updir)
+
+    def test_falls_back_when_unusable(self):
+        for text in ("NEW_GENERIC=5.4.1\n", "INCLOGDIR=${BASE}/logs\n", "INCLOGDIR=logs\n",
+                     "INCLOGDIR=\n"):
+            self.ctx.state["user_config"] = self.cfg(text)
+            self.assertEqual(api.upgrade_logdir(self.ctx), self.tmp, text)
+        self.ctx.state["user_config"] = os.path.join(self.tmp, "missing.cfg")
+        self.assertEqual(api.upgrade_logdir(self.ctx), self.tmp)
+
+    def test_progress_log_and_info_follow_the_config_logdir(self):
+        host = self.ctx.hostname
+        open(os.path.join(self.updir, ".%s_STATE" % host), "w").write("swscopycnc\n")
+        open(os.path.join(self.updir, "stage_inc_%s.77" % host), "w").write(
+            "2026-09-24 17:37:05 INFO  Staging holmvm32\n")
+        self.ctx.state["user_config"] = self.cfg("INCLOGDIR=%s\n" % self.updir)
+        p = self.get("/api/progress")
+        self.assertEqual((p["phase"], p["current"], p["logdir"]), ("stage", "swscopycnc", self.updir))
+        log = self.get("/api/log", offset="0")
+        self.assertEqual(log["file"], "stage_inc_%s.77" % host)
+        self.assertEqual([e["msg"] for e in log["entries"]], ["Staging holmvm32"])
+        info = self.get("/api/info")
+        self.assertEqual(info["upgrade_logdir"], self.updir)
+        self.assertEqual(info["nfupgrader_logdir"], self.tmp)
+
 if __name__ == "__main__":
     unittest.main()

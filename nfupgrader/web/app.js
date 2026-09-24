@@ -174,6 +174,12 @@ function refreshInfo() {
     var t = i.topology, v = i.versions, l = i.loads, g = i.gr;
     var html = "";
     html += row("Host", i.host);
+    // Where the upgrade scripts log (from the active config); flag it when it
+    // differs from where nfupgrader keeps its own files.
+    html += row("Upgrade logs", esc(i.upgrade_logdir) +
+                (i.nfupgrader_logdir && i.nfupgrader_logdir !== i.upgrade_logdir
+                  ? " <span class='muted'>(nfupgrader files: " + esc(i.nfupgrader_logdir) + ")</span>"
+                  : ""));
     html += row("Topology", t.kind + (t.role ? " (" + t.role + ")" : "") +
                 (t.host_count ? " — " + t.host_count + " hosts" : ""));
     html += row("Mate", t.mate);

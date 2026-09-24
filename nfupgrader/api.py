@@ -84,6 +84,30 @@ def _q(query, name, default=""):
     return (query.get(name) or [default])[0]
 
 
+def active_config(ctx):
+    """The upgrade config Launch will use: one saved on the Config tab, else
+    NFU_USER_CONFIG (None if neither)."""
+    st = ctx.state if isinstance(ctx.state, dict) else {}
+    return st.get("user_config") or ctx.user_config
+
+
+def upgrade_logdir(ctx):
+    """Where nf_upgrade/nf_upgrader write the state file and traces. They take
+    INCLOGDIR from the upgrade config, so read it from the active config; fall
+    back to nfupgrader's own INCLOGDIR when there is no config, it doesn't set
+    one, or the value isn't a plain absolute path ($VAR needs the shell)."""
+    path = active_config(ctx)
+    if path:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                d = cfg.parse_cfg(fh.read()).get("INCLOGDIR", "").strip()
+        except (IOError, OSError):
+            d = ""
+        if d.startswith("/") and "$" not in d and "`" not in d:
+            return d
+    return ctx.inclogdir
+
+
 def _active_phase(ctx):
     """Which phase the progress strip and log follow: the mode of the last
     accepted launch, else NFU_PHASE, else inferred from the state file."""
@@ -92,12 +116,12 @@ def _active_phase(ctx):
         return st["phase"]
     if ctx.phase in ("stage", "upgrade"):
         return ctx.phase
-    return progress.infer_phase(progress.read_state(ctx.hostname, ctx.inclogdir))
+    return progress.infer_phase(progress.read_state(ctx.hostname, upgrade_logdir(ctx)))
 
 
 def _active_tracefile(ctx, phase):
     """An explicit NFU_TRACEFILE, else the newest nf_upgrader trace for the phase."""
-    return ctx.tracefile or logtail.latest_trace(ctx.inclogdir, phase, ctx.hostname)
+    return ctx.tracefile or logtail.latest_trace(upgrade_logdir(ctx), phase, ctx.hostname)
 
 
 def _reports_root(ctx):
@@ -148,7 +172,9 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
 
     if path == "/api/progress" and method == "GET":
         running = launcher.upgrader_running(ctx.host)
-        rec = progress.read_progress(ctx.hostname, _active_phase(ctx), ctx.inclogdir, running)
+        logdir = upgrade_logdir(ctx)
+        rec = progress.read_progress(ctx.hostname, _active_phase(ctx), logdir, running)
+        rec["logdir"] = logdir
         return _json(200, rec)
 
     if path == "/api/log" and method == "GET":
@@ -168,6 +194,8 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
     if path == "/api/info" and method == "GET":
         info = localinfo.gather(ctx.host, ctx.hostname,
                                 ctx.cnc_cnfg_path or "/usr/cnc/features/cnc.cnfg")
+        info["upgrade_logdir"] = upgrade_logdir(ctx)
+        info["nfupgrader_logdir"] = ctx.inclogdir
         return _json(200, info)
 
     if path == "/api/site" and method == "GET":

@@ -162,6 +162,15 @@ class TestLaunchSideEffect(unittest.TestCase):
         httpd.launch_side_effect(ctx, "upgrade", "ip", perform=boom)
         self.assertEqual(ctx.state["phase"], "stage")
 
+    def test_upgrade_status_uses_config_logdir(self):
+        updir = tempfile.mkdtemp()
+        cfgp = os.path.join(self.tmp, "u.cfg")
+        open(cfgp, "w").write("INCLOGDIR=%s\n" % updir)
+        open(os.path.join(updir, ".h1_STATE"), "w").write("swidone\n")
+        host = FakeHost({("pgrep", "-f", "nf_upgrader"): RunResult(1, "", "")})
+        ctx = launch_ctx(self.tmp, host=host)._replace(state={"user_config": cfgp})
+        self.assertEqual(httpd.upgrade_status(ctx), "done")
+
     def test_upgrade_status_reads_upgrade_phase(self):
         host = FakeHost({("pgrep", "-f", "nf_upgrader"): RunResult(1, "", "")})
         open(os.path.join(self.tmp, ".h1_STATE"), "w").write("swidone\n")

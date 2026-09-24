@@ -48,6 +48,9 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn('"&file=" + encodeURIComponent(logFile)', self.js)
         self.assertIn("if (d.reset)", self.js)
 
+    def test_overview_shows_upgrade_logdir(self):
+        self.assertIn('row("Upgrade logs"', self.js)
+
     def test_all_required_ids_present(self):
         missing = [i for i in REQUIRED_IDS if ('id="%s"' % i) not in self.html]
         self.assertEqual(missing, [], "index.html missing IDs: %s" % missing)
