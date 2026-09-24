@@ -67,8 +67,22 @@ function initTabs() {
   show(saved && names.indexOf(saved) >= 0 ? saved : "overview");
 }
 
+var modeTouched = false;   // the user picked Stage/Upgrade by hand; stop auto-switching
+
+// Once staging has finished, the next step is the upgrade: move the dropdown there
+// (unless the user chose a mode themselves) and drop the stage pre-flight results.
+function suggestUpgradeMode(p) {
+  var sel = document.getElementById("mode");
+  if (!(p.phase === "stage" && p.status === "done") || modeTouched || sel.value !== "stage") return;
+  sel.value = "upgrade";
+  resetPreflight();
+  document.getElementById("launch-msg").textContent =
+    "Staging complete — next step: Upgrade. Run pre-flight checks.";
+}
+
 function refreshProgress() {
   getJSON("/api/progress", function (p) {
+    suggestUpgradeMode(p);
     document.getElementById("phase").textContent = p.phase;
     document.getElementById("status").textContent = p.status;
     document.getElementById("current").textContent =
@@ -634,7 +648,10 @@ document.getElementById("preflight").onclick = function (ev) {
   if (b && !b.disabled) runFix(b);
 };
 document.getElementById("reason").oninput = updateLaunchState;
-document.getElementById("mode").onchange = resetPreflight;
+document.getElementById("mode").onchange = function () {
+  modeTouched = true;
+  resetPreflight();
+};
 
 document.getElementById("btn-reports-run").onclick = function () {
   postJSON("/api/reports/run", {}, function (status, d) {

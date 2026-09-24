@@ -51,6 +51,15 @@ class TestWebAssets(unittest.TestCase):
     def test_overview_shows_upgrade_logdir(self):
         self.assertIn('row("Upgrade logs"', self.js)
 
+    def test_mode_switches_to_upgrade_after_stage_completes(self):
+        self.assertIn("function suggestUpgradeMode(", self.js)
+        fn = self.js.split("function suggestUpgradeMode(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn('p.phase === "stage" && p.status === "done"', fn)
+        self.assertIn("modeTouched", fn)
+        self.assertIn("resetPreflight();", fn)
+        self.assertIn("suggestUpgradeMode(p);", self.js.split("function refreshProgress(", 1)[1])
+        self.assertIn("modeTouched = true", self.js)
+
     def test_all_required_ids_present(self):
         missing = [i for i in REQUIRED_IDS if ('id="%s"' % i) not in self.html]
         self.assertEqual(missing, [], "index.html missing IDs: %s" % missing)
