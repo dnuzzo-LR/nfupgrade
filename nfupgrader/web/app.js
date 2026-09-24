@@ -296,11 +296,48 @@ function runPreflight() {
   });
 }
 
+var modalOnOk = null;        // callback for the open confirmation dialog
+var modalReturnFocus = null; // element to refocus when it closes
+
+// In-page replacement for the browser's built-in confirm. opts: {title, body (text; newlines
+// kept), ok (button label), danger (red OK button)}. onOk runs only on confirm.
+function showConfirm(opts, onOk) {
+  document.getElementById("modal-title").textContent = opts.title;
+  document.getElementById("modal-body").textContent = opts.body || "";
+  var ok = document.getElementById("modal-ok");
+  ok.textContent = opts.ok || "OK";
+  ok.className = opts.danger ? "danger" : "primary";
+  modalOnOk = onOk;
+  modalReturnFocus = document.activeElement;
+  document.getElementById("modal").style.display = "flex";
+  // Default focus on Cancel so a stray Enter never launches or fixes.
+  document.getElementById("modal-cancel").focus();
+}
+
+function closeModal(confirmed) {
+  var cb = modalOnOk;
+  modalOnOk = null;
+  document.getElementById("modal").style.display = "none";
+  if (modalReturnFocus && modalReturnFocus.focus) modalReturnFocus.focus();
+  if (confirmed && cb) cb();
+}
+
+function modalOpen() {
+  return document.getElementById("modal").style.display !== "none";
+}
+
 function runFix(btn) {
-  var name = btn.getAttribute("data-name");
   var host = lastInfo && lastInfo.host ? lastInfo.host : "this host";
-  if (!window.confirm("Run as root on " + host + ":\n\n" + btn.getAttribute("data-fix") +
-                      "\n\nContinue?")) return;
+  showConfirm({
+    title: "Run fix as root on " + host + "?",
+    body: btn.getAttribute("data-fix"),
+    ok: "Run fix",
+    danger: true
+  }, function () { applyFix(btn); });
+}
+
+function applyFix(btn) {
+  var name = btn.getAttribute("data-name");
   Array.prototype.forEach.call(document.querySelectorAll("#preflight button.fix"),
                                function (b) { b.disabled = true; });
   // No launch or re-check while a root fix is changing the system.
@@ -369,9 +406,19 @@ function launchConfirmText(mode) {
 
 function launch() {
   var mode = document.getElementById("mode").value;
-  var reason = document.getElementById("reason").value;
   if (!preflight) return;
-  if (!window.confirm(launchConfirmText(mode))) return;
+  var unresolved = launchConfirmText(mode).indexOf("WARNING:") === 0;
+  showConfirm({
+    title: unresolved ? "Launch with unresolved pre-flight failures?"
+                      : "Start the " + mode + " now?",
+    body: launchConfirmText(mode),
+    ok: "Start " + mode,
+    danger: true
+  }, function () { startLaunch(mode); });
+}
+
+function startLaunch(mode) {
+  var reason = document.getElementById("reason").value;
   postJSON("/api/launch", { mode: mode, overrides: overriddenNames(), reason: reason },
     function (status, body) {
       var msg = document.getElementById("launch-msg");
@@ -643,6 +690,21 @@ loadDepots();
 
 document.getElementById("btn-check").onclick = runPreflight;
 document.getElementById("btn-launch").onclick = launch;
+document.getElementById("modal-ok").onclick = function () { closeModal(true); };
+document.getElementById("modal-cancel").onclick = function () { closeModal(false); };
+document.getElementById("modal").onclick = function (ev) {
+  if (ev.target === this) closeModal(false);   // click on the dimmed backdrop
+};
+document.addEventListener("keydown", function (ev) {
+  if (!modalOpen()) return;
+  if (ev.key === "Escape" || ev.key === "Esc") { ev.preventDefault(); closeModal(false); return; }
+  if (ev.key === "Tab") {   // keep focus inside the dialog
+    var a = document.getElementById("modal-cancel"), b = document.getElementById("modal-ok");
+    var next = document.activeElement === a ? b : a;
+    ev.preventDefault();
+    next.focus();
+  }
+});
 document.getElementById("preflight").onchange = updateLaunchState;
 document.getElementById("preflight").onclick = function (ev) {
   var b = ev.target.closest ? ev.target.closest("button.fix") : null;

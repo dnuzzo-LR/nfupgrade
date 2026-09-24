@@ -140,5 +140,16 @@
   </main>
 
   <script src="/app.js"></script>
+  <!-- confirmation dialog (replaces window.confirm) -->
+  <div id="modal" class="modal-backdrop" style="display:none">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <h2 id="modal-title"></h2>
+      <div id="modal-body"></div>
+      <div class="modal-actions">
+        <button type="button" id="modal-cancel">Cancel</button>
+        <button type="button" id="modal-ok" class="primary">OK</button>
+      </div>
+    </div>
+  </div>
 </body>
 </html>

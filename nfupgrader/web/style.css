@@ -49,6 +49,8 @@ button { padding: .5rem .9rem; border: 1px solid var(--line); border-radius: 6px
   background: var(--surface); cursor: pointer; font-size: 14px; }
 button:hover { border-color: var(--accent); }
 button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button.danger { background: #b3261e; color: #fff; border-color: #b3261e; }
+button.danger:hover { border-color: #7f1b15; }
 button:disabled { opacity: .5; cursor: not-allowed; }
 select, input[type=text], input:not([type]) { padding: .4rem .5rem; border: 1px solid var(--line);
   border-radius: 6px; font-size: 14px; }
@@ -118,3 +120,14 @@ button.toggle { border: 0; background: none; cursor: pointer; font-size: .9rem; 
 tr.local td.hostcell { cursor: pointer; }
 tr.local-detail > td { background: var(--surface); padding: .6rem .8rem 1rem 2rem; font-weight: normal; }
 .muted { color: var(--muted); font-family: inherit; }
+
+/* confirmation dialog */
+.modal-backdrop { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 100;
+  background: rgba(20, 32, 47, .55); display: flex; align-items: center; justify-content: center;
+  padding: 1rem; }
+.modal { background: var(--surface); color: var(--ink); border-radius: var(--radius);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, .3); width: 100%; max-width: 640px; max-height: 85vh;
+  display: flex; flex-direction: column; padding: 1.2rem 1.4rem; }
+.modal h2 { font-size: 1.15rem; margin: 0 0 .8rem; }
+#modal-body { white-space: pre-wrap; overflow: auto; font-size: 14px; line-height: 1.45; }
+.modal-actions { display: flex; justify-content: flex-end; gap: .6rem; margin-top: 1.2rem; }

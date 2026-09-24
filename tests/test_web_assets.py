@@ -12,6 +12,7 @@ REQUIRED_IDS = [
     "override-msg", "reason", "postflight", "site-table", "min-sev", "log",
     "btn-reports-run", "reports-job", "reports-list", "cmp-a", "cmp-b",
     "cmp-style", "btn-compare", "cmp-table", "local-detail",
+    "modal", "modal-title", "modal-body", "modal-ok", "modal-cancel",
 ]
 
 
@@ -69,6 +70,21 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn("font-size: 17px", strip)
         bar = self.css.split(".progress-strip .bar {", 1)[1].split("}", 1)[0]
         self.assertIn("height: 22px", bar)
+
+    def test_confirmations_use_in_page_modal(self):
+        self.assertNotIn("window.confirm", self.js)
+        self.assertNotIn("alert(", self.js)
+        self.assertIn("function showConfirm(", self.js)
+        launch = self.js.split("function launch(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("showConfirm(", launch)
+        fix = self.js.split("function runFix(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("showConfirm(", fix)
+        show = self.js.split("function showConfirm(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn('getElementById("modal-cancel").focus()', show)   # Enter doesn't launch
+        self.assertIn('"Escape"', self.js)
+        self.assertIn('role="dialog"', self.html)
+        self.assertIn('aria-modal="true"', self.html)
+        self.assertNotIn("inset:", self.css)   # older Firefox on RHEL 7
 
     def test_all_required_ids_present(self):
         missing = [i for i in REQUIRED_IDS if ('id="%s"' % i) not in self.html]
@@ -144,15 +160,15 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn("esc(r.fix)", self.js)
         self.assertIn("function runFix(", self.js)
         self.assertIn('postJSON("/api/checks/fix"', self.js)
-        self.assertIn("Run as root on ", self.js)
-        fix_fn = self.js.split("function runFix(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("Run fix as root on ", self.js)
+        fix_fn = self.js.split("function applyFix(", 1)[1].split("\nfunction ", 1)[0]
         self.assertIn("runPreflight();", fix_fn)
 
     def _fn(self, name):
         return self.js.split("function %s(" % name, 1)[1].split("\nfunction ", 1)[0]
 
     def test_fix_disables_launch_and_check_until_done(self):
-        fix_fn = self._fn("runFix")
+        fix_fn = self._fn("applyFix")
         self.assertIn('getElementById("btn-launch").disabled = true', fix_fn)
         self.assertIn('getElementById("btn-check").disabled = true', fix_fn)
         # re-enabled when the fix answers, whatever the answer
@@ -161,7 +177,7 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn("updateLaunchState();", done)
 
     def test_fix_result_honest(self):
-        fix_fn = self._fn("runFix")
+        fix_fn = self._fn("applyFix")
         self.assertIn("d.fix.ok && d.result && d.result.passed", fix_fn)
         self.assertIn(": fix applied but the check still fails \u2014 ", fix_fn)
 
