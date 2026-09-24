@@ -4,9 +4,12 @@ A JSON list binds kinds to a moment (preflight/postflight), a phase, and an
 optional MACHTYPE. Pre-flight ERRORs block Launch (override logged); everything
 post-flight is advisory. Some kinds also have a fix (FIXES) that can be applied
 from the UI."""
+import errno
+import glob
 import json
 import os
 import re
+import stat
 
 from nfupgrader import localinfo
 
@@ -70,8 +73,15 @@ def _staged_present(host, p):
     return (r.rc == 0 and bool(r.out.strip())), r.out.strip() or "no staged load"
 
 
+def _touchfile_name_ok(name):
+    """A touchfile is a plain name directly under /usr/cnc/features."""
+    return bool(name) and "/" not in name and name not in (".", "..")
+
+
 def _touchfile(host, p):
     """A netFLEX mode flag under /usr/cnc/features (ported from nf-install)."""
+    if not _touchfile_name_ok(p["file"]):
+        return False, "invalid touchfile name"
     path = "/usr/cnc/features/" + p["file"]
     return host.run(["test", "-f", path]).rc == 0, path
 
@@ -95,26 +105,54 @@ def _kernel_param(host, p):
         return False, "cannot read {}".format(p["param"])
     out = r.out.strip()
     cur = out.split(" = ", 1)[1] if " = " in out else out
-    return cur == p["expected_value"], "{} = {}".format(p["param"], cur)
+    # Multi-value params (e.g. net.ipv4.tcp_rmem) print tab-separated.
+    return " ".join(cur.split()) == " ".join(p["expected_value"].split()), \
+        "{} = {}".format(p["param"], cur)
+
+
+# pam_limits reads limits.conf, then limits.d/*.conf in sorted order; a later
+# entry for the same domain/type/item wins. Base paths are overridable for tests.
+LIMITS_MAIN = "/etc/security/limits.conf"
+LIMITS_DIR = "/etc/security/limits.d"
+
+
+def _read_text(path):
+    """The text of path (undecodable bytes kept as surrogates), or None if unreadable."""
+    try:
+        with open(path, encoding="utf-8", errors="surrogateescape") as fh:
+            return fh.read()
+    except (IOError, OSError):
+        return None
+
+
+def _limits_files():
+    """The files pam_limits reads, in the order it reads them."""
+    return [LIMITS_MAIN] + sorted(glob.glob(os.path.join(LIMITS_DIR, "*.conf")))
+
+
+def _ulimit_winner(p):
+    """(file, value) of the effective (last) entry for p's domain/type/item, or None."""
+    head = [p["domain"], p["limit_type"], p["limit_item"]]
+    found = None
+    for path in _limits_files():
+        text = _read_text(path)
+        for line in (text or "").splitlines():
+            parts = line.split()
+            if parts and parts[0].startswith("#"):
+                continue
+            if len(parts) >= 4 and parts[:3] == head:
+                found = (path, parts[3])
+    return found
 
 
 def _ulimit(host, p):
     """A limits.conf / limits.d entry (domain type item value) that must equal
-    expected_value."""
-    r = host.run(["sh", "-c",
-                  "cat /etc/security/limits.conf /etc/security/limits.d/*.conf 2>/dev/null"])
-    found = None
-    for line in r.out.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        parts = line.split()
-        if (len(parts) >= 4 and parts[0] == p["domain"]
-                and parts[1] == p["limit_type"] and parts[2] == p["limit_item"]):
-            found = parts[3]
+    expected_value. Read locally (like its fix) from _limits_files()."""
+    found = _ulimit_winner(p)
     if found is None:
         return False, "{} {} {} not set".format(p["domain"], p["limit_item"], p["limit_type"])
-    return found == p["expected_value"], "{} {} = {}".format(p["domain"], p["limit_item"], found)
+    return found[1] == p["expected_value"], "{} {} = {}".format(p["domain"], p["limit_item"],
+                                                               found[1])
 
 
 KINDS = {
@@ -140,6 +178,12 @@ KINDS = {
 SYSCTL_CONF = "/etc/sysctl.d/99-netflex.conf"
 LIMITS_CONF = "/etc/security/limits.d/99-netflex.conf"
 SCMD = "/usr/cnc/bin/scmd"
+DNF = "/usr/bin/dnf"          # RHEL 8/9; RHEL 7 only has yum
+# What is applied at boot, highest priority first: systemd-sysctl merges these by
+# basename (the first dir holding a name wins) and reads them sorted by basename;
+# /etc/sysctl.conf comes last (normally already read via 99-sysctl.conf -> ../sysctl.conf).
+SYSCTL_DIRS = ("/etc/sysctl.d", "/run/sysctl.d", "/usr/local/lib/sysctl.d", "/usr/lib/sysctl.d")
+SYSCTL_MAIN = "/etc/sysctl.conf"
 
 
 def _cmd_detail(r):
@@ -153,27 +197,59 @@ def _cmd_detail(r):
 
 def _replace_lines(path, keep, new_line):
     """Rewrite path keeping the lines for which keep(line) is true, then append
-    new_line. Written to a temp file and renamed so a reader never sees half a file."""
+    new_line. A symlink is followed (the link stays); bytes that are not UTF-8 and
+    line endings survive untouched; an existing file keeps its mode and owner.
+    Written to a temp file, fsynced and renamed so a reader never sees half a file.
+    Only a missing file reads as empty; any other read error is raised."""
+    path = os.path.realpath(path)
     try:
-        with open(path) as fh:
-            lines = fh.read().splitlines(True)
-    except (IOError, OSError):
-        lines = []
+        with open(path, encoding="utf-8", errors="surrogateescape", newline="") as fh:
+            text = fh.read()
+        st = os.stat(path)
+    except (IOError, OSError) as e:
+        if e.errno != errno.ENOENT:
+            raise
+        text, st = "", None
+    parts = text.split("\n")
+    lines = [ln + "\n" for ln in parts[:-1]] + ([parts[-1] + "\n"] if parts[-1] else [])
     lines = [ln for ln in lines if keep(ln)]
-    if lines and not lines[-1].endswith("\n"):
-        lines[-1] += "\n"
     lines.append(new_line + "\n")
     d = os.path.dirname(path)
     if d and not os.path.isdir(d):
         os.makedirs(d)
     tmp = path + ".nfupgrader.tmp"
-    with open(tmp, "w") as fh:
-        fh.writelines(lines)
-    os.rename(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8", errors="surrogateescape", newline="") as fh:
+            if st is not None:
+                os.chmod(tmp, stat.S_IMODE(st.st_mode))
+                try:
+                    os.chown(tmp, st.st_uid, st.st_gid)
+                except OSError:
+                    pass
+            fh.writelines(lines)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.rename(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _arg_ok(value):
+    """A package/unit name that cannot be taken for an option."""
+    return bool(value) and not value.startswith("-")
+
+
+def _pkg_tool():
+    return "dnf" if os.path.exists(DNF) else "yum"
 
 
 def _fix_rpm(host, p):
-    r = host.run(["dnf", "install", "-y", p["pkg"]], timeout=600)
+    tool = _pkg_tool()
+    r = host.run([tool, "install", "-y", p["pkg"]], timeout=600)
     if r.rc != 0:
         return False, _cmd_detail(r)
     return True, "{} installed".format(p["pkg"])
@@ -181,7 +257,7 @@ def _fix_rpm(host, p):
 
 def _fix_service(host, p):
     name = p["name"]
-    r = host.run(["systemctl", "start", name], timeout=30)
+    r = host.run(["systemctl", "start", name], timeout=90)     # a unit may take a while to start
     if r.rc != 0:
         return False, "start failed, " + _cmd_detail(r)
     r = host.run(["systemctl", "enable", name], timeout=30)
@@ -190,16 +266,64 @@ def _fix_service(host, p):
     return True, "{} started and enabled".format(name)
 
 
+def _sysctl_key(line):
+    """The normalized key a sysctl.d line sets ('kernel/shmmax' == 'kernel.shmmax';
+    whitespace and a leading '-' ignored), or None for comments/non-assignments."""
+    s = line.strip()
+    if not s or s[0] in "#;" or "=" not in s:
+        return None
+    key = re.sub(r"\s+", "", s.split("=", 1)[0]).lstrip("-")
+    return key.replace("/", ".") if key else None
+
+
+def _sysctl_files():
+    """The sysctl files applied at boot, in the order they are applied."""
+    by_name = {}
+    for d in SYSCTL_DIRS:
+        for path in glob.glob(os.path.join(d, "*.conf")):
+            by_name.setdefault(os.path.basename(path), path)
+    files, seen = [], set()
+    for path in [by_name[b] for b in sorted(by_name)] + [SYSCTL_MAIN]:
+        real = os.path.realpath(path)
+        if real not in seen:
+            seen.add(real)
+            files.append(path)
+    return files
+
+
+def _sysctl_boot_winner(param):
+    """(file, value) of the last definition of param applied at boot, or None."""
+    want = _sysctl_key(param + "=")
+    found = None
+    for path in _sysctl_files():
+        for line in (_read_text(path) or "").splitlines():
+            if _sysctl_key(line) == want:
+                found = (path, line.split("=", 1)[1].strip())
+    return found
+
+
+def _same_file(a, b):
+    return os.path.realpath(a) == os.path.realpath(b)
+
+
 def _fix_kernel_param(host, p):
     setting = "{}={}".format(p["param"], p["expected_value"])
     r = host.run(["sysctl", "-w", setting], timeout=10)
     if r.rc != 0:
         return False, _cmd_detail(r)
-    key = p["param"] + "="
+    key = _sysctl_key(setting)
     try:
-        _replace_lines(SYSCTL_CONF, lambda ln: not ln.replace(" ", "").startswith(key), setting)
-    except (IOError, OSError) as e:
+        _replace_lines(SYSCTL_CONF, lambda ln: _sysctl_key(ln) != key, setting)
+    except (IOError, OSError, ValueError) as e:
         return True, "WARNING: {} set live but not persisted: {}".format(setting, e)
+    win = _sysctl_boot_winner(p["param"])
+    if win is None:
+        return True, "WARNING: set live and persisted in {}, but {} is not read at boot".format(
+            SYSCTL_CONF, SYSCTL_CONF)
+    if not _same_file(win[0], SYSCTL_CONF) and \
+            " ".join(win[1].split()) != " ".join(p["expected_value"].split()):
+        return True, "WARNING: set live and persisted in {}, but {} sets {}={} at boot".format(
+            SYSCTL_CONF, win[0], p["param"], win[1])
     return True, "{} set and persisted in {}".format(setting, SYSCTL_CONF)
 
 
@@ -212,8 +336,14 @@ def _fix_ulimit(host, p):
         return not (len(parts) >= 4 and parts[:3] == head)
     try:
         _replace_lines(LIMITS_CONF, keep, entry)
-    except (IOError, OSError) as e:
+    except (IOError, OSError, ValueError) as e:
         return False, "could not write {}: {}".format(LIMITS_CONF, e)
+    win = _ulimit_winner(p)
+    if win is None:
+        return True, "WARNING: written to {} but it is not read by pam_limits".format(LIMITS_CONF)
+    if win[1] != p["expected_value"]:
+        return True, "WARNING: written to {} but overridden by {} ({})".format(
+            LIMITS_CONF, win[0], win[1])
     return True, "'{}' written to {}".format(entry, LIMITS_CONF)
 
 
@@ -227,7 +357,7 @@ def _fix_touchfile(host, p):
 
 # kind -> (describe(params) -> str, apply(host, params) -> (ok, detail))
 FIXES = {
-    "rpm_installed": (lambda p: "dnf install -y {}".format(p["pkg"]), _fix_rpm),
+    "rpm_installed": (lambda p: "{} install -y {}".format(_pkg_tool(), p["pkg"]), _fix_rpm),
     "service_active": (lambda p: "systemctl start {0} && systemctl enable {0}".format(p["name"]),
                        _fix_service),
     "kernel_param": (lambda p: "sysctl -w {}={} (persisted in {})".format(
@@ -239,15 +369,28 @@ FIXES = {
                   _fix_touchfile),
 }
 
+# kind -> params -> bool: names that must never reach a root command line.
+_FIX_ARGS_OK = {
+    "rpm_installed": lambda p: _arg_ok(p["pkg"]),
+    "service_active": lambda p: _arg_ok(p["name"]),
+    "touchfile": lambda p: _touchfile_name_ok(p["file"]),
+}
+
+
+def _fix_args_ok(kind, p):
+    ok = _FIX_ARGS_OK.get(kind)
+    return ok is None or ok(p)
+
 
 def describe_fix(check):
     """One line saying what the fix for this check would do, or None."""
     f = FIXES.get(check.get("kind"))
     if f is None:
         return None
+    p = check.get("params", {})
     try:
-        return f[0](check.get("params", {}))
-    except (KeyError, TypeError):
+        return f[0](p) if _fix_args_ok(check.get("kind"), p) else None
+    except (KeyError, TypeError, AttributeError):
         return None
 
 
@@ -256,8 +399,11 @@ def apply_fix(host, check):
     f = FIXES.get(check.get("kind"))
     if f is None:
         return False, "no fix for kind {}".format(check.get("kind"))
+    p = check.get("params", {})
     try:
-        return f[1](host, check.get("params", {}))
+        if not _fix_args_ok(check.get("kind"), p):
+            return False, "invalid name for a {} fix".format(check.get("kind"))
+        return f[1](host, p)
     except Exception as e:
         return False, "fix error: {}".format(e)
 

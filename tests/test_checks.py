@@ -1,6 +1,23 @@
+import os
+import stat
+import subprocess
+import sys
+import tempfile
 import unittest
 from nfupgrader import checks
 from nfupgrader.host import FakeHost, RunResult
+
+
+class RecordingHost(object):
+    """Maps tuple(argv) -> RunResult (default rc 0) and records (argv, timeout)."""
+
+    def __init__(self, responses=None):
+        self.responses = responses or {}
+        self.calls = []
+
+    def run(self, argv, timeout=None):
+        self.calls.append((list(argv), timeout))
+        return self.responses.get(tuple(argv), RunResult(0, "", ""))
 
 
 class TestKinds(unittest.TestCase):
@@ -84,18 +101,43 @@ class TestKinds(unittest.TestCase):
         self.assertTrue(checks.KINDS["kernel_param"](h, {"param": "kernel.pid_max", "expected_value": "65000"})[0])
         self.assertFalse(checks.KINDS["kernel_param"](h, {"param": "kernel.pid_max", "expected_value": "99999"})[0])
 
+    def test_kernel_param_whitespace_insensitive(self):
+        h = FakeHost({("sysctl", "net.ipv4.tcp_rmem"):
+                      RunResult(0, "net.ipv4.tcp_rmem = 4096\t87380\t6291456\n", "")})
+        self.assertTrue(checks.KINDS["kernel_param"](
+            h, {"param": "net.ipv4.tcp_rmem", "expected_value": "4096 87380  6291456"})[0])
+
+    def test_touchfile_rejects_path_names(self):
+        for bad in ("a/b", "../ems", ".", "..", "/etc/x"):
+            h = RecordingHost()
+            self.assertEqual(checks.KINDS["touchfile"](h, {"file": bad}),
+                             (False, "invalid touchfile name"), bad)
+            self.assertEqual(h.calls, [])
+
     def test_ulimit(self):
-        out = "# comment\ncmm soft nproc 32768\ncmm hard nproc 32768\n"
-        cmd = ("sh", "-c", "cat /etc/security/limits.conf /etc/security/limits.d/*.conf 2>/dev/null")
-        h = FakeHost({cmd: RunResult(0, out, "")})
-        self.assertTrue(checks.KINDS["ulimit"](h, {"domain": "cmm", "limit_type": "soft",
-                                                   "limit_item": "nproc", "expected_value": "32768"})[0])
-        self.assertFalse(checks.KINDS["ulimit"](h, {"domain": "cmm", "limit_type": "hard",
-                                                    "limit_item": "nproc", "expected_value": "999"})[0])
-
-
-import os
-import tempfile
+        d = tempfile.mkdtemp()
+        saved = (checks.LIMITS_MAIN, checks.LIMITS_DIR)
+        checks.LIMITS_MAIN = os.path.join(d, "limits.conf")
+        checks.LIMITS_DIR = os.path.join(d, "limits.d")
+        try:
+            os.makedirs(checks.LIMITS_DIR)
+            open(checks.LIMITS_MAIN, "w").write("# comment\ncmm soft nproc 1024\n")
+            open(os.path.join(checks.LIMITS_DIR, "90-a.conf"), "w").write(
+                "cmm soft nproc 32768\ncmm hard nproc 32768\n")
+            open(os.path.join(checks.LIMITS_DIR, "ignored.txt"), "w").write("cmm hard nproc 1\n")
+            h = FakeHost()
+            self.assertEqual(checks.KINDS["ulimit"](h, {"domain": "cmm", "limit_type": "soft",
+                                                        "limit_item": "nproc",
+                                                        "expected_value": "32768"}),
+                             (True, "cmm nproc = 32768"))
+            self.assertFalse(checks.KINDS["ulimit"](h, {"domain": "cmm", "limit_type": "hard",
+                                                        "limit_item": "nproc",
+                                                        "expected_value": "999"})[0])
+            self.assertFalse(checks.KINDS["ulimit"](h, {"domain": "x", "limit_type": "hard",
+                                                        "limit_item": "nproc",
+                                                        "expected_value": "1"})[0])
+        finally:
+            checks.LIMITS_MAIN, checks.LIMITS_DIR = saved
 
 
 class TestRun(unittest.TestCase):
@@ -166,27 +208,34 @@ class TestRun(unittest.TestCase):
             self.assertIn(k, r)
 
 
-class RecordingHost(object):
-    """Maps tuple(argv) -> RunResult (default rc 0) and records (argv, timeout)."""
-
-    def __init__(self, responses=None):
-        self.responses = responses or {}
-        self.calls = []
-
-    def run(self, argv, timeout=None):
-        self.calls.append((list(argv), timeout))
-        return self.responses.get(tuple(argv), RunResult(0, "", ""))
-
-
 class TestFixes(unittest.TestCase):
+    NAMES = ("SYSCTL_CONF", "SYSCTL_DIRS", "SYSCTL_MAIN", "LIMITS_CONF", "LIMITS_MAIN",
+             "LIMITS_DIR", "DNF")
+
     def setUp(self):
-        d = tempfile.mkdtemp()
-        self._saved = (checks.SYSCTL_CONF, checks.LIMITS_CONF)
-        checks.SYSCTL_CONF = os.path.join(d, "sysctl.d", "99-netflex.conf")
-        checks.LIMITS_CONF = os.path.join(d, "limits.d", "99-netflex.conf")
+        # Every path a fix reads or writes points into a temp tree: nothing under /etc.
+        self.d = d = tempfile.mkdtemp()
+        self._saved = dict((n, getattr(checks, n)) for n in self.NAMES)
+        checks.SYSCTL_DIRS = (os.path.join(d, "etc", "sysctl.d"), os.path.join(d, "run", "sysctl.d"),
+                              os.path.join(d, "usr", "lib", "sysctl.d"))
+        checks.SYSCTL_CONF = os.path.join(checks.SYSCTL_DIRS[0], "99-netflex.conf")
+        checks.SYSCTL_MAIN = os.path.join(d, "etc", "sysctl.conf")
+        checks.LIMITS_MAIN = os.path.join(d, "limits.conf")
+        checks.LIMITS_DIR = os.path.join(d, "limits.d")
+        checks.LIMITS_CONF = os.path.join(checks.LIMITS_DIR, "99-netflex.conf")
+        checks.DNF = os.path.join(d, "dnf")
+        open(checks.DNF, "w").close()
 
     def tearDown(self):
-        checks.SYSCTL_CONF, checks.LIMITS_CONF = self._saved
+        for n, v in self._saved.items():
+            setattr(checks, n, v)
+
+    def write(self, path, text, mode="w"):
+        dname = os.path.dirname(path)
+        if not os.path.isdir(dname):
+            os.makedirs(dname)
+        with open(path, mode) as fh:
+            fh.write(text)
 
     def check(self, kind, **params):
         return {"name": "c", "kind": kind, "when": "preflight", "phase": "any",
@@ -226,6 +275,7 @@ class TestFixes(unittest.TestCase):
         ok, detail = checks.apply_fix(h, self.check("service_active", name="firewalld"))
         self.assertTrue(ok)
         self.assertTrue(detail.startswith("WARNING:"))
+        self.assertEqual([c[1] for c in h.calls], [90, 30])   # start may be slow
         h = RecordingHost({("systemctl", "start", "firewalld"): RunResult(5, "", "boom")})
         ok, _ = checks.apply_fix(h, self.check("service_active", name="firewalld"))
         self.assertFalse(ok)
@@ -260,6 +310,172 @@ class TestFixes(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(open(checks.LIMITS_CONF).read(),
                          "cnc hard nofile 4096\ncnc soft nofile 65536\n")
+
+    # --- rpm tool (RHEL 7 has no dnf) ---
+
+    def test_rpm_fix_uses_yum_without_dnf(self):
+        checks.DNF = os.path.join(self.d, "no-such-dnf")
+        c = self.check("rpm_installed", pkg="ksh")
+        self.assertEqual(checks.describe_fix(c), "yum install -y ksh")
+        h = RecordingHost()
+        self.assertTrue(checks.apply_fix(h, c)[0])
+        self.assertEqual(h.calls, [(["yum", "install", "-y", "ksh"], 600)])
+
+    # --- bad names ---
+
+    def test_bad_names_have_no_fix_and_are_refused(self):
+        bad = [self.check("rpm_installed", pkg="-y"), self.check("rpm_installed", pkg="--x"),
+               self.check("service_active", name="--now"),
+               self.check("touchfile", file="../ems"), self.check("touchfile", file="a/b"),
+               self.check("touchfile", file="."), self.check("touchfile", file="..")]
+        for c in bad:
+            self.assertIsNone(checks.describe_fix(c), c)
+            h = RecordingHost()
+            ok, detail = checks.apply_fix(h, c)
+            self.assertFalse(ok, c)
+            self.assertEqual(h.calls, [], c)
+            self.assertIn("invalid", detail)
+
+    # --- _replace_lines robustness ---
+
+    def test_non_utf8_bytes_preserved_under_c_locale(self):
+        raw = b"# caf\xe9 \xc3\xa9 \xff\r\nkernel.shmmax = 1\nvm.x=1\n"
+        self.write(checks.SYSCTL_CONF, raw, "wb")
+        code = ("import sys; sys.path.insert(0, sys.argv[1]); from nfupgrader import checks; "
+                "checks._replace_lines(sys.argv[2], "
+                "lambda ln: not ln.startswith('kernel.shmmax'), 'kernel.shmmax=2')")
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        env = dict(os.environ, LC_ALL="C", LANG="C")
+        env.pop("PYTHONIOENCODING", None)
+        r = subprocess.run([sys.executable, "-c", code, root, checks.SYSCTL_CONF], env=env,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           universal_newlines=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(open(checks.SYSCTL_CONF, "rb").read(),
+                         b"# caf\xe9 \xc3\xa9 \xff\r\nvm.x=1\nkernel.shmmax=2\n")
+
+    def test_utf8_comment_preserved_in_process(self):
+        raw = "# r\u00e9glage \u2014 ok\ncnc soft nofile 1\n".encode("utf-8")
+        self.write(checks.LIMITS_CONF, raw, "wb")
+        ok, _ = checks.apply_fix(RecordingHost(), self.check(
+            "ulimit", domain="cnc", limit_type="soft", limit_item="nofile", expected_value="2"))
+        self.assertTrue(ok)
+        self.assertEqual(open(checks.LIMITS_CONF, "rb").read(),
+                         "# r\u00e9glage \u2014 ok\ncnc soft nofile 2\n".encode("utf-8"))
+
+    def test_mode_preserved(self):
+        self.write(checks.SYSCTL_CONF, "a.b=0\n")
+        os.chmod(checks.SYSCTL_CONF, 0o600)
+        ok, _ = checks.apply_fix(RecordingHost(), self.check("kernel_param", param="a.b",
+                                                             expected_value="1"))
+        self.assertTrue(ok)
+        self.assertEqual(stat.S_IMODE(os.stat(checks.SYSCTL_CONF).st_mode), 0o600)
+        self.assertEqual(open(checks.SYSCTL_CONF).read(), "a.b=1\n")
+
+    def test_symlink_target_updated_and_link_kept(self):
+        target = os.path.join(self.d, "real-limits.conf")
+        self.write(target, "cnc soft nofile 1\n")
+        os.makedirs(checks.LIMITS_DIR)
+        os.symlink(target, checks.LIMITS_CONF)
+        ok, _ = checks.apply_fix(RecordingHost(), self.check(
+            "ulimit", domain="cnc", limit_type="soft", limit_item="nofile", expected_value="2"))
+        self.assertTrue(ok)
+        self.assertTrue(os.path.islink(checks.LIMITS_CONF))
+        self.assertEqual(open(target).read(), "cnc soft nofile 2\n")
+        self.assertEqual(os.listdir(self.d).count("real-limits.conf.nfupgrader.tmp"), 0)
+
+    def test_tab_separated_kernel_line_replaced(self):
+        self.write(checks.SYSCTL_CONF, "kernel.shmmax\t=\t1\n -kernel.shmmax = 3\nvm.x=1\n")
+        checks.apply_fix(RecordingHost(), self.check("kernel_param", param="kernel.shmmax",
+                                                     expected_value="2"))
+        self.assertEqual(open(checks.SYSCTL_CONF).read(), "vm.x=1\nkernel.shmmax=2\n")
+
+    def test_prefix_param_does_not_clobber_longer_key(self):
+        self.write(checks.SYSCTL_CONF, "kernel.shmmax = 5\n")
+        checks.apply_fix(RecordingHost(), self.check("kernel_param", param="kernel.shm",
+                                                     expected_value="1"))
+        self.assertEqual(open(checks.SYSCTL_CONF).read(), "kernel.shmmax = 5\nkernel.shm=1\n")
+
+    def test_unreadable_target_is_a_write_failure_and_leaves_no_temp(self):
+        os.makedirs(checks.LIMITS_CONF)        # a directory: read fails with EISDIR, not ENOENT
+        ok, detail = checks.apply_fix(RecordingHost(), self.check(
+            "ulimit", domain="cnc", limit_type="soft", limit_item="nofile", expected_value="2"))
+        self.assertFalse(ok)
+        self.assertIn("could not write", detail)
+        self.assertEqual(os.listdir(checks.LIMITS_DIR), ["99-netflex.conf"])
+
+    def test_unencodable_value_is_a_write_failure(self):
+        ok, detail = checks.apply_fix(RecordingHost(), self.check(
+            "ulimit", domain="cnc", limit_type="soft", limit_item="nofile",
+            expected_value="\ud800"))
+        self.assertFalse(ok)
+        self.assertIn("could not write", detail)
+        ok, detail = checks.apply_fix(RecordingHost(), self.check(
+            "kernel_param", param="a.b", expected_value="\ud800"))
+        self.assertTrue(ok)
+        self.assertIn("not persisted", detail)
+
+    # --- honest ulimit result ---
+
+    def ulimit_check(self, value="65536"):
+        return self.check("ulimit", domain="cnc", limit_type="soft", limit_item="nofile",
+                          expected_value=value)
+
+    def test_ulimit_overridden_by_later_file_warns(self):
+        later = os.path.join(checks.LIMITS_DIR, "cnc.conf")      # sorts after 99-netflex.conf
+        self.write(later, "cnc soft nofile 1024\n")
+        ok, detail = checks.apply_fix(RecordingHost(), self.ulimit_check())
+        self.assertTrue(ok)
+        self.assertEqual(detail, "WARNING: written to {} but overridden by {} (1024)".format(
+            checks.LIMITS_CONF, later))
+        self.assertFalse(checks.KINDS["ulimit"](RecordingHost(), self.ulimit_check()["params"])[0])
+
+    def test_ulimit_earlier_entries_do_not_warn(self):
+        self.write(checks.LIMITS_MAIN, "cnc soft nofile 1024\n")
+        self.write(os.path.join(checks.LIMITS_DIR, "10-a.conf"), "cnc soft nofile 2048\n")
+        ok, detail = checks.apply_fix(RecordingHost(), self.ulimit_check())
+        self.assertTrue(ok)
+        self.assertFalse(detail.startswith("WARNING"), detail)
+        self.assertTrue(checks.KINDS["ulimit"](RecordingHost(), self.ulimit_check()["params"])[0])
+
+    # --- honest kernel_param persistence ---
+
+    def kp(self, value="68719476736"):
+        return self.check("kernel_param", param="kernel.shmmax", expected_value=value)
+
+    def test_sysctl_conf_wins_at_boot_warns(self):
+        self.write(checks.SYSCTL_MAIN, "kernel.shmmax = 1\n")
+        ok, detail = checks.apply_fix(RecordingHost(), self.kp())
+        self.assertTrue(ok)
+        self.assertEqual(detail, "WARNING: set live and persisted in {}, but {} sets "
+                                 "kernel.shmmax=1 at boot".format(checks.SYSCTL_CONF,
+                                                                  checks.SYSCTL_MAIN))
+
+    def test_later_sysctl_d_file_warns_slash_form_too(self):
+        later = os.path.join(checks.SYSCTL_DIRS[2], "zz-vendor.conf")
+        self.write(later, "kernel/shmmax\t= 7\n")
+        ok, detail = checks.apply_fix(RecordingHost(), self.kp())
+        self.assertTrue(ok)
+        self.assertIn("but {} sets kernel.shmmax=7 at boot".format(later), detail)
+
+    def test_same_basename_in_lower_dir_is_masked(self):
+        self.write(os.path.join(checks.SYSCTL_DIRS[2], "99-netflex.conf"), "kernel.shmmax = 1\n")
+        self.write(os.path.join(checks.SYSCTL_DIRS[1], "10-early.conf"), "kernel.shmmax = 2\n")
+        ok, detail = checks.apply_fix(RecordingHost(), self.kp())
+        self.assertTrue(ok)
+        self.assertFalse(detail.startswith("WARNING"), detail)
+
+    def test_sysctl_conf_symlink_read_once_at_its_sysctl_d_position(self):
+        # 99-sysctl.conf -> ../sysctl.conf: sysctl.conf is read there, not again at the end,
+        # so a later sysctl.d file setting the expected value still wins.
+        self.write(checks.SYSCTL_MAIN, "kernel.shmmax = 1\n")
+        os.makedirs(checks.SYSCTL_DIRS[0])
+        os.symlink(checks.SYSCTL_MAIN, os.path.join(checks.SYSCTL_DIRS[0], "99-sysctl.conf"))
+        self.write(os.path.join(checks.SYSCTL_DIRS[0], "99-zz.conf"),
+                   "kernel.shmmax = 68719476736\n")
+        ok, detail = checks.apply_fix(RecordingHost(), self.kp())
+        self.assertTrue(ok)
+        self.assertFalse(detail.startswith("WARNING"), detail)
 
     def test_touchfile_uses_scmd(self):
         h = RecordingHost()

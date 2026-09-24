@@ -3,7 +3,7 @@ import json
 import os
 import tempfile
 import unittest
-from nfupgrader import api
+from nfupgrader import api, checks
 from nfupgrader import reports, snapjobs
 from nfupgrader.auth import TokenAuth
 from nfupgrader.audit import AuditLog
@@ -573,6 +573,13 @@ class TestCheckFix(unittest.TestCase):
         host.responses[("dnf", "install", "-y", "ksh")] = RunResult(0, "Complete!\n", "")
         self.ctx = base._replace(host=host, checks_path=FIX_FIXTURE, phase="stage")
         self.sid = self.ctx.auth.redeem("TOK", "127.0.0.1")
+        # dnf "exists" regardless of this machine (RHEL 7 would fall back to yum).
+        self._dnf = checks.DNF
+        checks.DNF = os.path.join(self.tmp, "dnf")
+        open(checks.DNF, "w").close()
+
+    def tearDown(self):
+        checks.DNF = self._dnf
 
     def fix(self, payload, cookies=None):
         status, _, body = api.dispatch(
