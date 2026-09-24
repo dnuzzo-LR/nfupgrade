@@ -60,6 +60,10 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn("suggestUpgradeMode(p);", self.js.split("function refreshProgress(", 1)[1])
         self.assertIn("modeTouched = true", self.js)
 
+    def test_counter_shows_one_based_step(self):
+        fn = self.js.split("function refreshProgress(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn('"Step " + (p.step ? p.step : "–") + " / " + p.total', fn)
+
     def test_all_required_ids_present(self):
         missing = [i for i in REQUIRED_IDS if ('id="%s"' % i) not in self.html]
         self.assertEqual(missing, [], "index.html missing IDs: %s" % missing)

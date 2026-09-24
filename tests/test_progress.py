@@ -67,5 +67,23 @@ class TestPhaseInference(unittest.TestCase):
         open(os.path.join(d, ".h1_STATE"), "w").write("swistart\n")
         self.assertEqual(progress.read_state("h1", d), "swistart")
 
+
+class TestStepNumber(unittest.TestCase):
+    def test_step_is_one_based(self):
+        self.assertEqual(progress.compute_progress("stage", "swsstart", True)["step"], 1)
+        self.assertEqual(progress.compute_progress("stage", "swscopycnc", True)["step"], 4)
+        self.assertEqual(progress.compute_progress("stage", "swscopycnc", False)["step"], 4)  # died there
+
+    def test_done_is_last_step(self):
+        p = progress.compute_progress("stage", "swscomplete", False)
+        self.assertEqual((p["step"], p["total"]), (6, 6))
+        self.assertEqual(progress.compute_progress("upgrade", "swidone", False)["step"], 9)
+
+    def test_not_started_or_unknown_has_no_step(self):
+        self.assertIsNone(progress.compute_progress("upgrade", "swscomplete", False)["step"])
+        self.assertIsNone(progress.compute_progress("stage", "weird", True)["step"])
+        d = tempfile.mkdtemp()
+        self.assertIsNone(progress.read_progress("h1", "stage", d, running=False)["step"])
+
 if __name__ == "__main__":
     unittest.main()

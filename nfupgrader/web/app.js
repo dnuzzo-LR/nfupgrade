@@ -87,7 +87,8 @@ function refreshProgress() {
     document.getElementById("status").textContent = p.status;
     document.getElementById("current").textContent =
       (p.current || "-") + (p.label ? " — " + p.label : "");
-    document.getElementById("counter").textContent = p.completed + " / " + p.total;
+    document.getElementById("counter").textContent =
+      "Step " + (p.step ? p.step : "–") + " / " + p.total;
     var pct = p.total ? Math.round((p.completed / p.total) * 100) : 0;
     document.getElementById("bar-fill").style.width = pct + "%";
   });

@@ -11,6 +11,10 @@ _TERMINAL = {"stage": "swscomplete", "upgrade": "swidone"}
 def compute_progress(phase, current, running):
     """Pure: map a phase + current state + liveness to a progress dict.
 
+    completed counts finished states (drives the bar); step is the 1-based
+    number of the state in progress (total once done, None when not started or
+    the state is unknown).
+
     status is one of: done, running, not_started, died. In the upgrade phase a
     box still at the stage terminal state with nothing running has simply not
     started the upgrade yet. (A missing state file is not_started too; that is
@@ -27,11 +31,18 @@ def compute_progress(phase, current, running):
         status = "not_started"
     else:
         status = "died"
+    if status == "done":
+        step = total
+    elif status == "not_started" or idx < 0:
+        step = None
+    else:
+        step = idx + 1
     return {
         "phase": phase,
         "current": current,
         "label": steps.label(current),
         "completed": completed,
+        "step": step,
         "total": total,
         "status": status,
     }
@@ -62,6 +73,6 @@ def read_progress(hostname, phase, inclogdir, running):
     if current is None:
         return {
             "phase": phase, "current": None, "label": "",
-            "completed": 0, "total": steps.total(phase), "status": "not_started",
+            "completed": 0, "step": None, "total": steps.total(phase), "status": "not_started",
         }
     return compute_progress(phase, current, running)
