@@ -200,17 +200,20 @@ function refreshInfo() {
 
 function renderChecks(el, data, overridable) {
   var html = "<table class='checks'><tr><th></th><th>Check</th><th>Detail</th>" +
-             (overridable ? "<th>Override</th>" : "") + "</tr>";
+             (overridable ? "<th>Override</th><th>Fix</th>" : "") + "</tr>";
   data.results.forEach(function (r) {
     var mark = r.passed ? "✅" : (r.severity === "ERROR" ? "❌" : "⚠️");
-    var ovr = "";
+    var extra = "";
     if (overridable) {
-      ovr = "<td>" + (r.blocking
-        ? "<input type='checkbox' class='ovr' data-name='" + r.name + "'>" : "") + "</td>";
+      extra = "<td>" + (r.blocking
+        ? "<input type='checkbox' class='ovr' data-name='" + esc(r.name) + "'>" : "") + "</td>" +
+        "<td>" + (r.fix
+        ? "<button type='button' class='fix' data-name='" + esc(r.name) + "' data-fix='" +
+          esc(r.fix) + "' title='" + esc(r.fix) + "'>Fix</button>" : "") + "</td>";
     }
-    html += "<tr class='" + (r.passed ? "pass" : "fail-" + r.severity) + "'>" +
-            "<td>" + mark + "</td><td>" + r.name + " — " + r.description + "</td>" +
-            "<td>" + (r.detail || "") + "</td>" + ovr + "</tr>";
+    html += "<tr class='" + (r.passed ? "pass" : "fail-" + esc(r.severity)) + "'>" +
+            "<td>" + mark + "</td><td>" + esc(r.name) + " — " + esc(r.description) + "</td>" +
+            "<td>" + esc(r.detail || "") + "</td>" + extra + "</tr>";
   });
   html += "</table>";
   el.innerHTML = html;
@@ -248,10 +251,30 @@ function runPreflight() {
   });
 }
 
+function runFix(btn) {
+  var name = btn.getAttribute("data-name");
+  var host = lastInfo && lastInfo.host ? lastInfo.host : "this host";
+  if (!window.confirm("Run as root on " + host + ":\n\n" + btn.getAttribute("data-fix") +
+                      "\n\nContinue?")) return;
+  Array.prototype.forEach.call(document.querySelectorAll("#preflight button.fix"),
+                               function (b) { b.disabled = true; });
+  btn.textContent = "Fixing…";
+  var msg = document.getElementById("fix-msg");
+  msg.textContent = "Fixing " + name + "…";
+  postJSON("/api/checks/fix", { name: name, phase: document.getElementById("mode").value },
+    function (status, d) {
+      if (status === 200 && d.fix) msg.textContent = (d.fix.ok ? "✅ " : "❌ ") + name + ": " + d.fix.detail;
+      else if (status === 200) msg.textContent = "✅ " + name + ": already passing";
+      else msg.textContent = "❌ " + name + ": " + (d.error || ("HTTP " + status));
+      runPreflight();
+    });
+}
+
 function resetPreflight() {
   preflight = null;
   document.getElementById("preflight").innerHTML = "";
   document.getElementById("override-box").style.display = "none";
+  document.getElementById("fix-msg").textContent = "";
   updateLaunchState();
 }
 
@@ -554,6 +577,10 @@ loadDepots();
 document.getElementById("btn-check").onclick = runPreflight;
 document.getElementById("btn-launch").onclick = launch;
 document.getElementById("preflight").onchange = updateLaunchState;
+document.getElementById("preflight").onclick = function (ev) {
+  var b = ev.target.closest ? ev.target.closest("button.fix") : null;
+  if (b && !b.disabled) runFix(b);
+};
 document.getElementById("reason").oninput = updateLaunchState;
 document.getElementById("mode").onchange = resetPreflight;
 

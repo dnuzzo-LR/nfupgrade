@@ -8,7 +8,7 @@ REQUIRED_IDS = [
     "host", "app-badge", "phase", "status", "bar-fill", "counter", "current",
     "about-grid", "links", "cfg-load-depots", "cfg-depot", "cfg-depot-msg", "cfg-form",
     "cfg-preview", "cfg-save", "cfg-msg", "cfg-rendered", "cfg-issues",
-    "mode", "btn-check", "btn-launch", "launch-msg", "preflight", "override-box",
+    "mode", "btn-check", "btn-launch", "launch-msg", "preflight", "fix-msg", "override-box",
     "override-msg", "reason", "postflight", "site-table", "min-sev", "log",
     "btn-reports-run", "reports-job", "reports-list", "cmp-a", "cmp-b",
     "cmp-style", "btn-compare", "cmp-table", "local-detail",
@@ -110,6 +110,14 @@ class TestWebAssets(unittest.TestCase):
     def test_interrupted_before_notice_shown(self):
         self.assertIn("else if (!reportsJob && d.notice) {", self.js)
         self.assertIn('getElementById("reports-job").textContent = d.notice', self.js)
+
+    def test_preflight_fix_buttons(self):
+        self.assertIn("esc(r.fix)", self.js)
+        self.assertIn("function runFix(", self.js)
+        self.assertIn('postJSON("/api/checks/fix"', self.js)
+        self.assertIn("Run as root on ", self.js)
+        fix_fn = self.js.split("function runFix(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("runPreflight();", fix_fn)
 
     def test_es5_only(self):
         # ES5-only per project constraints: no arrow functions, let/const, or
