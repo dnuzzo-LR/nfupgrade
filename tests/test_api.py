@@ -10,9 +10,19 @@ from nfupgrader.audit import AuditLog
 from nfupgrader.host import FakeHost, RunResult
 
 
+def running_responses(running):
+    """FakeHost entries for launcher.upgrader_running: a real-looking nf_upgrader
+    process (ksh running the script) when running, else no pgrep match."""
+    if not running:
+        return {("pgrep", "-f", "nf_upgrader"): RunResult(1, "", "")}
+    return {("pgrep", "-f", "nf_upgrader"): RunResult(0, "4242\n", ""),
+            ("cat", "/proc/4242/cmdline"):
+                RunResult(0, "/usr/bin/ksh\0/opt/nfupgrader/nf_upgrader\0-s\0", "")}
+
+
 def make_ctx(tmp, running=True):
-    host = FakeHost({
-        ("pgrep", "-f", "nf_upgrader"): RunResult(0 if running else 1, "", ""),
+    responses = running_responses(running)
+    responses.update({
         # localinfo commands (app down: no tier-2 needed)
         ("rpm", "-qi", "netFLEX-CORE"): RunResult(0, "Version     : 5.4.0\nRelease     : 29\n", ""),
         ("rpm", "-qi", "netFLEX-CORE-PATCH"): RunResult(1, "", ""),
@@ -31,6 +41,7 @@ def make_ctx(tmp, running=True):
         ("find", "/depot", "-maxdepth", "1", "-name", "netFLEX-CORE*.rpm"):
             RunResult(0, "/depot/netFLEX-CORE-5.5.0.03-1.x86_64.rpm\n", ""),
     })
+    host = FakeHost(responses)
     open(os.path.join(tmp, ".h1_STATE"), "w").write("swscopycnc\n")
     open(os.path.join(tmp, "trace"), "w").write("2026-09-18 10:00:00 INFO  hi\n")
     cnfg = os.path.join(tmp, "cnc.cnfg")
@@ -61,8 +72,7 @@ class TestApi(unittest.TestCase):
         return self._sid
 
     def _set_running(self, running):
-        self.ctx.host.responses[("pgrep", "-f", "nf_upgrader")] = \
-            RunResult(0 if running else 1, "", "")
+        self.ctx.host.responses.update(running_responses(running))
 
     def test_progress_requires_session(self):
         status, _, _ = api.dispatch("GET", "/api/progress", {}, b"", {}, "127.0.0.1", self.ctx)
@@ -372,8 +382,7 @@ class TestReportsApi(unittest.TestCase):
         self.assertEqual(self._post("/api/launch", {"mode": "stage"})[0], 202)
 
     def _set_running(self, running):
-        self.ctx.host.responses[("pgrep", "-f", "nf_upgrader")] = \
-            RunResult(0 if running else 1, "", "")
+        self.ctx.host.responses.update(running_responses(running))
 
     def test_run_409_while_upgrader_running(self):
         self._set_running(True)

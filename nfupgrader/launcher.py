@@ -4,6 +4,7 @@ We never edit the customer's config; we write a derived config that sources it
 and forces PROMPTFORVALIDATE=NO (so confirm_setup does not block on read). The
 launch is detached (nf_upgrade backgrounds nf_upgrader and returns); liveness is
 discovered by process presence, since we never hold the child pid."""
+import os
 import subprocess
 
 _MODE_FLAG = {"stage": "-s", "upgrade": "-u"}
@@ -26,9 +27,40 @@ def write_effective_config(user_config, effective_path):
     return effective_path
 
 
+_SHELLS = ("ksh", "ksh93", "sh", "bash")
+
+
+def is_upgrader_argv(argv):
+    """True iff argv is nf_upgrader itself: exec'd directly, or run by a shell as
+    `<shell> [-opts] .../nf_upgrader ...` (its #!/usr/bin/ksh shebang). An editor,
+    pager or grep that merely names the file is not."""
+    if not argv:
+        return False
+    names = [os.path.basename(a) for a in argv]
+    if names[0] == "nf_upgrader":
+        return True
+    if names[0] in _SHELLS:
+        for arg, name in zip(argv[1:], names[1:]):
+            if arg.startswith("-"):
+                if arg == "-c":          # `sh -c "<command string>"` is a wrapper, not the script
+                    return False
+                continue
+            return name == "nf_upgrader"
+    return False
+
+
 def upgrader_running(host):
-    """True iff an nf_upgrader process is alive on the host."""
-    return host.run(["pgrep", "-f", "nf_upgrader"]).rc == 0
+    """True iff an nf_upgrader process is alive on the host. `pgrep -f` only
+    finds candidates (any command line containing the name); each candidate's
+    exact argv is then read from /proc/<pid>/cmdline."""
+    r = host.run(["pgrep", "-f", "nf_upgrader"])
+    if r.rc != 0:
+        return False
+    for pid in r.out.split():
+        c = host.run(["cat", "/proc/{}/cmdline".format(pid)])
+        if c.rc == 0 and is_upgrader_argv([a for a in c.out.split("\0") if a]):
+            return True
+    return False
 
 
 def launch(nf_upgrade_path, config_path, mode, cwd=None):
