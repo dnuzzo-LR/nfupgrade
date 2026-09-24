@@ -64,6 +64,12 @@ class TestWebAssets(unittest.TestCase):
         fn = self.js.split("function refreshProgress(", 1)[1].split("\nfunction ", 1)[0]
         self.assertIn('"Step " + (p.step ? p.step : "–") + " / " + p.total', fn)
 
+    def test_progress_strip_is_large(self):
+        strip = self.css.split(".progress-strip {", 1)[1].split("}", 1)[0]
+        self.assertIn("font-size: 17px", strip)
+        bar = self.css.split(".progress-strip .bar {", 1)[1].split("}", 1)[0]
+        self.assertIn("height: 22px", bar)
+
     def test_all_required_ids_present(self):
         missing = [i for i in REQUIRED_IDS if ('id="%s"' % i) not in self.html]
         self.assertEqual(missing, [], "index.html missing IDs: %s" % missing)

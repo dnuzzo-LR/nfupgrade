@@ -18,9 +18,9 @@ body { margin: 0; background: var(--bg); color: var(--ink);
 .badge.down { background: var(--err); color: #fff; }
 .badge.unknown { background: var(--unknown); color: #fff; }
 
-.progress-strip { background: #223044; color: #fff; padding: .5rem 1.2rem;
-  display: flex; align-items: center; gap: 1rem; font-size: 13px; }
-.progress-strip .bar { flex: 1; background: #14202f; height: 12px; border-radius: 999px; overflow: hidden; max-width: 420px; }
+.progress-strip { background: #223044; color: #fff; padding: .9rem 1.2rem;
+  display: flex; align-items: center; gap: 1.5rem; font-size: 17px; }
+.progress-strip .bar { flex: 1; background: #14202f; height: 22px; border-radius: 999px; overflow: hidden; max-width: 720px; }
 .progress-strip #bar-fill { background: var(--accent); height: 100%; width: 0; transition: width .3s; }
 
 /* tabs */
