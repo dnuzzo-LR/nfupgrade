@@ -7,7 +7,11 @@ function getJSON(url, cb, onError) {
   x.open("GET", url, true);
   x.onreadystatechange = function () {
     if (x.readyState !== 4) return;
-    if (x.status === 200) cb(JSON.parse(x.responseText));
+    var data = null;
+    if (x.status === 200) {
+      try { data = JSON.parse(x.responseText); } catch (e) { data = null; }
+    }
+    if (data !== null) cb(data);
     else if (onError) onError(x.status);
   };
   x.send();
@@ -18,7 +22,17 @@ function postJSON(url, obj, cb) {
   x.open("POST", url, true);
   x.setRequestHeader("Content-Type", "application/json");
   x.onreadystatechange = function () {
-    if (x.readyState === 4) cb(x.status, x.responseText ? JSON.parse(x.responseText) : {});
+    if (x.readyState !== 4) return;
+    var body = {};
+    // A proxy error page or a dropped connection is not JSON: never leave the
+    // caller waiting on an exception.
+    try {
+      if (x.responseText) body = JSON.parse(x.responseText);
+    } catch (e) {
+      body = { error: "HTTP " + x.status };
+    }
+    if (!body || typeof body !== "object") body = { error: "HTTP " + x.status };
+    cb(x.status, body);
   };
   x.send(JSON.stringify(obj));
 }
@@ -220,6 +234,7 @@ function renderChecks(el, data, overridable) {
 }
 
 var preflight = null;  // last pre-flight /api/checks response for the selected mode
+var fixing = false;    // a check fix is running: Launch and Run checks stay disabled
 
 function overriddenNames() {
   var boxes = document.querySelectorAll("#preflight input.ovr:checked");
@@ -237,7 +252,7 @@ function updateLaunchState() {
   if (missing > 0) msg = missing + " of " + total + " blocking checks not overridden";
   else if (total > 0 && !reason) msg = "reason required to override";
   why.textContent = msg;
-  btn.disabled = msg !== "";
+  btn.disabled = fixing || msg !== "";
 }
 
 function runPreflight() {
@@ -247,6 +262,15 @@ function runPreflight() {
     renderChecks(document.getElementById("preflight"), data, true);
     document.getElementById("override-box").style.display =
       data.blocking.length > 0 ? "block" : "none";
+    updateLaunchState();
+  }, function (status) {
+    // Keep the old table but make it usable again (a fix may have disabled it).
+    Array.prototype.forEach.call(document.querySelectorAll("#preflight button.fix"),
+                                 function (b) { b.disabled = false; b.textContent = "Fix"; });
+    document.getElementById("btn-check").disabled = false;
+    var msg = document.getElementById("fix-msg");
+    var why = "could not re-run checks (HTTP " + status + ")";
+    msg.textContent = msg.textContent ? msg.textContent + " — " + why : why;
     updateLaunchState();
   });
 }
@@ -258,12 +282,29 @@ function runFix(btn) {
                       "\n\nContinue?")) return;
   Array.prototype.forEach.call(document.querySelectorAll("#preflight button.fix"),
                                function (b) { b.disabled = true; });
+  // No launch or re-check while a root fix is changing the system.
+  fixing = true;
+  document.getElementById("btn-launch").disabled = true;
+  document.getElementById("btn-check").disabled = true;
   btn.textContent = "Fixing…";
   var msg = document.getElementById("fix-msg");
   msg.textContent = "Fixing " + name + "…";
   postJSON("/api/checks/fix", { name: name, phase: document.getElementById("mode").value },
     function (status, d) {
-      if (status === 200 && d.fix) msg.textContent = (d.fix.ok ? "✅ " : "❌ ") + name + ": " + d.fix.detail;
+      fixing = false;
+      document.getElementById("btn-check").disabled = false;
+      updateLaunchState();
+      if (status === 200 && d.fix) {
+        var detail = d.fix.detail || "";
+        if (!d.fix.ok) msg.textContent = "❌ " + name + ": " + detail;
+        else if (d.fix.ok && d.result && d.result.passed) {
+          msg.textContent = (detail.indexOf("WARNING") === 0 ? "⚠️ " : "✅ ") + name + ": " + detail;
+        }
+        else {
+          msg.textContent = "⚠️ " + name + ": fix applied but the check still fails — " +
+            ((d.result && d.result.detail) || detail);
+        }
+      }
       else if (status === 200) msg.textContent = "✅ " + name + ": already passing";
       else msg.textContent = "❌ " + name + ": " + (d.error || ("HTTP " + status));
       runPreflight();

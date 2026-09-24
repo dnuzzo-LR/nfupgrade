@@ -119,6 +119,36 @@ class TestWebAssets(unittest.TestCase):
         fix_fn = self.js.split("function runFix(", 1)[1].split("\nfunction ", 1)[0]
         self.assertIn("runPreflight();", fix_fn)
 
+    def _fn(self, name):
+        return self.js.split("function %s(" % name, 1)[1].split("\nfunction ", 1)[0]
+
+    def test_fix_disables_launch_and_check_until_done(self):
+        fix_fn = self._fn("runFix")
+        self.assertIn('getElementById("btn-launch").disabled = true', fix_fn)
+        self.assertIn('getElementById("btn-check").disabled = true', fix_fn)
+        # re-enabled when the fix answers, whatever the answer
+        done = fix_fn.split('postJSON("/api/checks/fix"', 1)[1]
+        self.assertIn('getElementById("btn-check").disabled = false', done)
+        self.assertIn("updateLaunchState();", done)
+
+    def test_fix_result_honest(self):
+        fix_fn = self._fn("runFix")
+        self.assertIn("d.fix.ok && d.result && d.result.passed", fix_fn)
+        self.assertIn(": fix applied but the check still fails \u2014 ", fix_fn)
+
+    def test_preflight_rerun_failure_unsticks_ui(self):
+        pf = self._fn("runPreflight")
+        self.assertIn("could not re-run checks (HTTP ", pf)
+        self.assertIn('getElementById("btn-check").disabled = false', pf)
+        self.assertIn("#preflight button.fix", pf)
+        self.assertIn('getElementById("fix-msg")', pf)
+
+    def test_post_json_survives_non_json_body(self):
+        post = self._fn("postJSON")
+        self.assertIn("try {", post)
+        self.assertIn("JSON.parse(x.responseText)", post)
+        self.assertIn('{ error: "HTTP " + x.status }', post)
+
     def test_es5_only(self):
         # ES5-only per project constraints: no arrow functions, let/const, or
         # template literals in the shipped JS.
