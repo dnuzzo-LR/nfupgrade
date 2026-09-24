@@ -77,7 +77,7 @@
     }
   },
   {
-    "name": "00lvm2",
+    "name": "lvm2",
     "description": "SYSTEM : Logical Volume Management",
     "fail_text": "ERROR",
     "when": "preflight",
@@ -88,7 +88,7 @@
     }
   },
   {
-    "name": "002cronie",
+    "name": "cronie",
     "description": "SYSTEM : Cron Service Package",
     "fail_text": "ERROR",
     "when": "preflight",
@@ -253,7 +253,7 @@
     }
   },
   {
-    "name": "228dialog",
+    "name": "dialog",
     "description": "NETFLEX: A utility for creating TTY dialogs",
     "fail_text": "ERROR",
     "when": "preflight",
@@ -264,7 +264,7 @@
     }
   },
   {
-    "name": "229telnet",
+    "name": "telnet",
     "description": "NETFLEX: Used to communicate with legacy Equipment",
     "fail_text": "ERROR",
     "when": "preflight",
@@ -275,7 +275,7 @@
     }
   },
   {
-    "name": "230gpm",
+    "name": "gpm",
     "description": "NETFLEX: gpm library",
     "fail_text": "ERROR",
     "when": "preflight",
@@ -286,7 +286,7 @@
     }
   },
   {
-    "name": "231sysstat",
+    "name": "sysstat",
     "description": "NETFLEX: Performance Monitoring Tools",
     "fail_text": "ERROR",
     "when": "preflight",
@@ -297,7 +297,7 @@
     }
   },
   {
-    "name": "233tmux",
+    "name": "tmux",
     "description": "SUPPORT: Terminal Multiplexer",
     "fail_text": "WARNING",
     "when": "preflight",
@@ -308,7 +308,7 @@
     }
   },
   {
-    "name": "234curl",
+    "name": "curl",
     "description": "NETFLEX: HTTP Client Tool",
     "fail_text": "ERROR",
     "when": "preflight",
@@ -319,7 +319,7 @@
     }
   },
   {
-    "name": "235gdb",
+    "name": "gdb",
     "description": "SUPPORT: Source Code Debugger",
     "fail_text": "WARNING",
     "when": "preflight",
@@ -330,7 +330,7 @@
     }
   },
   {
-    "name": "236bzip2",
+    "name": "bzip2",
     "description": "SUPPORT: Compression Command",
     "fail_text": "WARNING",
     "when": "preflight",
@@ -341,7 +341,7 @@
     }
   },
   {
-    "name": "237zip",
+    "name": "zip",
     "description": "SUPPORT: Compression Command",
     "fail_text": "WARNING",
     "when": "preflight",
@@ -352,7 +352,7 @@
     }
   },
   {
-    "name": "238wget",
+    "name": "wget",
     "description": "NETFLEX: Web File Downloader",
     "fail_text": "ERROR",
     "when": "preflight",
@@ -374,7 +374,7 @@
     }
   },
   {
-    "name": "239fzf",
+    "name": "fzf",
     "description": "SUPPORT: command-line fuzzy finder {epel}",
     "fail_text": "WARNING",
     "when": "preflight",
@@ -385,7 +385,7 @@
     }
   },
   {
-    "name": "240emacs",
+    "name": "emacs",
     "description": "SUPPORT: The Only Real Editor",
     "fail_text": "WARNING",
     "when": "preflight",
@@ -396,7 +396,7 @@
     }
   },
   {
-    "name": "241mg",
+    "name": "mg",
     "description": "SUPPORT: Tiny Emacs-like editor {epel}",
     "fail_text": "WARNING",
     "when": "preflight",
@@ -418,7 +418,7 @@
     }
   },
   {
-    "name": "243zsh",
+    "name": "zsh",
     "description": "SUPPORT: Z Shell",
     "fail_text": "WARNING",
     "when": "preflight",
@@ -429,7 +429,7 @@
     }
   },
   {
-    "name": "244htop",
+    "name": "htop",
     "description": "SUPPORT: A better top command {epel}",
     "fail_text": "WARNING",
     "when": "preflight",
@@ -440,7 +440,7 @@
     }
   },
   {
-    "name": "245nano",
+    "name": "nano",
     "description": "SUPPORT: Can't live without nano",
     "fail_text": "WARNING",
     "when": "preflight",
@@ -451,7 +451,7 @@
     }
   },
   {
-    "name": "246ne",
+    "name": "ne",
     "description": "SUPPORT: Like nano, just better {epel}",
     "fail_text": "WARNING",
     "when": "preflight",
@@ -462,7 +462,7 @@
     }
   },
   {
-    "name": "247fd",
+    "name": "fd",
     "description": "SUPPORT: Like find, just better {epel}",
     "fail_text": "WARNING",
     "when": "preflight",
@@ -473,7 +473,7 @@
     }
   },
   {
-    "name": "248rg",
+    "name": "rg",
     "description": "SUPPORT: Like grep, just way better {epel}",
     "fail_text": "WARNING",
     "when": "preflight",

@@ -202,6 +202,14 @@ class TestRun(unittest.TestCase):
             self.assertIn(c["kind"], checks.KINDS, "unknown kind: %s" % c["kind"])
             self.assertIn(c.get("when"), ("preflight", "postflight"))
 
+    def test_shipped_check_names_are_clean_and_unique(self):
+        import re
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "nfupgrader", "checks.default.json")
+        names = [c["name"] for c in checks.load_checks(path)]
+        self.assertEqual([n for n in names if re.match(r"^\d", n)], [])
+        self.assertEqual(len(names), len(set(names)))
+
     def test_result_shape(self):
         r = checks.run_checks(self._host(), self._checks(), "preflight", "upgrade", machtype="FEP")[0]
         for k in ("name", "description", "severity", "passed", "detail", "blocking", "fix"):
