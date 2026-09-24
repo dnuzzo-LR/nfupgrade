@@ -117,6 +117,8 @@ function refreshLog() {
     var pre = document.getElementById("log");
     if (d.reset) pre.innerHTML = "";   // a new trace file (new run or phase switch)
     logFile = d.file || "";
+    document.getElementById("log-file").textContent =
+      "Following: " + (d.path || "-") + (d.path && !d.exists ? " (not created yet)" : "");
     d.entries.forEach(function (e) {
       var line = document.createElement("div");
       line.className = "sev-" + e.severity;

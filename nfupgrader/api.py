@@ -188,6 +188,8 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         reset = bool(seen) and seen != name
         chunk = logtail.tail_since(path, 0 if reset else offset, min_severity=min_sev)
         chunk["file"] = name
+        chunk["path"] = path
+        chunk["exists"] = os.path.exists(path)
         chunk["reset"] = reset
         return _json(200, chunk)
 

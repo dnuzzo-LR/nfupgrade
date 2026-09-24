@@ -607,6 +607,15 @@ class TestActivePhase(unittest.TestCase):
         self.assertTrue(d["reset"])
         self.assertEqual([e["msg"] for e in d["entries"]], ["second run"])
 
+    def test_log_reports_full_path_and_existence(self):
+        ctx = self.ctx(phase=None, tracefile=None)
+        d = self.get(ctx, "/api/log", offset="0")
+        self.assertEqual(d["path"], os.path.join(self.tmp, "stage_inc_h1"))   # nothing yet
+        self.assertFalse(d["exists"])
+        open(os.path.join(self.tmp, "stage_inc_h1.42"), "w").write("x\n")
+        d = self.get(ctx, "/api/log", offset="0")
+        self.assertEqual((d["path"], d["exists"]), (os.path.join(self.tmp, "stage_inc_h1.42"), True))
+
     def test_explicit_tracefile_still_wins(self):
         d = self.get(self.ctx(), "/api/log", offset="0")
         self.assertEqual(d["file"], "trace")

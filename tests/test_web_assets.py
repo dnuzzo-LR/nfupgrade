@@ -12,7 +12,7 @@ REQUIRED_IDS = [
     "override-msg", "reason", "postflight", "site-table", "min-sev", "log",
     "btn-reports-run", "reports-job", "reports-list", "cmp-a", "cmp-b",
     "cmp-style", "btn-compare", "cmp-table", "local-detail",
-    "modal", "modal-title", "modal-body", "modal-ok", "modal-cancel",
+    "log-file", "modal", "modal-title", "modal-body", "modal-ok", "modal-cancel",
 ]
 
 
@@ -101,6 +101,12 @@ class TestWebAssets(unittest.TestCase):
         created = set(re.findall(r"id='([^']+)'", self.js)) | {"load-error"}
         late = sorted(i for i in used - created if ('id="%s"' % i) not in before)
         self.assertEqual(late, [], "defined after the app.js <script> tag: %s" % late)
+
+    def test_log_tab_shows_followed_file(self):
+        fn = self.js.split("function refreshLog(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn('getElementById("log-file").textContent', fn)
+        self.assertIn("d.path", fn)
+        self.assertIn("(not created yet)", fn)
 
     def test_all_required_ids_present(self):
         missing = [i for i in REQUIRED_IDS if ('id="%s"' % i) not in self.html]
