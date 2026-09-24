@@ -162,8 +162,143 @@ class TestRun(unittest.TestCase):
 
     def test_result_shape(self):
         r = checks.run_checks(self._host(), self._checks(), "preflight", "upgrade", machtype="FEP")[0]
-        for k in ("name", "description", "severity", "passed", "detail", "blocking"):
+        for k in ("name", "description", "severity", "passed", "detail", "blocking", "fix"):
             self.assertIn(k, r)
+
+
+class RecordingHost(object):
+    """Maps tuple(argv) -> RunResult (default rc 0) and records (argv, timeout)."""
+
+    def __init__(self, responses=None):
+        self.responses = responses or {}
+        self.calls = []
+
+    def run(self, argv, timeout=None):
+        self.calls.append((list(argv), timeout))
+        return self.responses.get(tuple(argv), RunResult(0, "", ""))
+
+
+class TestFixes(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        self._saved = (checks.SYSCTL_CONF, checks.LIMITS_CONF)
+        checks.SYSCTL_CONF = os.path.join(d, "sysctl.d", "99-netflex.conf")
+        checks.LIMITS_CONF = os.path.join(d, "limits.d", "99-netflex.conf")
+
+    def tearDown(self):
+        checks.SYSCTL_CONF, checks.LIMITS_CONF = self._saved
+
+    def check(self, kind, **params):
+        return {"name": "c", "kind": kind, "when": "preflight", "phase": "any",
+                "fail_text": "ERROR", "params": params}
+
+    def test_describe_only_for_fixable_kinds(self):
+        self.assertEqual(checks.describe_fix(self.check("rpm_installed", pkg="ksh")),
+                         "dnf install -y ksh")
+        self.assertIn("systemctl start firewalld",
+                      checks.describe_fix(self.check("service_active", name="firewalld")))
+        self.assertIn("sysctl -w kernel.shmmax=68719476736", checks.describe_fix(
+            self.check("kernel_param", param="kernel.shmmax", expected_value="68719476736")))
+        self.assertIn("/usr/cnc/features/ems",
+                      checks.describe_fix(self.check("touchfile", file="ems")))
+        self.assertIsNone(checks.describe_fix(self.check("system_define", variable="X")))
+        self.assertIsNone(checks.describe_fix(self.check("dbcheck_clean")))
+
+    def test_rpm_fix(self):
+        h = RecordingHost()
+        ok, detail = checks.apply_fix(h, self.check("rpm_installed", pkg="ksh"))
+        self.assertTrue(ok)
+        self.assertEqual(h.calls, [(["dnf", "install", "-y", "ksh"], 600)])
+        h = RecordingHost({("dnf", "install", "-y", "nope"):
+                           RunResult(1, "", "Last metadata...\nError: Unable to find a match: nope\n")})
+        ok, detail = checks.apply_fix(h, self.check("rpm_installed", pkg="nope"))
+        self.assertFalse(ok)
+        self.assertTrue(detail.startswith("rc=1: "))
+        self.assertIn("Unable to find a match: nope", detail)
+
+    def test_service_fix_start_and_enable(self):
+        h = RecordingHost()
+        ok, detail = checks.apply_fix(h, self.check("service_active", name="firewalld"))
+        self.assertTrue(ok)
+        self.assertEqual([c[0] for c in h.calls], [["systemctl", "start", "firewalld"],
+                                                   ["systemctl", "enable", "firewalld"]])
+        h = RecordingHost({("systemctl", "enable", "firewalld"): RunResult(1, "", "no")})
+        ok, detail = checks.apply_fix(h, self.check("service_active", name="firewalld"))
+        self.assertTrue(ok)
+        self.assertTrue(detail.startswith("WARNING:"))
+        h = RecordingHost({("systemctl", "start", "firewalld"): RunResult(5, "", "boom")})
+        ok, _ = checks.apply_fix(h, self.check("service_active", name="firewalld"))
+        self.assertFalse(ok)
+        self.assertEqual(len(h.calls), 1)
+
+    def test_kernel_param_sets_and_persists(self):
+        os.makedirs(os.path.dirname(checks.SYSCTL_CONF))
+        open(checks.SYSCTL_CONF, "w").write("# ours\nkernel.shmmax = 1\nvm.swappiness=10\n")
+        h = RecordingHost()
+        ok, detail = checks.apply_fix(h, self.check("kernel_param", param="kernel.shmmax",
+                                                    expected_value="68719476736"))
+        self.assertTrue(ok)
+        self.assertEqual(h.calls, [(["sysctl", "-w", "kernel.shmmax=68719476736"], 10)])
+        self.assertEqual(open(checks.SYSCTL_CONF).read(),
+                         "# ours\nvm.swappiness=10\nkernel.shmmax=68719476736\n")
+
+    def test_kernel_param_creates_file_and_fails_on_sysctl_error(self):
+        ok, _ = checks.apply_fix(RecordingHost(), self.check("kernel_param", param="a.b",
+                                                             expected_value="1"))
+        self.assertTrue(ok)
+        self.assertEqual(open(checks.SYSCTL_CONF).read(), "a.b=1\n")
+        h = RecordingHost({("sysctl", "-w", "a.b=2"): RunResult(255, "", "permission denied")})
+        ok, detail = checks.apply_fix(h, self.check("kernel_param", param="a.b", expected_value="2"))
+        self.assertFalse(ok)
+        self.assertEqual(open(checks.SYSCTL_CONF).read(), "a.b=1\n")   # unchanged
+
+    def test_ulimit_replaces_matching_entry(self):
+        os.makedirs(os.path.dirname(checks.LIMITS_CONF))
+        open(checks.LIMITS_CONF, "w").write("cnc soft nofile 1024\ncnc hard nofile 4096\n")
+        ok, detail = checks.apply_fix(RecordingHost(), self.check(
+            "ulimit", domain="cnc", limit_type="soft", limit_item="nofile", expected_value="65536"))
+        self.assertTrue(ok)
+        self.assertEqual(open(checks.LIMITS_CONF).read(),
+                         "cnc hard nofile 4096\ncnc soft nofile 65536\n")
+
+    def test_touchfile_uses_scmd(self):
+        h = RecordingHost()
+        ok, _ = checks.apply_fix(h, self.check("touchfile", file="ems"))
+        self.assertTrue(ok)
+        self.assertEqual(h.calls, [(["/usr/cnc/bin/scmd", "touch", "/usr/cnc/features/ems"], 30)])
+
+    def test_apply_unfixable_and_exception(self):
+        ok, detail = checks.apply_fix(RecordingHost(), self.check("dbcheck_clean"))
+        self.assertFalse(ok)
+
+        class Boom(object):
+            def run(self, argv, timeout=None):
+                raise OSError("exec failed")
+        ok, detail = checks.apply_fix(Boom(), self.check("rpm_installed", pkg="ksh"))
+        self.assertFalse(ok)
+        self.assertIn("exec failed", detail)
+
+    def test_results_carry_fix_only_when_failed_and_fixable(self):
+        h = FakeHost({("rpm", "-q", "ksh"): RunResult(0, "ksh-1\n", ""),
+                      ("rpm", "-q", "lvm2"): RunResult(1, "not installed\n", "")})
+        cl = [self.check("rpm_installed", pkg="ksh"), self.check("rpm_installed", pkg="lvm2"),
+              self.check("dbcheck_clean")]
+        cl[0]["name"], cl[1]["name"], cl[2]["name"] = "ksh", "lvm2", "db"
+        res = dict((r["name"], r) for r in checks.run_checks(h, cl, "preflight", "stage"))
+        self.assertIsNone(res["ksh"]["fix"])                       # passed
+        self.assertEqual(res["lvm2"]["fix"], "dnf install -y lvm2")
+        self.assertIsNone(res["db"]["fix"])                        # not fixable
+
+    def test_find_check_and_evaluate(self):
+        cl = [dict(self.check("rpm_installed", pkg="ksh"), name="ksh"),
+              dict(self.check("rpm_installed", pkg="x"), name="x", phase="upgrade")]
+        self.assertEqual(checks.find_check(cl, "ksh", "preflight", "stage")["name"], "ksh")
+        self.assertIsNone(checks.find_check(cl, "x", "preflight", "stage"))   # wrong phase
+        self.assertIsNone(checks.find_check(cl, "nope", "preflight", "stage"))
+        r = checks.evaluate(FakeHost({("rpm", "-q", "ksh"): RunResult(0, "ksh\n", "")}),
+                            cl[0], "preflight")
+        self.assertTrue(r["passed"])
+        self.assertIsNone(r["fix"])
 
 
 if __name__ == "__main__":

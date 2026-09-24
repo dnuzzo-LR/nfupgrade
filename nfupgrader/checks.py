@@ -2,8 +2,10 @@
 evaluator fn(host, params) -> (passed: bool, detail: str) run through Host.run.
 A JSON list binds kinds to a moment (preflight/postflight), a phase, and an
 optional MACHTYPE. Pre-flight ERRORs block Launch (override logged); everything
-post-flight is advisory."""
+post-flight is advisory. Some kinds also have a fix (FIXES) that can be applied
+from the UI."""
 import json
+import os
 import re
 
 from nfupgrader import localinfo
@@ -133,6 +135,133 @@ KINDS = {
 }
 
 
+# --- fixes (ported from nf-install system_checks fix_*; the service runs as root) ---
+
+SYSCTL_CONF = "/etc/sysctl.d/99-netflex.conf"
+LIMITS_CONF = "/etc/security/limits.d/99-netflex.conf"
+SCMD = "/usr/cnc/bin/scmd"
+
+
+def _cmd_detail(r):
+    """'rc=N: <last lines of stderr, else stdout>' for a failed fix command."""
+    lines = (r.err.strip() or r.out.strip()).splitlines()[-3:]
+    text = " | ".join(ln.strip() for ln in lines)
+    if len(text) > 300:
+        text = text[-300:]
+    return "rc={}: {}".format(r.rc, text) if text else "rc={}".format(r.rc)
+
+
+def _replace_lines(path, keep, new_line):
+    """Rewrite path keeping the lines for which keep(line) is true, then append
+    new_line. Written to a temp file and renamed so a reader never sees half a file."""
+    try:
+        with open(path) as fh:
+            lines = fh.read().splitlines(True)
+    except (IOError, OSError):
+        lines = []
+    lines = [ln for ln in lines if keep(ln)]
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    lines.append(new_line + "\n")
+    d = os.path.dirname(path)
+    if d and not os.path.isdir(d):
+        os.makedirs(d)
+    tmp = path + ".nfupgrader.tmp"
+    with open(tmp, "w") as fh:
+        fh.writelines(lines)
+    os.rename(tmp, path)
+
+
+def _fix_rpm(host, p):
+    r = host.run(["dnf", "install", "-y", p["pkg"]], timeout=600)
+    if r.rc != 0:
+        return False, _cmd_detail(r)
+    return True, "{} installed".format(p["pkg"])
+
+
+def _fix_service(host, p):
+    name = p["name"]
+    r = host.run(["systemctl", "start", name], timeout=30)
+    if r.rc != 0:
+        return False, "start failed, " + _cmd_detail(r)
+    r = host.run(["systemctl", "enable", name], timeout=30)
+    if r.rc != 0:
+        return True, "WARNING: {} started but not enabled, {}".format(name, _cmd_detail(r))
+    return True, "{} started and enabled".format(name)
+
+
+def _fix_kernel_param(host, p):
+    setting = "{}={}".format(p["param"], p["expected_value"])
+    r = host.run(["sysctl", "-w", setting], timeout=10)
+    if r.rc != 0:
+        return False, _cmd_detail(r)
+    key = p["param"] + "="
+    try:
+        _replace_lines(SYSCTL_CONF, lambda ln: not ln.replace(" ", "").startswith(key), setting)
+    except (IOError, OSError) as e:
+        return True, "WARNING: {} set live but not persisted: {}".format(setting, e)
+    return True, "{} set and persisted in {}".format(setting, SYSCTL_CONF)
+
+
+def _fix_ulimit(host, p):
+    head = [p["domain"], p["limit_type"], p["limit_item"]]
+    entry = " ".join(head + [p["expected_value"]])
+
+    def keep(ln):
+        parts = ln.split()
+        return not (len(parts) >= 4 and parts[:3] == head)
+    try:
+        _replace_lines(LIMITS_CONF, keep, entry)
+    except (IOError, OSError) as e:
+        return False, "could not write {}: {}".format(LIMITS_CONF, e)
+    return True, "'{}' written to {}".format(entry, LIMITS_CONF)
+
+
+def _fix_touchfile(host, p):
+    path = "/usr/cnc/features/" + p["file"]
+    r = host.run([SCMD, "touch", path], timeout=30)
+    if r.rc != 0:
+        return False, _cmd_detail(r)
+    return True, "{} created".format(path)
+
+
+# kind -> (describe(params) -> str, apply(host, params) -> (ok, detail))
+FIXES = {
+    "rpm_installed": (lambda p: "dnf install -y {}".format(p["pkg"]), _fix_rpm),
+    "service_active": (lambda p: "systemctl start {0} && systemctl enable {0}".format(p["name"]),
+                       _fix_service),
+    "kernel_param": (lambda p: "sysctl -w {}={} (persisted in {})".format(
+        p["param"], p["expected_value"], SYSCTL_CONF), _fix_kernel_param),
+    "ulimit": (lambda p: "add '{} {} {} {}' to {}".format(
+        p["domain"], p["limit_type"], p["limit_item"], p["expected_value"], LIMITS_CONF),
+               _fix_ulimit),
+    "touchfile": (lambda p: "{} touch /usr/cnc/features/{}".format(SCMD, p["file"]),
+                  _fix_touchfile),
+}
+
+
+def describe_fix(check):
+    """One line saying what the fix for this check would do, or None."""
+    f = FIXES.get(check.get("kind"))
+    if f is None:
+        return None
+    try:
+        return f[0](check.get("params", {}))
+    except (KeyError, TypeError):
+        return None
+
+
+def apply_fix(host, check):
+    """Run the fix for a check; returns (ok, detail). Never raises."""
+    f = FIXES.get(check.get("kind"))
+    if f is None:
+        return False, "no fix for kind {}".format(check.get("kind"))
+    try:
+        return f[1](host, check.get("params", {}))
+    except Exception as e:
+        return False, "fix error: {}".format(e)
+
+
 def load_checks(path):
     """Load a JSON list of check definitions."""
     with open(path) as fh:
@@ -151,32 +280,40 @@ def _applies(check, when, phase, machtype):
     return True
 
 
+def evaluate(host, c, when):
+    """Run one check definition; returns its result dict:
+    {name, description, severity, passed, detail, blocking, fix}."""
+    kind = KINDS.get(c["kind"])
+    if kind is None:
+        passed, detail = False, "unknown kind: {}".format(c["kind"])
+    else:
+        try:
+            passed, detail = kind(host, c.get("params", {}))
+        except Exception as e:                       # a check must never crash the run
+            passed, detail = False, "check error: {}".format(e)
+    severity = c.get("fail_text", "ERROR")
+    return {
+        "name": c.get("name", c["kind"]),
+        "description": c.get("description", ""),
+        "severity": severity,
+        "passed": passed,
+        "detail": detail,
+        "blocking": (when == "preflight" and severity == "ERROR" and not passed),
+        "fix": None if passed else describe_fix(c),
+    }
+
+
 def run_checks(host, check_list, when, phase, machtype=None):
-    """Evaluate every check bound to (when, phase, machtype). Returns a list of
-    result dicts: {name, description, severity, passed, detail, blocking}."""
-    results = []
+    """Evaluate every check bound to (when, phase, machtype)."""
+    return [evaluate(host, c, when) for c in check_list if _applies(c, when, phase, machtype)]
+
+
+def find_check(check_list, name, when, phase, machtype=None):
+    """The definition named `name` that applies to (when, phase, machtype), or None."""
     for c in check_list:
-        if not _applies(c, when, phase, machtype):
-            continue
-        kind = KINDS.get(c["kind"])
-        if kind is None:
-            passed, detail = False, "unknown kind: {}".format(c["kind"])
-        else:
-            try:
-                passed, detail = kind(host, c.get("params", {}))
-            except Exception as e:                       # a check must never crash the run
-                passed, detail = False, "check error: {}".format(e)
-        severity = c.get("fail_text", "ERROR")
-        blocking = (when == "preflight" and severity == "ERROR" and not passed)
-        results.append({
-            "name": c.get("name", c["kind"]),
-            "description": c.get("description", ""),
-            "severity": severity,
-            "passed": passed,
-            "detail": detail,
-            "blocking": blocking,
-        })
-    return results
+        if c.get("name", c["kind"]) == name and _applies(c, when, phase, machtype):
+            return c
+    return None
 
 
 def blocking_failures(results):
