@@ -53,6 +53,22 @@ class TestDepotDirs(unittest.TestCase):
         self.assertEqual(httpd.resolve_depot_dirs(None, None), ["/opt/apt/upgrade"])
 
 
+class TestIncLogDir(unittest.TestCase):
+    def test_explicit_env_wins(self):
+        self.assertEqual(httpd.resolve_inclogdir("/usr/cnc/logs", "/opt/nfupgrader"),
+                         "/usr/cnc/logs")
+
+    def test_defaults_to_start_dir_logs(self):
+        self.assertEqual(httpd.resolve_inclogdir(None, "/opt/nfupgrader"), "/opt/nfupgrader/logs")
+        self.assertEqual(httpd.resolve_inclogdir("", "/opt/nfupgrader"), "/opt/nfupgrader/logs")
+
+    def test_created_when_missing(self):
+        start = tempfile.mkdtemp()
+        d = httpd.ensure_dir(httpd.resolve_inclogdir(None, start))
+        self.assertTrue(os.path.isdir(os.path.join(start, "logs")))
+        self.assertEqual(httpd.ensure_dir(d), d)       # already there: fine
+
+
 class TestRunSh(unittest.TestCase):
     def test_records_start_dir_before_cd(self):
         path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "run.sh")

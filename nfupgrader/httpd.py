@@ -78,6 +78,19 @@ def resolve_depot_dirs(env_dirs, start_dir):
     return dirs
 
 
+def resolve_inclogdir(env_dir, start_dir):
+    """nfupgrader's own directory (audit, saved/effective config, report
+    snapshots): an explicit INCLOGDIR wins, else <dir run.sh started from>/logs."""
+    return env_dir or os.path.join(start_dir, "logs")
+
+
+def ensure_dir(path):
+    """Create path (and parents) if missing; return it."""
+    if not os.path.isdir(path):
+        os.makedirs(path)
+    return path
+
+
 def perform_launch(ctx, mode):
     """Spawn nf_upgrade. The active config is one chosen in the UI (state), else
     NFU_USER_CONFIG; an effective config is generated from it (sources it + forces
@@ -253,7 +266,9 @@ def main(argv=None):
     """Bind 127.0.0.1 on $NFU_PORT (or ephemeral) and print the URL+token."""
     here = os.path.dirname(os.path.abspath(__file__))
     webdir = os.path.join(here, "web")
-    inclogdir = os.environ.get("INCLOGDIR", "/usr/cnc/logs")
+    # run.sh cd's to its own directory, so it passes the caller's directory along.
+    start_dir = os.environ.get("NFU_START_DIR") or os.getcwd()
+    inclogdir = ensure_dir(resolve_inclogdir(os.environ.get("INCLOGDIR"), start_dir))
     hostname = os.uname()[1]
     # Unset -> decided per request (last launch / state file / newest trace).
     phase = os.environ.get("NFU_PHASE") or None
@@ -266,9 +281,7 @@ def main(argv=None):
     launch_cwd = resolve_launch_cwd(os.environ.get("NFU_LAUNCH_CWD"), user_config)
     cnc_cnfg_path = os.environ.get("NFU_CNC_CNFG", "/usr/cnc/features/cnc.cnfg")
     checks_path = os.environ.get("NFU_CHECKS", os.path.join(here, "checks.default.json"))
-    # run.sh cd's to its own directory, so it passes the caller's directory along.
-    depot_dirs = resolve_depot_dirs(os.environ.get("NFU_DEPOT_DIRS"),
-                                    os.environ.get("NFU_START_DIR") or os.getcwd())
+    depot_dirs = resolve_depot_dirs(os.environ.get("NFU_DEPOT_DIRS"), start_dir)
     state = {}
     if user_config:
         state["user_config"] = user_config

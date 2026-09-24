@@ -44,9 +44,9 @@ the host being upgraded.
 | `NFU_BIND` | `127.0.0.1` | Bind address. Set to `0.0.0.0` (or an interface IP) to reach the UI by hostname/ip without an ssh tunnel. |
 | `NFU_URL_HOST` | hostname (when `NFU_BIND` is wildcard) | Host printed in the access URL, if the DNS name differs from `hostname`. |
 | `NFU_PORT` | ephemeral | TCP port. |
-| `INCLOGDIR` | `/usr/cnc/logs` | Where nfupgrader keeps its own files (audit log, saved/effective config, report snapshots). The upgrade's state file and traces are read from the `INCLOGDIR` set in the active upgrade config (Config tab save, else `NFU_USER_CONFIG`), falling back to this. Overview shows both when they differ. |
+| `INCLOGDIR` | `<dir run.sh was started from>/logs` (created if missing) | Where nfupgrader keeps its own files (audit log, saved/effective config, report snapshots). The upgrade's state file and traces are read from the `INCLOGDIR` set in the active upgrade config (Config tab save, else `NFU_USER_CONFIG`), falling back to this. Overview shows both when they differ. |
 | `NFU_PHASE` | (unset: inferred) | `stage` or `upgrade` — which phase the progress strip and Log tab follow before anything is launched. Once you Launch, the mode you launched takes over. Unset, it is inferred from the state file (`swi*`/`postinstall` → upgrade, otherwise stage). |
-| `NFU_TRACEFILE` | newest `${INCLOGDIR}/${phase}_inc_$(hostname).<pid>` | Trace file the Log tab tails. Unset (recommended), the newest trace nf_upgrader wrote for the current phase is followed, switching automatically on a new run. |
+| `NFU_TRACEFILE` | newest `<upgrade log dir>/${phase}_inc_$(hostname).<pid>` (the upgrade log dir is `INCLOGDIR` from the active upgrade config) | Trace file the Log tab tails. Unset (recommended), the newest trace nf_upgrader wrote for the current phase is followed, switching automatically on a new run. |
 | `NFU_USER_CONFIG` | (unset) | Customer's upgrade `.cfg`. On Launch, an effective copy is generated that sources it and forces `PROMPTFORVALIDATE=NO`; the original is never edited. Required to use the Launch buttons. |
 | `NFU_EFFECTIVE_CONFIG` | `${INCLOGDIR}/nfupgrader_effective.cfg` | Where the generated effective config is written and read. |
 | `NFU_LAUNCH_CWD` | dir of `NFU_USER_CONFIG` | Directory `nf_upgrade` runs from (for relative `DEPOTFILE`/`linux_packages` lookup). |
@@ -65,7 +65,6 @@ for it. Just running the service launches nothing; it only observes.
 
 ```sh
 export NFU_BIND=0.0.0.0 NFU_PORT=8099
-export INCLOGDIR=/usr/cnc/logs
 export NFU_USER_CONFIG=/opt/apt/upgrade/my.cfg   # only needed to Launch
 ./run.sh    # browse the printed http://<host>:8099/auth?token=… URL
 ```
