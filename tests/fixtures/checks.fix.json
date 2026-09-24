@@ -1,0 +1,9 @@
+[
+  {"name": "pkg-ksh", "description": "ksh installed", "fail_text": "ERROR",
+   "when": "preflight", "phase": "any", "kind": "rpm_installed", "params": {"pkg": "ksh"}},
+  {"name": "sdi-mode", "description": "SDI test mode", "fail_text": "WARNING",
+   "when": "preflight", "phase": "any", "kind": "system_define",
+   "params": {"variable": "M_SDI_TEST_MODE", "expected_values": ["1"]}},
+  {"name": "upgrade-only", "description": "only in upgrade", "fail_text": "ERROR",
+   "when": "preflight", "phase": "upgrade", "kind": "rpm_installed", "params": {"pkg": "x"}}
+]

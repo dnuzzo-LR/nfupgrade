@@ -3,6 +3,7 @@ shaping so the HTTP layer (httpd.py) stays a thin adapter and the API is
 unit-testable without sockets."""
 import collections
 import json
+import threading
 
 import os
 
@@ -20,6 +21,9 @@ Context = collections.namedtuple("Context", [
 # checks, the config builder, or reports; default them so the dispatcher/tests
 # need not supply each one. (namedtuple field defaults via __new__.__defaults__ — py3.6.)
 Context.__new__.__defaults__ = (None,) * 11
+
+# One check fix at a time: fixes change system state as root (dnf, sysctl, limits).
+_FIX_LOCK = threading.Lock()
 
 
 def _default_peer_factory(name):
@@ -147,6 +151,41 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         factory = ctx.peer_host_factory or _default_peer_factory
         view = siteview.gather_site(hosts, ctx.hostname, cnfg, ctx.host, factory)
         return _json(200, view)
+
+    if path == "/api/checks/fix" and method == "POST":
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+        except ValueError:
+            return _json(400, {"error": "bad json"})
+        if launcher.upgrader_running(ctx.host):
+            return _json(409, {"error": "upgrade in progress"})
+        if _snapshot_busy(ctx):
+            return _json(409, {"error": "report snapshot in progress"})
+        phase = payload.get("phase") or _active_phase(ctx)
+        if phase not in ("stage", "upgrade"):
+            return _json(400, {"error": "phase must be stage or upgrade"})
+        name = payload.get("name") or ""
+        check = checks.find_check(_load_checks(ctx), name, "preflight", phase, _machtype(ctx))
+        if check is None:
+            return _json(404, {"error": "unknown check"})
+        what = checks.describe_fix(check)
+        if what is None:
+            return _json(400, {"error": "no fix for this check"})
+        before = checks.evaluate(ctx.host, check, "preflight")
+        if before["passed"]:
+            return _json(200, {"fix": None, "result": before})
+        if not _FIX_LOCK.acquire(False):
+            return _json(409, {"error": "another fix is running"})
+        try:
+            ctx.audit.record("check_fix_start", name=name, kind=check["kind"], fix=what,
+                             client=client_ip)
+            ok, detail = checks.apply_fix(ctx.host, check)
+            ctx.audit.record("check_fix", name=name, kind=check["kind"], ok=ok, detail=detail,
+                             client=client_ip)
+            after = checks.evaluate(ctx.host, check, "preflight")
+        finally:
+            _FIX_LOCK.release()
+        return _json(200, {"fix": {"ok": ok, "detail": detail}, "result": after})
 
     if path == "/api/checks" and method == "GET":
         when = (query.get("when") or ["preflight"])[0]

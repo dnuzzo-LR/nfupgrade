@@ -551,5 +551,96 @@ class TestActivePhase(unittest.TestCase):
         d = self.get(self.ctx(), "/api/log", offset="0")
         self.assertEqual(d["file"], "trace")
 
+
+FIX_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "checks.fix.json")
+
+
+class InstallingHost(FakeHost):
+    """rpm -q ksh fails until `dnf install -y ksh` has run."""
+
+    def run(self, argv, timeout=None):
+        if list(argv) == ["dnf", "install", "-y", "ksh"]:
+            self.responses[("rpm", "-q", "ksh")] = RunResult(0, "ksh-1\n", "")
+        return FakeHost.run(self, argv, timeout)
+
+
+class TestCheckFix(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        base = make_ctx(self.tmp, running=False)
+        host = InstallingHost(dict(base.host.responses))
+        host.responses[("rpm", "-q", "ksh")] = RunResult(1, "package ksh is not installed\n", "")
+        host.responses[("dnf", "install", "-y", "ksh")] = RunResult(0, "Complete!\n", "")
+        self.ctx = base._replace(host=host, checks_path=FIX_FIXTURE, phase="stage")
+        self.sid = self.ctx.auth.redeem("TOK", "127.0.0.1")
+
+    def fix(self, payload, cookies=None):
+        status, _, body = api.dispatch(
+            "POST", "/api/checks/fix", {}, json.dumps(payload).encode(),
+            {"nfu_sid": self.sid} if cookies is None else cookies, "127.0.0.1", self.ctx)
+        return status, json.loads(body.decode())
+
+    def events(self):
+        path = os.path.join(self.tmp, "audit.jsonl")
+        return [json.loads(l) for l in open(path)] if os.path.exists(path) else []
+
+    def test_requires_session(self):
+        self.assertEqual(self.fix({"name": "pkg-ksh"}, cookies={})[0], 401)
+
+    def test_listing_offers_fix_for_failed_fixable_check(self):
+        status, _, body = api.dispatch("GET", "/api/checks",
+                                       {"when": ["preflight"], "phase": ["stage"]}, b"",
+                                       {"nfu_sid": self.sid}, "127.0.0.1", self.ctx)
+        res = dict((r["name"], r) for r in json.loads(body.decode())["results"])
+        self.assertEqual(res["pkg-ksh"]["fix"], "dnf install -y ksh")
+        self.assertIsNone(res["sdi-mode"]["fix"])
+
+    def test_fix_runs_audits_and_rechecks(self):
+        status, d = self.fix({"name": "pkg-ksh", "phase": "stage"})
+        self.assertEqual(status, 200)
+        self.assertEqual(d["fix"], {"ok": True, "detail": "ksh installed"})
+        self.assertTrue(d["result"]["passed"])
+        ev = [(e["event"], e.get("name")) for e in self.events()]
+        self.assertIn(("check_fix_start", "pkg-ksh"), ev)
+        self.assertIn(("check_fix", "pkg-ksh"), ev)
+        done = [e for e in self.events() if e["event"] == "check_fix"][0]
+        self.assertTrue(done["ok"])
+
+    def test_already_passing_runs_nothing(self):
+        self.ctx.host.responses[("rpm", "-q", "ksh")] = RunResult(0, "ksh-1\n", "")
+        status, d = self.fix({"name": "pkg-ksh"})
+        self.assertEqual(status, 200)
+        self.assertIsNone(d["fix"])
+        self.assertNotIn(["dnf", "install", "-y", "ksh"], self.ctx.host.calls)
+        self.assertNotIn("check_fix_start", [e["event"] for e in self.events()])
+
+    def test_refusals(self):
+        self.assertEqual(self.fix({"name": "nope"})[0], 404)
+        self.assertEqual(self.fix({"name": "upgrade-only", "phase": "stage"})[0], 404)
+        self.assertEqual(self.fix({"name": "sdi-mode"})[0], 400)
+        self.assertEqual(self.fix({"name": "pkg-ksh", "phase": "weird"})[0], 400)
+
+    def test_blocked_while_upgrade_running(self):
+        self.ctx.host.responses.update(running_responses(True))
+        status, d = self.fix({"name": "pkg-ksh"})
+        self.assertEqual((status, d["error"]), (409, "upgrade in progress"))
+
+    def test_blocked_while_snapshot_busy(self):
+        class BusyRunner(object):
+            def busy(self):
+                return True
+        self.ctx = self.ctx._replace(runner=BusyRunner())
+        status, d = self.fix({"name": "pkg-ksh"})
+        self.assertEqual((status, d["error"]), (409, "report snapshot in progress"))
+
+    def test_one_fix_at_a_time(self):
+        self.assertTrue(api._FIX_LOCK.acquire(False))
+        try:
+            status, d = self.fix({"name": "pkg-ksh"})
+        finally:
+            api._FIX_LOCK.release()
+        self.assertEqual((status, d["error"]), (409, "another fix is running"))
+
+
 if __name__ == "__main__":
     unittest.main()
