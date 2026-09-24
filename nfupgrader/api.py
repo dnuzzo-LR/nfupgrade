@@ -257,7 +257,12 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         return _json(200, {"results": results, "blocking": checks.blocking_failures(results)})
 
     if path == "/api/config/fields" and method == "GET":
-        return _json(200, {"fields": cfg.FIELDS})
+        # The upgrade logs where nfupgrader keeps its own files by default: a
+        # fixed place outside the netFLEX load (whose /usr/cnc/logs moves when the
+        # upgrade switches /usr/cnc) and where the progress/log views look.
+        fields = [dict(f, default=ctx.inclogdir) if f["name"] == "INCLOGDIR" and ctx.inclogdir
+                  else f for f in cfg.FIELDS]
+        return _json(200, {"fields": fields})
 
     if path == "/api/config/depots" and method == "GET":
         dirs = ctx.depot_dirs or ["/opt/apt/upgrade", "."]

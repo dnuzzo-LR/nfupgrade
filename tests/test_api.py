@@ -253,7 +253,19 @@ class TestApi(unittest.TestCase):
         status, _, body = api.dispatch("GET", "/api/config/fields", {}, b"",
                                        {"nfu_sid": sid}, "127.0.0.1", self.ctx)
         self.assertEqual(status, 200)
-        self.assertTrue(any(f["name"] == "NEW_GENERIC" for f in json.loads(body.decode())["fields"]))
+        fields = json.loads(body.decode())["fields"]
+        self.assertTrue(any(f["name"] == "NEW_GENERIC" for f in fields))
+
+    def test_config_inclogdir_defaults_to_nfupgrader_logdir(self):
+        sid = self._session()
+        status, _, body = api.dispatch("GET", "/api/config/fields", {}, b"",
+                                       {"nfu_sid": sid}, "127.0.0.1", self.ctx)
+        inc = [f for f in json.loads(body.decode())["fields"] if f["name"] == "INCLOGDIR"][0]
+        self.assertEqual(inc["default"], self.ctx.inclogdir)
+        # the shared field table itself is not modified
+        from nfupgrader import cfg
+        self.assertNotEqual([f for f in cfg.FIELDS if f["name"] == "INCLOGDIR"][0]["default"],
+                            self.ctx.inclogdir)
 
     def test_config_depots(self):
         sid = self._session()

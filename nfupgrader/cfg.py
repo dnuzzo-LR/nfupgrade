@@ -5,7 +5,7 @@ import re
 
 FIELDS = [
     {"name": "INCLOGDIR", "required": True, "kind": "path", "default": "/usr/cnc/logs",
-     "help": "Log directory"},
+     "help": "Upgrade log directory (the form defaults it to nfupgrader's INCLOGDIR)"},
     {"name": "NEW_GENERIC", "required": True, "kind": "string", "help": "Target generic, e.g. 5.5.0"},
     {"name": "NEW_LOAD", "required": True, "kind": "string", "help": "Target load, e.g. 03"},
     {"name": "DEPOTFILE", "required": True, "kind": "path", "help": "CORE RPM path"},
