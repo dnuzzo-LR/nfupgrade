@@ -130,29 +130,82 @@ def _limits_files():
     return [LIMITS_MAIN] + sorted(glob.glob(os.path.join(LIMITS_DIR, "*.conf")))
 
 
+def _ulimit_head(p):
+    return [p["domain"], p["limit_type"], p["limit_item"]]
+
+
+def _limits_entry(path, head):
+    """Value of the last entry for head ([domain, type, item]) in one
+    limits-format file, or None."""
+    val = None
+    for line in (_read_text(path) or "").splitlines():
+        parts = line.split()
+        if parts and parts[0].startswith("#"):
+            continue
+        if len(parts) >= 4 and parts[:3] == head:
+            val = parts[3]
+    return val
+
+
 def _ulimit_winner(p):
     """(file, value) of the effective (last) entry for p's domain/type/item, or None."""
-    head = [p["domain"], p["limit_type"], p["limit_item"]]
+    head = _ulimit_head(p)
     found = None
     for path in _limits_files():
-        text = _read_text(path)
-        for line in (text or "").splitlines():
-            parts = line.split()
-            if parts and parts[0].startswith("#"):
-                continue
-            if len(parts) >= 4 and parts[:3] == head:
-                found = (path, parts[3])
+        val = _limits_entry(path, head)
+        if val is not None:
+            found = (path, val)
     return found
+
+
+def _ulimit_expected(p):
+    """(value, source) the entry must meet. A check may name `reference` files
+    (limits format, e.g. netFLEX's shipped linux-nproc.conf); the first one that
+    has the entry wins, so netFLEX stays the single source of the value. Else
+    params expected_value (source None); (None, None) if neither."""
+    head = _ulimit_head(p)
+    for ref in p.get("reference") or []:
+        val = _limits_entry(ref, head)
+        if val is not None:
+            return val, ref
+    if p.get("expected_value") is not None:
+        return p["expected_value"], None
+    return None, None
+
+
+def _limit_num(v):
+    return float("inf") if v in ("unlimited", "infinity", "-1") else int(v)
+
+
+def _limit_ok(found, expected, compare):
+    """compare "min": found must be at least expected (unlimited counts as
+    infinite); otherwise the values must match exactly."""
+    if compare != "min":
+        return found == expected
+    try:
+        return _limit_num(found) >= _limit_num(expected)
+    except ValueError:
+        return False
 
 
 def _ulimit(host, p):
     """A limits.conf / limits.d entry (domain type item value) that must equal
-    expected_value. Read locally (like its fix) from _limits_files()."""
+    the expected value, or be at least it with compare "min". Read locally (like
+    its fix) from _limits_files()."""
+    expected, source = _ulimit_expected(p)
+    if expected is None:
+        return False, "no reference value ({} not found)".format(
+            ", ".join(p.get("reference") or []) or "expected_value")
+    want = ""
+    if p.get("compare") == "min" or source:
+        want = " (want {}{}{})".format("at least " if p.get("compare") == "min" else "",
+                                       expected, " from " + source if source else "")
     found = _ulimit_winner(p)
     if found is None:
-        return False, "{} {} {} not set".format(p["domain"], p["limit_item"], p["limit_type"])
-    return found[1] == p["expected_value"], "{} {} = {}".format(p["domain"], p["limit_item"],
-                                                               found[1])
+        return False, "{} {} {} not set{}".format(p["domain"], p["limit_item"],
+                                                  p["limit_type"], want)
+    return (_limit_ok(found[1], expected, p.get("compare")),
+            "{} {} = {}{}".format(p["domain"], p["limit_item"], found[1], want))
 
 
 KINDS = {
@@ -213,7 +266,8 @@ def _replace_lines(path, keep, new_line):
     parts = text.split("\n")
     lines = [ln + "\n" for ln in parts[:-1]] + ([parts[-1] + "\n"] if parts[-1] else [])
     lines = [ln for ln in lines if keep(ln)]
-    lines.append(new_line + "\n")
+    if new_line is not None:            # None: only remove lines
+        lines.append(new_line + "\n")
     d = os.path.dirname(path)
     if d and not os.path.isdir(d):
         os.makedirs(d)
@@ -327,24 +381,46 @@ def _fix_kernel_param(host, p):
     return True, "{} set and persisted in {}".format(setting, SYSCTL_CONF)
 
 
+def _ulimit_target(p):
+    """The file the fix writes: a check's `target` (e.g. netFLEX's 99-nproc.conf),
+    else our own LIMITS_CONF."""
+    return p.get("target") or LIMITS_CONF
+
+
+def _describe_ulimit(p):
+    expected, _ = _ulimit_expected(p)
+    if expected is None:
+        return None
+    target = _ulimit_target(p)
+    extra = "" if target == LIMITS_CONF else " (removing any copy in {})".format(LIMITS_CONF)
+    return "set '{}' in {}{}".format(" ".join(_ulimit_head(p) + [expected]), target, extra)
+
+
 def _fix_ulimit(host, p):
-    head = [p["domain"], p["limit_type"], p["limit_item"]]
-    entry = " ".join(head + [p["expected_value"]])
+    expected, _ = _ulimit_expected(p)
+    if expected is None:
+        return False, "no reference value to set"
+    head = _ulimit_head(p)
+    entry = " ".join(head + [expected])
+    target = _ulimit_target(p)
 
     def keep(ln):
         parts = ln.split()
         return not (len(parts) >= 4 and parts[:3] == head)
     try:
-        _replace_lines(LIMITS_CONF, keep, entry)
+        _replace_lines(target, keep, entry)
+        # One source per entry: drop a copy an earlier fix left in our own file.
+        if target != LIMITS_CONF and _limits_entry(LIMITS_CONF, head) is not None:
+            _replace_lines(LIMITS_CONF, keep, None)
     except (IOError, OSError, ValueError) as e:
-        return False, "could not write {}: {}".format(LIMITS_CONF, e)
+        return False, "could not write {}: {}".format(target, e)
     win = _ulimit_winner(p)
     if win is None:
-        return True, "WARNING: written to {} but it is not read by pam_limits".format(LIMITS_CONF)
-    if win[1] != p["expected_value"]:
+        return True, "WARNING: written to {} but it is not read by pam_limits".format(target)
+    if not _limit_ok(win[1], expected, p.get("compare")):
         return True, "WARNING: written to {} but overridden by {} ({})".format(
-            LIMITS_CONF, win[0], win[1])
-    return True, "'{}' written to {}".format(entry, LIMITS_CONF)
+            target, win[0], win[1])
+    return True, "'{}' written to {}".format(entry, target)
 
 
 def _fix_touchfile(host, p):
@@ -362,9 +438,7 @@ FIXES = {
                        _fix_service),
     "kernel_param": (lambda p: "sysctl -w {}={} (persisted in {})".format(
         p["param"], p["expected_value"], SYSCTL_CONF), _fix_kernel_param),
-    "ulimit": (lambda p: "add '{} {} {} {}' to {}".format(
-        p["domain"], p["limit_type"], p["limit_item"], p["expected_value"], LIMITS_CONF),
-               _fix_ulimit),
+    "ulimit": (_describe_ulimit, _fix_ulimit),
     "touchfile": (lambda p: "{} touch /usr/cnc/features/{}".format(SCMD, p["file"]),
                   _fix_touchfile),
 }

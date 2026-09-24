@@ -624,7 +624,12 @@
       "domain": "cmm",
       "limit_type": "soft",
       "limit_item": "nproc",
-      "expected_value": "32768"
+      "compare": "min",
+      "reference": [
+        "/usr/cnc_stage/features/linux-nproc.conf",
+        "/usr/cnc/features/linux-nproc.conf"
+      ],
+      "target": "/etc/security/limits.d/99-nproc.conf"
     }
   },
   {
@@ -638,7 +643,12 @@
       "domain": "cmm",
       "limit_type": "hard",
       "limit_item": "nproc",
-      "expected_value": "32768"
+      "compare": "min",
+      "reference": [
+        "/usr/cnc_stage/features/linux-nproc.conf",
+        "/usr/cnc/features/linux-nproc.conf"
+      ],
+      "target": "/etc/security/limits.d/99-nproc.conf"
     }
   }
 ]

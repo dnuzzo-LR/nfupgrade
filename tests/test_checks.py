@@ -438,6 +438,85 @@ class TestFixes(unittest.TestCase):
         self.assertFalse(detail.startswith("WARNING"), detail)
         self.assertTrue(checks.KINDS["ulimit"](RecordingHost(), self.ulimit_check()["params"])[0])
 
+    # --- single source for cmm nproc: netFLEX's linux-nproc.conf -> 99-nproc.conf ---
+
+    def nproc(self, limit_type="soft"):
+        staged = os.path.join(self.d, "cnc_stage", "features", "linux-nproc.conf")
+        installed = os.path.join(self.d, "cnc", "features", "linux-nproc.conf")
+        return self.check("ulimit", domain="cmm", limit_type=limit_type, limit_item="nproc",
+                          compare="min", reference=[staged, installed],
+                          target=os.path.join(checks.LIMITS_DIR, "99-nproc.conf")), staged, installed
+
+    def test_nproc_expected_comes_from_reference_staged_first(self):
+        c, staged, installed = self.nproc()
+        self.write(installed, "cmm soft nproc 16384\ncmm hard nproc 16384\n")
+        self.write(os.path.join(checks.LIMITS_DIR, "99-nproc.conf"), "cmm soft nproc 16384\n")
+        ok, detail = checks.KINDS["ulimit"](RecordingHost(), c["params"])
+        self.assertTrue(ok, detail)
+        self.assertIn("at least 16384 from " + installed, detail)
+        self.write(staged, "cmm soft nproc 125883\ncmm hard nproc 125883\n")
+        ok, detail = checks.KINDS["ulimit"](RecordingHost(), c["params"])
+        self.assertFalse(ok)
+        self.assertIn("cmm nproc = 16384", detail)
+        self.assertIn("at least 125883 from " + staged, detail)
+
+    def test_nproc_greater_or_unlimited_is_ok(self):
+        c, staged, _ = self.nproc()
+        self.write(staged, "cmm soft nproc 125883\n")
+        target = c["params"]["target"]
+        for value, want in (("125883", True), ("200000", True), ("unlimited", True),
+                            ("125882", False), ("lots", False)):
+            self.write(target, "cmm soft nproc %s\n" % value)
+            self.assertEqual(checks.KINDS["ulimit"](RecordingHost(), c["params"])[0], want, value)
+
+    def test_nproc_without_reference_fails_and_has_no_fix(self):
+        c, _, _ = self.nproc()
+        ok, detail = checks.KINDS["ulimit"](RecordingHost(), c["params"])
+        self.assertFalse(ok)
+        self.assertIn("no reference value", detail)
+        self.assertIsNone(checks.describe_fix(c))
+        self.assertFalse(checks.apply_fix(RecordingHost(), c)[0])
+
+    def test_nproc_fix_edits_99_nproc_and_drops_our_copy(self):
+        c, staged, _ = self.nproc()
+        self.write(staged, "cmm soft nproc 125883\ncmm hard nproc 125883\n")
+        target = c["params"]["target"]
+        self.write(target, "cmm soft nproc 16384\ncmm hard nproc 16384\n")
+        # an earlier fix wrote a second copy into our own file (holmvm32)
+        self.write(checks.LIMITS_CONF, "cnc soft nofile 65536\ncmm soft nproc 32768\n")
+        self.assertEqual(checks.describe_fix(c),
+                         "set 'cmm soft nproc 125883' in {} (removing any copy in {})".format(
+                             target, checks.LIMITS_CONF))
+        ok, detail = checks.apply_fix(RecordingHost(), c)
+        self.assertTrue(ok, detail)
+        self.assertFalse(detail.startswith("WARNING"), detail)
+        self.assertEqual(open(target).read(), "cmm hard nproc 16384\ncmm soft nproc 125883\n")
+        self.assertEqual(open(checks.LIMITS_CONF).read(), "cnc soft nofile 65536\n")
+        self.assertTrue(checks.KINDS["ulimit"](RecordingHost(), c["params"])[0])
+
+    def test_nproc_fix_warns_when_still_overridden(self):
+        c, staged, _ = self.nproc()
+        self.write(staged, "cmm soft nproc 125883\n")
+        later = os.path.join(checks.LIMITS_DIR, "zz-admin.conf")
+        self.write(later, "cmm soft nproc 4096\n")
+        ok, detail = checks.apply_fix(RecordingHost(), c)
+        self.assertTrue(ok)
+        self.assertEqual(detail, "WARNING: written to {} but overridden by {} (4096)".format(
+            c["params"]["target"], later))
+
+    def test_shipped_nproc_checks_use_single_source(self):
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "nfupgrader", "checks.default.json")
+        nproc = [c for c in checks.load_checks(path) if c["name"] in ("nproc_soft", "nproc_hard")]
+        self.assertEqual(len(nproc), 2)
+        for c in nproc:
+            p = c["params"]
+            self.assertEqual(p["compare"], "min")
+            self.assertEqual(p["target"], "/etc/security/limits.d/99-nproc.conf")
+            self.assertEqual(p["reference"], ["/usr/cnc_stage/features/linux-nproc.conf",
+                                              "/usr/cnc/features/linux-nproc.conf"])
+            self.assertNotIn("expected_value", p)
+
     # --- honest kernel_param persistence ---
 
     def kp(self, value="68719476736"):
