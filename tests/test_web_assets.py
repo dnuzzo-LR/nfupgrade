@@ -108,6 +108,11 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn("d.path", fn)
         self.assertIn("(not created yet)", fn)
 
+    def test_checks_table_has_category_column(self):
+        fn = self.js.split("function renderChecks(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("<th>Category</th>", fn)
+        self.assertIn("esc(r.category", fn)
+
     def test_all_required_ids_present(self):
         missing = [i for i in REQUIRED_IDS if ('id="%s"' % i) not in self.html]
         self.assertEqual(missing, [], "index.html missing IDs: %s" % missing)

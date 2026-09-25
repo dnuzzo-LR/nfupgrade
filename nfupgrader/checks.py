@@ -502,7 +502,7 @@ def _applies(check, when, phase, machtype):
 
 def evaluate(host, c, when):
     """Run one check definition; returns its result dict:
-    {name, description, severity, passed, detail, blocking, fix}."""
+    {name, category, description, severity, passed, detail, blocking, fix}."""
     kind = KINDS.get(c["kind"])
     if kind is None:
         passed, detail = False, "unknown kind: {}".format(c["kind"])
@@ -514,6 +514,7 @@ def evaluate(host, c, when):
     severity = c.get("fail_text", "ERROR")
     return {
         "name": c.get("name", c["kind"]),
+        "category": c.get("category", ""),
         "description": c.get("description", ""),
         "severity": severity,
         "passed": passed,

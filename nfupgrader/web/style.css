@@ -132,3 +132,4 @@ tr.local-detail > td { background: var(--surface); padding: .6rem .8rem 1rem 2re
 #modal-body { white-space: pre-wrap; overflow: auto; font-size: 14px; line-height: 1.45; }
 .modal-actions { display: flex; justify-content: flex-end; gap: .6rem; margin-top: 1.2rem; }
 .log-file { font-family: var(--mono); font-size: .85rem; margin: .5rem 0; word-break: break-all; }
+table.checks td.cat { color: var(--muted); white-space: nowrap; }

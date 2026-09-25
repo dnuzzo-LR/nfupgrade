@@ -1,6 +1,7 @@
 [
   {
     "name": "disk-usr4",
+    "category": "NETFLEX",
     "description": "At least 5 GB free on /usr4 before staging",
     "fail_text": "ERROR",
     "when": "preflight",
@@ -13,6 +14,7 @@
   },
   {
     "name": "gr-idle",
+    "category": "NETFLEX",
     "description": "No GR transfer in progress",
     "fail_text": "ERROR",
     "when": "preflight",
@@ -29,6 +31,7 @@
   },
   {
     "name": "no-grestore",
+    "category": "NETFLEX",
     "description": "No GR restore in progress",
     "fail_text": "ERROR",
     "when": "preflight",
@@ -40,6 +43,7 @@
   },
   {
     "name": "dbcheck-clean",
+    "category": "NETFLEX",
     "description": "Database check reports no errors",
     "fail_text": "ERROR",
     "when": "preflight",
@@ -49,6 +53,7 @@
   },
   {
     "name": "staged-present",
+    "category": "NETFLEX",
     "description": "A staged load exists before upgrading",
     "fail_text": "ERROR",
     "when": "preflight",
@@ -58,6 +63,7 @@
   },
   {
     "name": "post-dbcheck",
+    "category": "NETFLEX",
     "description": "Database check clean after upgrade",
     "fail_text": "WARNING",
     "when": "postflight",
@@ -67,6 +73,7 @@
   },
   {
     "name": "post-app-up",
+    "category": "NETFLEX",
     "description": "Application booted after upgrade",
     "fail_text": "WARNING",
     "when": "postflight",
@@ -78,7 +85,8 @@
   },
   {
     "name": "lvm2",
-    "description": "SYSTEM : Logical Volume Management",
+    "category": "SYSTEM",
+    "description": "Logical Volume Management",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -89,7 +97,8 @@
   },
   {
     "name": "cronie",
-    "description": "SYSTEM : Cron Service Package",
+    "category": "SYSTEM",
+    "description": "Cron Service Package",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -100,7 +109,8 @@
   },
   {
     "name": "libpng",
-    "description": "NETFLEX: PNG image format",
+    "category": "NETFLEX",
+    "description": "PNG image format",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -111,7 +121,8 @@
   },
   {
     "name": "ksh",
-    "description": "NETFLEX: The Original ATT Korn Shell2",
+    "category": "NETFLEX",
+    "description": "The Original ATT Korn Shell2",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -122,7 +133,8 @@
   },
   {
     "name": "nettools",
-    "description": "NETFLEX: Basic networking tools",
+    "category": "NETFLEX",
+    "description": "Basic networking tools",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -133,7 +145,8 @@
   },
   {
     "name": "utillinux",
-    "description": "NETFLEX: Basic linux user tools",
+    "category": "NETFLEX",
+    "description": "Basic linux user tools",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -144,7 +157,8 @@
   },
   {
     "name": "bc",
-    "description": "NETFLEX: GNU bc (calculator)",
+    "category": "NETFLEX",
+    "description": "GNU bc (calculator)",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -155,7 +169,8 @@
   },
   {
     "name": "traceroute",
-    "description": "NETFLEX: Network diagnostic tool",
+    "category": "NETFLEX",
+    "description": "Network diagnostic tool",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -166,7 +181,8 @@
   },
   {
     "name": "xerces",
-    "description": "NETFLEX: Validating XML Parser",
+    "category": "NETFLEX",
+    "description": "Validating XML Parser",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -177,7 +193,8 @@
   },
   {
     "name": "zlib",
-    "description": "NETFLEX: zlib library",
+    "category": "NETFLEX",
+    "description": "zlib library",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -188,7 +205,8 @@
   },
   {
     "name": "apache",
-    "description": "NETFLEX: HTTP Server",
+    "category": "NETFLEX",
+    "description": "HTTP Server",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -199,7 +217,8 @@
   },
   {
     "name": "zeromq",
-    "description": "NETFLEX: zeromq library for Multibox",
+    "category": "NETFLEX",
+    "description": "zeromq library for Multibox",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -210,7 +229,8 @@
   },
   {
     "name": "mod_ssl",
-    "description": "NETFLEX: SSL/TLS certificate expiry warnings",
+    "category": "NETFLEX",
+    "description": "SSL/TLS certificate expiry warnings",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -221,7 +241,8 @@
   },
   {
     "name": "jq",
-    "description": "NETFLEX: JSON Query Tool",
+    "category": "NETFLEX",
+    "description": "JSON Query Tool",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -232,7 +253,8 @@
   },
   {
     "name": "libsodium",
-    "description": "NETFLEX: libsodium",
+    "category": "NETFLEX",
+    "description": "libsodium",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -243,7 +265,8 @@
   },
   {
     "name": "curses",
-    "description": "NETFLEX: ncurses libraries",
+    "category": "NETFLEX",
+    "description": "ncurses libraries",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -254,7 +277,8 @@
   },
   {
     "name": "dialog",
-    "description": "NETFLEX: A utility for creating TTY dialogs",
+    "category": "NETFLEX",
+    "description": "A utility for creating TTY dialogs",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -265,7 +289,8 @@
   },
   {
     "name": "telnet",
-    "description": "NETFLEX: Used to communicate with legacy Equipment",
+    "category": "NETFLEX",
+    "description": "Used to communicate with legacy Equipment",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -276,7 +301,8 @@
   },
   {
     "name": "gpm",
-    "description": "NETFLEX: gpm library",
+    "category": "NETFLEX",
+    "description": "gpm library",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -287,7 +313,8 @@
   },
   {
     "name": "sysstat",
-    "description": "NETFLEX: Performance Monitoring Tools",
+    "category": "NETFLEX",
+    "description": "Performance Monitoring Tools",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -298,7 +325,8 @@
   },
   {
     "name": "tmux",
-    "description": "SUPPORT: Terminal Multiplexer",
+    "category": "SUPPORT",
+    "description": "Terminal Multiplexer",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
@@ -309,7 +337,8 @@
   },
   {
     "name": "curl",
-    "description": "NETFLEX: HTTP Client Tool",
+    "category": "NETFLEX",
+    "description": "HTTP Client Tool",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -320,7 +349,8 @@
   },
   {
     "name": "gdb",
-    "description": "SUPPORT: Source Code Debugger",
+    "category": "SUPPORT",
+    "description": "Source Code Debugger",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
@@ -331,7 +361,8 @@
   },
   {
     "name": "bzip2",
-    "description": "SUPPORT: Compression Command",
+    "category": "SUPPORT",
+    "description": "Compression Command",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
@@ -342,7 +373,8 @@
   },
   {
     "name": "zip",
-    "description": "SUPPORT: Compression Command",
+    "category": "SUPPORT",
+    "description": "Compression Command",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
@@ -353,7 +385,8 @@
   },
   {
     "name": "wget",
-    "description": "NETFLEX: Web File Downloader",
+    "category": "NETFLEX",
+    "description": "Web File Downloader",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -364,7 +397,8 @@
   },
   {
     "name": "netcat",
-    "description": "SUPPORT: netcat diagnostic tool",
+    "category": "SUPPORT",
+    "description": "netcat diagnostic tool",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
@@ -375,7 +409,8 @@
   },
   {
     "name": "fzf",
-    "description": "SUPPORT: command-line fuzzy finder {epel}",
+    "category": "SUPPORT",
+    "description": "command-line fuzzy finder {epel}",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
@@ -386,7 +421,8 @@
   },
   {
     "name": "emacs",
-    "description": "SUPPORT: The Only Real Editor",
+    "category": "SUPPORT",
+    "description": "The Only Real Editor",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
@@ -397,7 +433,8 @@
   },
   {
     "name": "mg",
-    "description": "SUPPORT: Tiny Emacs-like editor {epel}",
+    "category": "SUPPORT",
+    "description": "Tiny Emacs-like editor {epel}",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
@@ -408,7 +445,8 @@
   },
   {
     "name": "strace",
-    "description": "SUPPORT: Tracks and displays system calls",
+    "category": "SUPPORT",
+    "description": "Tracks and displays system calls",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
@@ -419,7 +457,8 @@
   },
   {
     "name": "zsh",
-    "description": "SUPPORT: Z Shell",
+    "category": "SUPPORT",
+    "description": "Z Shell",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
@@ -430,7 +469,8 @@
   },
   {
     "name": "htop",
-    "description": "SUPPORT: A better top command {epel}",
+    "category": "SUPPORT",
+    "description": "A better top command {epel}",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
@@ -441,7 +481,8 @@
   },
   {
     "name": "nano",
-    "description": "SUPPORT: Can't live without nano",
+    "category": "SUPPORT",
+    "description": "Can't live without nano",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
@@ -452,7 +493,8 @@
   },
   {
     "name": "ne",
-    "description": "SUPPORT: Like nano, just better {epel}",
+    "category": "SUPPORT",
+    "description": "Like nano, just better {epel}",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
@@ -463,7 +505,8 @@
   },
   {
     "name": "fd",
-    "description": "SUPPORT: Like find, just better {epel}",
+    "category": "SUPPORT",
+    "description": "Like find, just better {epel}",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
@@ -474,7 +517,8 @@
   },
   {
     "name": "rg",
-    "description": "SUPPORT: Like grep, just way better {epel}",
+    "category": "SUPPORT",
+    "description": "Like grep, just way better {epel}",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
@@ -485,7 +529,8 @@
   },
   {
     "name": "ems_mode",
-    "description": "NETFLEX: EMS mode Check",
+    "category": "NETFLEX",
+    "description": "EMS mode Check",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
@@ -496,7 +541,8 @@
   },
   {
     "name": "nms_mode",
-    "description": "NETFLEX: NMS mode Check",
+    "category": "NETFLEX",
+    "description": "NMS mode Check",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
@@ -507,7 +553,8 @@
   },
   {
     "name": "dbchg_mode",
-    "description": "NETFLEX: DBCHG mode Check",
+    "category": "NETFLEX",
+    "description": "DBCHG mode Check",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
@@ -518,7 +565,8 @@
   },
   {
     "name": "hide_passwd_mode",
-    "description": "NETFLEX: HIDE_PASSWD mode Check",
+    "category": "NETFLEX",
+    "description": "HIDE_PASSWD mode Check",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
@@ -529,7 +577,8 @@
   },
   {
     "name": "no_passwd_mode",
-    "description": "NETFLEX: NO_PASSWD mode Check",
+    "category": "NETFLEX",
+    "description": "NO_PASSWD mode Check",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
@@ -540,7 +589,8 @@
   },
   {
     "name": "del_chk_ties_mode",
-    "description": "NETFLEX: DEL_CHK_TIES mode Check",
+    "category": "NETFLEX",
+    "description": "DEL_CHK_TIES mode Check",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
@@ -551,7 +601,8 @@
   },
   {
     "name": "curlhttps",
-    "description": "NETFLEX: Curl Commands HTTPS",
+    "category": "NETFLEX",
+    "description": "Curl Commands HTTPS",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
@@ -566,7 +617,8 @@
   },
   {
     "name": "msditestmode",
-    "description": "NETFLEX: M_SDI_TEST_MODE",
+    "category": "NETFLEX",
+    "description": "M_SDI_TEST_MODE",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
@@ -580,7 +632,8 @@
   },
   {
     "name": "firewall",
-    "description": "SYSTEM : Firewall",
+    "category": "SYSTEM",
+    "description": "Firewall",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -591,7 +644,8 @@
   },
   {
     "name": "kernel_pid_max",
-    "description": "SYSTEM : kernel pid_max",
+    "category": "SYSTEM",
+    "description": "kernel pid_max",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -603,7 +657,8 @@
   },
   {
     "name": "kernel_pty_max",
-    "description": "SYSTEM : kernel pty_max",
+    "category": "SYSTEM",
+    "description": "kernel pty_max",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -615,7 +670,8 @@
   },
   {
     "name": "nproc_soft",
-    "description": "SYSTEM : nproc soft limit (cmm)",
+    "category": "SYSTEM",
+    "description": "nproc soft limit (cmm)",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
@@ -634,7 +690,8 @@
   },
   {
     "name": "nproc_hard",
-    "description": "SYSTEM : nproc hard limit (cmm)",
+    "category": "SYSTEM",
+    "description": "nproc hard limit (cmm)",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",

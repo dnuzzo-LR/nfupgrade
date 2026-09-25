@@ -251,7 +251,7 @@ function refreshInfo() {
 }
 
 function renderChecks(el, data, overridable) {
-  var html = "<table class='checks'><tr><th></th><th>Check</th><th>Detail</th>" +
+  var html = "<table class='checks'><tr><th></th><th>Category</th><th>Check</th><th>Detail</th>" +
              (overridable ? "<th>Override</th><th>Fix</th>" : "") + "</tr>";
   data.results.forEach(function (r) {
     var mark = r.passed ? "✅" : (r.severity === "ERROR" ? "❌" : "⚠️");
@@ -264,7 +264,8 @@ function renderChecks(el, data, overridable) {
           esc(r.fix) + "' title='" + esc(r.fix) + "'>Fix</button>" : "") + "</td>";
     }
     html += "<tr class='" + (r.passed ? "pass" : "fail-" + esc(r.severity)) + "'>" +
-            "<td>" + mark + "</td><td>" + esc(r.name) + " — " + esc(r.description) + "</td>" +
+            "<td>" + mark + "</td><td class='cat'>" + esc(r.category || "") + "</td>" +
+            "<td>" + esc(r.name) + " — " + esc(r.description) + "</td>" +
             "<td>" + esc(r.detail || "") + "</td>" + extra + "</tr>";
   });
   html += "</table>";

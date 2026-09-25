@@ -3,6 +3,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import re
 import unittest
 from nfupgrader import checks
 from nfupgrader.host import FakeHost, RunResult
@@ -202,6 +203,24 @@ class TestRun(unittest.TestCase):
             self.assertIn(c["kind"], checks.KINDS, "unknown kind: %s" % c["kind"])
             self.assertIn(c.get("when"), ("preflight", "postflight"))
 
+    def test_category_comes_through_and_defaults_blank(self):
+        h = FakeHost({("rpm", "-q", "ksh"): RunResult(0, "ksh-1\n", "")})
+        cl = [{"name": "a", "category": "SYSTEM", "kind": "rpm_installed",
+               "when": "preflight", "phase": "any", "params": {"pkg": "ksh"}},
+              {"name": "b", "kind": "rpm_installed", "when": "preflight", "phase": "any",
+               "params": {"pkg": "ksh"}}]
+        res = dict((r["name"], r) for r in checks.run_checks(h, cl, "preflight", "stage"))
+        self.assertEqual(res["a"]["category"], "SYSTEM")
+        self.assertEqual(res["b"]["category"], "")
+
+    def test_shipped_checks_have_a_category_and_no_tag_in_description(self):
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "nfupgrader", "checks.default.json")
+        for c in checks.load_checks(path):
+            self.assertIn(c.get("category"), ("NETFLEX", "SUPPORT", "SYSTEM"), c["name"])
+            self.assertIsNone(re.match(r"\s*[A-Z]+\s*:", c["description"]),
+                              "tag still in description: %s" % c["description"])
+
     def test_shipped_check_names_are_clean_and_unique(self):
         import re
         path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -212,7 +231,7 @@ class TestRun(unittest.TestCase):
 
     def test_result_shape(self):
         r = checks.run_checks(self._host(), self._checks(), "preflight", "upgrade", machtype="FEP")[0]
-        for k in ("name", "description", "severity", "passed", "detail", "blocking", "fix"):
+        for k in ("name", "category", "description", "severity", "passed", "detail", "blocking", "fix"):
             self.assertIn(k, r)
 
 
