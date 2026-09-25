@@ -203,6 +203,32 @@ class TestRun(unittest.TestCase):
             self.assertIn(c["kind"], checks.KINDS, "unknown kind: %s" % c["kind"])
             self.assertIn(c.get("when"), ("preflight", "postflight"))
 
+    def test_failure_carries_command_output(self):
+        h = FakeHost({("systemctl", "is-active", "firewalld"):
+                      RunResult(3, "inactive\n", "Unit firewalld not found\n")})
+        c = {"name": "fw", "kind": "service_active", "when": "preflight", "phase": "any",
+             "params": {"name": "firewalld"}}
+        r = checks.evaluate(h, c, "preflight")
+        self.assertFalse(r["passed"])
+        self.assertIn("systemctl is-active firewalld", r["output"])
+        self.assertIn("inactive", r["output"])
+        self.assertIn("Unit firewalld not found", r["output"])
+
+    def test_passing_check_has_no_output(self):
+        h = FakeHost({("systemctl", "is-active", "firewalld"): RunResult(0, "active\n", "")})
+        c = {"name": "fw", "kind": "service_active", "when": "preflight", "phase": "any",
+             "params": {"name": "firewalld"}}
+        self.assertEqual(checks.evaluate(h, c, "preflight")["output"], "")
+
+    def test_output_records_every_command_and_is_capped(self):
+        big = "x" * 9000
+        h = FakeHost({("sysctl", "kernel.shmmax"): RunResult(0, "kernel.shmmax = " + big, "")})
+        c = {"name": "k", "kind": "kernel_param", "when": "preflight", "phase": "any",
+             "params": {"param": "kernel.shmmax", "expected_value": "68719476736"}}
+        out = checks.evaluate(h, c, "preflight")["output"]
+        self.assertLessEqual(len(out), checks.OUTPUT_CAP + 40)
+        self.assertIn("truncated", out)
+
     def test_category_comes_through_and_defaults_blank(self):
         h = FakeHost({("rpm", "-q", "ksh"): RunResult(0, "ksh-1\n", "")})
         cl = [{"name": "a", "category": "SYSTEM", "kind": "rpm_installed",

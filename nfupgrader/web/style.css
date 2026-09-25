@@ -133,3 +133,5 @@ tr.local-detail > td { background: var(--surface); padding: .6rem .8rem 1rem 2re
 .modal-actions { display: flex; justify-content: flex-end; gap: .6rem; margin-top: 1.2rem; }
 .log-file { font-family: var(--mono); font-size: .85rem; margin: .5rem 0; word-break: break-all; }
 table.checks td.cat { color: var(--muted); white-space: nowrap; }
+table.checks tr.check-out pre { margin: 0; white-space: pre-wrap; word-break: break-all; max-height: 20rem; overflow: auto; font-size: .8rem; background: #f6f8fa; padding: .4rem .6rem; }
+table.checks a.out-toggle { font-size: .82rem; margin-left: .4rem; }

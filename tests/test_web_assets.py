@@ -108,6 +108,12 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn("d.path", fn)
         self.assertIn("(not created yet)", fn)
 
+    def test_failed_check_output_is_toggleable(self):
+        fn = self.js.split("function renderChecks(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("out-toggle", fn)
+        self.assertIn("esc(r.output)", fn)
+        self.assertIn('closest("button.fix")', fn)   # handler still dispatches Fix
+
     def test_checks_table_has_category_column(self):
         fn = self.js.split("function renderChecks(", 1)[1].split("\nfunction ", 1)[0]
         self.assertIn("<th>Category</th>", fn)

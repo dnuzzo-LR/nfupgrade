@@ -500,15 +500,51 @@ def _applies(check, when, phase, machtype):
     return True
 
 
+OUTPUT_CAP = 8000
+
+
+class _RecordingHost(object):
+    """Wraps a Host, running commands unchanged while remembering each
+    (argv, RunResult) so a failed check can show what it actually ran."""
+
+    def __init__(self, host):
+        self._host = host
+        self.runs = []
+
+    def run(self, argv, timeout=None):
+        r = self._host.run(argv, timeout=timeout)
+        self.runs.append((list(argv), r))
+        return r
+
+
+def _captured_output(runs):
+    """The commands a check ran and their output, for display on failure. Each
+    block is `$ <argv>` then stdout+stderr. Capped (keeping the tail) so one
+    noisy command can't bloat the response."""
+    blocks = []
+    for argv, r in runs:
+        block = "$ " + " ".join(argv)
+        body = (r.out or "") + (r.err or "")
+        if body.strip():
+            block += "\n" + body.rstrip("\n")
+        blocks.append(block)
+    text = "\n".join(blocks)
+    if len(text) > OUTPUT_CAP:
+        text = "... (truncated)\n" + text[-OUTPUT_CAP:]
+    return text
+
+
 def evaluate(host, c, when):
     """Run one check definition; returns its result dict:
-    {name, category, description, severity, passed, detail, blocking, fix}."""
+    {name, category, description, severity, passed, detail, blocking, fix, output}.
+    output is the captured command output, filled only when the check failed."""
+    rec = _RecordingHost(host)
     kind = KINDS.get(c["kind"])
     if kind is None:
         passed, detail = False, "unknown kind: {}".format(c["kind"])
     else:
         try:
-            passed, detail = kind(host, c.get("params", {}))
+            passed, detail = kind(rec, c.get("params", {}))
         except Exception as e:                       # a check must never crash the run
             passed, detail = False, "check error: {}".format(e)
     severity = c.get("fail_text", "ERROR")
@@ -521,6 +557,7 @@ def evaluate(host, c, when):
         "detail": detail,
         "blocking": (when == "preflight" and severity == "ERROR" and not passed),
         "fix": None if passed else describe_fix(c),
+        "output": "" if passed else _captured_output(rec.runs),
     }
 
 

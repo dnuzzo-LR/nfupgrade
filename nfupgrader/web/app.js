@@ -253,7 +253,7 @@ function refreshInfo() {
 function renderChecks(el, data, overridable) {
   var html = "<table class='checks'><tr><th></th><th>Category</th><th>Check</th><th>Detail</th>" +
              (overridable ? "<th>Override</th><th>Fix</th>" : "") + "</tr>";
-  data.results.forEach(function (r) {
+  data.results.forEach(function (r, i) {
     var mark = r.passed ? "✅" : (r.severity === "ERROR" ? "❌" : "⚠️");
     var extra = "";
     if (overridable) {
@@ -263,13 +263,30 @@ function renderChecks(el, data, overridable) {
         ? "<button type='button' class='fix' data-name='" + esc(r.name) + "' data-fix='" +
           esc(r.fix) + "' title='" + esc(r.fix) + "'>Fix</button>" : "") + "</td>";
     }
+    var detail = esc(r.detail || "");
+    if (r.output) {
+      detail += " <a href='#' class='out-toggle' data-i='" + i + "'>output</a>";
+    }
     html += "<tr class='" + (r.passed ? "pass" : "fail-" + esc(r.severity)) + "'>" +
             "<td>" + mark + "</td><td class='cat'>" + esc(r.category || "") + "</td>" +
             "<td>" + esc(r.name) + " — " + esc(r.description) + "</td>" +
-            "<td>" + esc(r.detail || "") + "</td>" + extra + "</tr>";
+            "<td>" + detail + "</td>" + extra + "</tr>";
+    if (r.output) {
+      html += "<tr class='check-out' id='" + el.id + "-out-" + i + "' style='display:none'>" +
+              "<td></td><td colspan='7'><pre>" + esc(r.output) + "</pre></td></tr>";
+    }
   });
   html += "</table>";
   el.innerHTML = html;
+  el.onclick = function (ev) {
+    var b = ev.target.closest ? ev.target.closest("button.fix") : null;
+    if (b) { if (!b.disabled) runFix(b); return; }
+    var a = ev.target.closest ? ev.target.closest("a.out-toggle") : null;
+    if (!a) return;
+    ev.preventDefault();
+    var row = document.getElementById(el.id + "-out-" + a.getAttribute("data-i"));
+    if (row) row.style.display = row.style.display === "none" ? "" : "none";
+  };
 }
 
 var preflight = null;  // last pre-flight /api/checks response for the selected mode
@@ -727,10 +744,8 @@ document.addEventListener("keydown", function (ev) {
   }
 });
 document.getElementById("preflight").onchange = updateLaunchState;
-document.getElementById("preflight").onclick = function (ev) {
-  var b = ev.target.closest ? ev.target.closest("button.fix") : null;
-  if (b && !b.disabled) runFix(b);
-};
+// #preflight/#postflight click handling (fix buttons + output toggles) is wired
+// by renderChecks, since it depends on the rendered rows.
 document.getElementById("reason").oninput = updateLaunchState;
 document.getElementById("mode").onchange = function () {
   modeTouched = true;
