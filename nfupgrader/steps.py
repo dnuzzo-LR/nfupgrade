@@ -7,7 +7,11 @@ _STAGE = ["swsstart", "swspatchinstall", "swswebinstall",
 _UPGRADE = ["swscomplete", "swistart", "swicopycnc", "swipackages",
             "swipreboot", "swiretropass2", "swibootinc", "postinstall", "swidone"]
 
-_STATES = {"stage": _STAGE, "upgrade": _UPGRADE}
+_INSTALL = ["isstart", "isprepare", "isrpm", "isunstage", "iscnfg", "ispackages",
+            "iscmmperm", "islicmigrate", "ispostinstall", "isdatabase", "iswebgui",
+            "islicense", "isdone"]
+
+_STATES = {"stage": _STAGE, "upgrade": _UPGRADE, "install": _INSTALL}
 
 _LABELS = {
     "swsstart":        "Preliminary checks and CORE install",
@@ -25,6 +29,19 @@ _LABELS = {
     "postinstall":     "Post-install steps",
     "swidone":         "Upgrade complete",
     "swscoreupgrade":  "Install CORE RPM",  # retained for label lookups
+    "isstart":         "Preliminary checks",
+    "isprepare":       "Create load directory and /usr/cnc links",
+    "isrpm":           "Install CORE RPM",
+    "isunstage":       "Remove /usr/cnc_stage link",
+    "iscnfg":          "Install cnc.cnfg",
+    "ispackages":      "Linux packages",
+    "iscmmperm":       "Set cmm permissions",
+    "islicmigrate":    "License migrate",
+    "ispostinstall":   "Post-install script",
+    "isdatabase":      "Database setup",
+    "iswebgui":        "Install web GUI",
+    "islicense":       "License file (not yet implemented)",
+    "isdone":          "Install complete",
 }
 
 

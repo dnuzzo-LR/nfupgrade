@@ -5,7 +5,7 @@ The service only observes: it reads .${HOST}_STATE and a liveness boolean
 import os
 from nfupgrader import steps
 
-_TERMINAL = {"stage": "swscomplete", "upgrade": "swidone"}
+_TERMINAL = {"stage": "swscomplete", "upgrade": "swidone", "install": "isdone"}
 
 
 def compute_progress(phase, current, running):
@@ -52,10 +52,18 @@ def compute_progress(phase, current, running):
 _UPGRADE_ONLY = set(steps.states_for("upgrade")) - set(steps.states_for("stage"))
 
 
-def read_state(hostname, inclogdir):
-    """The current state from .${hostname}_STATE, or None if absent/empty."""
+def state_file(hostname, phase="stage"):
+    """The state file basename for hostname/phase: .{h}_INSTALL_STATE for the
+    install phase, else .{h}_STATE (shared by stage and upgrade, per nf_upgrader)."""
+    if phase == "install":
+        return ".{}_INSTALL_STATE".format(hostname)
+    return ".{}_STATE".format(hostname)
+
+
+def read_state(hostname, inclogdir, phase="stage"):
+    """The current state from the phase's state file, or None if absent/empty."""
     try:
-        with open(os.path.join(inclogdir, ".{}_STATE".format(hostname))) as fh:
+        with open(os.path.join(inclogdir, state_file(hostname, phase))) as fh:
             return fh.read().strip() or None
     except (IOError, OSError):
         return None
@@ -67,9 +75,9 @@ def infer_phase(current):
 
 
 def read_progress(hostname, phase, inclogdir, running):
-    """Read .${hostname}_STATE from inclogdir and compute progress. If the state
-    file is absent, the phase has not started."""
-    current = read_state(hostname, inclogdir)
+    """Read the phase's state file from inclogdir and compute progress. If the
+    state file is absent, the phase has not started."""
+    current = read_state(hostname, inclogdir, phase)
     if current is None:
         return {
             "phase": phase, "current": None, "label": "",

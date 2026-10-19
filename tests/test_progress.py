@@ -67,6 +67,18 @@ class TestPhaseInference(unittest.TestCase):
         open(os.path.join(d, ".h1_STATE"), "w").write("swistart\n")
         self.assertEqual(progress.read_state("h1", d), "swistart")
 
+    def test_install_reads_its_own_state_file(self):
+        d = tempfile.mkdtemp()
+        open(os.path.join(d, ".h1_STATE"), "w").write("swscopycnc\n")
+        open(os.path.join(d, ".h1_INSTALL_STATE"), "w").write("ispostinstall\n")
+        p = progress.read_progress("h1", "install", d, running=False)
+        self.assertEqual((p["current"], p["status"], p["step"], p["total"]), ("ispostinstall", "died", 9, 13))
+        self.assertEqual(progress.read_progress("h1", "stage", d, False)["current"], "swscopycnc")
+
+    def test_install_done(self):
+        p = progress.compute_progress("install", "isdone", False)
+        self.assertEqual((p["status"], p["completed"]), ("done", 13))
+
 
 class TestStepNumber(unittest.TestCase):
     def test_step_is_one_based(self):

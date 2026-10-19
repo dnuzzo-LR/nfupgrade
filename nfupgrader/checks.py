@@ -188,13 +188,22 @@ def _limit_ok(found, expected, compare):
         return False
 
 
+def netflex_present_rcs(host, pkg="netFLEX-CORE", path="/usr/cnc"):
+    """(rpm_rc, path_rc) for the two commands that detect an existing netFLEX:
+    `rpm -q <pkg>` and a shell test that <path> exists or is a (possibly
+    dangling) symlink. Shared with installstate.netflex_installed so both sides
+    of the fresh-install precondition agree on exactly what "installed" means."""
+    rpm_rc = host.run(["rpm", "-q", pkg]).rc
+    path_rc = host.run(["sh", "-c", "test -e {0} || test -L {0}".format(path)]).rc
+    return rpm_rc, path_rc
+
+
 def _netflex_absent(host, p):
     """A fresh-install precondition: neither the netFLEX package nor /usr/cnc
     is present (a dangling symlink left by a previous uninstall still counts)."""
     pkg = p.get("pkg", "netFLEX-CORE")
     path = p.get("path", "/usr/cnc")
-    rpm_rc = host.run(["rpm", "-q", pkg]).rc
-    path_rc = host.run(["sh", "-c", "test -e {0} || test -L {0}".format(path)]).rc
+    rpm_rc, path_rc = netflex_present_rcs(host, pkg, path)
     if rpm_rc == 0:
         return False, "{} installed".format(pkg)
     if path_rc == 0:

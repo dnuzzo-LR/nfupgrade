@@ -34,6 +34,11 @@ class TestSteps(unittest.TestCase):
         with self.assertRaises(KeyError):
             steps.states_for("nope")
 
+    def test_install_states(self):
+        s = steps.states_for("install")
+        self.assertEqual((s[0], s[-1], len(s)), ("isstart", "isdone", 13))
+        self.assertEqual(steps.label("iswebgui"), "Install web GUI")
+
 
 if __name__ == "__main__":
     unittest.main()
