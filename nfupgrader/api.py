@@ -9,7 +9,7 @@ import time
 import os
 
 from nfupgrader import progress, logtail, launcher, localinfo, siteview, site, checks, cfg
-from nfupgrader import reports, snapjobs, installstate, steps
+from nfupgrader import reports, snapjobs, installstate, steps, cnccnfg
 
 Context = collections.namedtuple("Context", [
     "host", "hostname", "inclogdir", "phase", "tracefile",
@@ -324,12 +324,20 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         return _json(200, {"results": results, "blocking": checks.blocking_failures(results)})
 
     if path == "/api/config/fields" and method == "GET":
+        mode = _q(query, "mode") or host_mode(ctx)
+        try:
+            raw_fields = cfg.fields_for(mode)
+        except ValueError:
+            return _json(400, {"error": "mode must be one of {}".format("/".join(cfg.MODES))})
         # The upgrade logs where nfupgrader keeps its own files by default: a
         # fixed place outside the netFLEX load (whose /usr/cnc/logs moves when the
         # upgrade switches /usr/cnc) and where the progress/log views look.
         fields = [dict(f, default=ctx.inclogdir) if f["name"] == "INCLOGDIR" and ctx.inclogdir
-                  else f for f in cfg.FIELDS]
-        return _json(200, {"fields": fields})
+                  else f for f in raw_fields]
+        return _json(200, {"fields": fields, "mode": mode, "hostname": ctx.hostname})
+
+    if path == "/api/install/hosts" and method == "GET":
+        return _json(200, {"hosts": cnccnfg.read_etc_hosts(ctx.hosts_path or "/etc/hosts")})
 
     if path == "/api/config/depots" and method == "GET":
         dirs = ctx.depot_dirs or ["/opt/apt/upgrade", "."]
@@ -340,7 +348,28 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         if payload is None:
             return _json(400, {"error": "bad json"})
         values = payload.get("values", {})
-        return _json(200, {"issues": cfg.validate(values), "rendered": cfg.render_cfg(values)})
+        mode = payload.get("mode") or "upgrade"
+        try:
+            issues = cfg.validate(values, mode, ctx.hostname)
+        except ValueError:
+            return _json(400, {"error": "mode must be one of {}".format("/".join(cfg.MODES))})
+        if mode == "install":
+            boxtype = str(values.get("BOXTYPE") or "").strip()
+            mate = str(values.get("MATEHOST") or "").strip()
+            if boxtype in ("FEP", "BEP") and mate:
+                hosts = cnccnfg.read_etc_hosts(ctx.hosts_path or "/etc/hosts")
+                names = set(h["name"] for h in hosts)
+                if mate not in names:
+                    issues.append({"field": "MATEHOST", "level": "WARNING",
+                                   "message": "{} is not in /etc/hosts".format(mate)})
+            try:
+                cnc_cnfg = cnccnfg.render_from_values(values, ctx.hostname)
+            except ValueError:
+                cnc_cnfg = None
+        else:
+            cnc_cnfg = None
+        return _json(200, {"issues": issues, "rendered": cfg.render_cfg(values),
+                           "cnc_cnfg": cnc_cnfg})
 
     if path == "/api/config/import" and method == "GET":
         p = (query.get("path") or [""])[0]
@@ -359,15 +388,25 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         if payload is None:
             return _json(400, {"error": "bad json"})
         values = payload.get("values", {})
-        issues = cfg.validate(values)
+        mode = payload.get("mode") or "upgrade"
+        try:
+            issues = cfg.validate(values, mode, ctx.hostname)
+        except ValueError:
+            return _json(400, {"error": "mode must be one of {}".format("/".join(cfg.MODES))})
         if any(i["level"] == "ERROR" for i in issues):
             return _json(400, {"error": "config invalid", "issues": issues})
+        if mode == "install":
+            cnc_path = os.path.join(ctx.inclogdir, "nfupgrader_cnc.cnfg")
+            with open(cnc_path, "w") as fh:
+                fh.write(cnccnfg.render_from_values(values, ctx.hostname))
+            values = dict(values)
+            values["CNCCNFG"] = cnc_path
         saved = os.path.join(ctx.inclogdir, "nfupgrader_user.cfg")
         with open(saved, "w") as fh:
             fh.write(cfg.render_cfg(values))
         if ctx.state is not None:
             ctx.state["user_config"] = saved
-        ctx.audit.record("config_saved", path=saved, client=client_ip)
+        ctx.audit.record("config_saved", path=saved, mode=mode, client=client_ip)
         return _json(200, {"saved": saved})
 
     if path == "/api/reports" and method == "GET":

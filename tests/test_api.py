@@ -3,7 +3,7 @@ import json
 import os
 import tempfile
 import unittest
-from nfupgrader import api, checks
+from nfupgrader import api, checks, cnccnfg
 from nfupgrader import reports, snapjobs
 from nfupgrader.auth import TokenAuth
 from nfupgrader.audit import AuditLog
@@ -336,6 +336,97 @@ class TestApi(unittest.TestCase):
                                            {"nfu_sid": sid}, "127.0.0.1", self.ctx)
             self.assertEqual((status, json.loads(body.decode())),
                              (400, {"error": "bad json"}), raw)
+
+    def test_fields_install(self):
+        sid = self._session()
+        status, _, body = api.dispatch("GET", "/api/config/fields", {"mode": ["install"]}, b"",
+                                       {"nfu_sid": sid}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 200)
+        data = json.loads(body.decode())
+        names = [f["name"] for f in data["fields"]]
+        self.assertIn("BOXTYPE", names)
+        self.assertNotIn("UNLINKDIR", names)
+        self.assertEqual(data["mode"], "install")
+        self.assertEqual(data["hostname"], "h1")
+
+    def test_fields_bad_mode_400(self):
+        sid = self._session()
+        status, _, body = api.dispatch("GET", "/api/config/fields", {"mode": ["bogus"]}, b"",
+                                       {"nfu_sid": sid}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 400)
+
+    def test_hosts_endpoint(self):
+        sid = self._session()
+        hosts_file = os.path.join(self.tmp, "hosts")
+        open(hosts_file, "w").write("10.0.0.2 h2\n10.0.0.3 h3 alias3\n")
+        ctx = self.ctx._replace(hosts_path=hosts_file)
+        status, _, body = api.dispatch("GET", "/api/install/hosts", {}, b"",
+                                       {"nfu_sid": sid}, "127.0.0.1", ctx)
+        self.assertEqual(status, 200)
+        data = json.loads(body.decode())
+        names = [h["name"] for h in data["hosts"]]
+        self.assertEqual(names, ["h2", "h3", "alias3"])
+
+    def test_preview_install_renders_cnc_and_warns_unknown_mate(self):
+        sid = self._session()
+        hosts_file = os.path.join(self.tmp, "hosts")
+        open(hosts_file, "w").write("10.0.0.2 h2\n")
+        ctx = self.ctx._replace(hosts_path=hosts_file)
+        values = {"BOXTYPE": "FEP", "MATEHOST": "zz", "MASTERHOST": "h1",
+                  "INCLOGDIR": "/usr/cnc/logs", "NEW_GENERIC": "5.5.0", "NEW_LOAD": "03",
+                  "DEPOTFILE": "/depot/x.rpm"}
+        payload = json.dumps({"values": values, "mode": "install"}).encode()
+        status, _, body = api.dispatch("POST", "/api/config/preview", {}, payload,
+                                       {"nfu_sid": sid}, "127.0.0.1", ctx)
+        self.assertEqual(status, 200)
+        data = json.loads(body.decode())
+        warn = [i for i in data["issues"] if i["field"] == "MATEHOST" and i["level"] == "WARNING"]
+        self.assertEqual(len(warn), 1)
+        self.assertIn("zz is not in /etc/hosts", warn[0]["message"])
+        self.assertIn("h1 1 zz 1 1 9", data["cnc_cnfg"])
+
+    def test_preview_install_invalid_has_no_cnc(self):
+        sid = self._session()
+        values = {"BOXTYPE": "FEP"}
+        payload = json.dumps({"values": values, "mode": "install"}).encode()
+        status, _, body = api.dispatch("POST", "/api/config/preview", {}, payload,
+                                       {"nfu_sid": sid}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 200)
+        data = json.loads(body.decode())
+        self.assertIsNone(data["cnc_cnfg"])
+        self.assertTrue(any(i["level"] == "ERROR" for i in data["issues"]))
+
+    def test_save_install_writes_cnc_cnfg(self):
+        sid = self._session()
+        values = {"BOXTYPE": "SINGLE", "INCLOGDIR": "/usr/cnc/logs", "NEW_GENERIC": "5.5.0",
+                  "NEW_LOAD": "03", "DEPOTFILE": "/depot/x.rpm"}
+        payload = json.dumps({"values": values, "mode": "install"}).encode()
+        status, _, body = api.dispatch("POST", "/api/config/save", {}, payload,
+                                       {"nfu_sid": sid}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 200)
+        saved = json.loads(body.decode())["saved"]
+        text = open(saved).read()
+        cnc_path = os.path.join(self.ctx.inclogdir, "nfupgrader_cnc.cnfg")
+        self.assertIn('CNCCNFG="{}"'.format(cnc_path), text)
+        expected = cnccnfg.render_from_values(values, self.ctx.hostname)
+        self.assertEqual(open(cnc_path).read(), expected)
+        events = self._audit()
+        rec = [r for r in events if r["event"] == "config_saved"][0]
+        self.assertEqual(rec["mode"], "install")
+
+    def test_save_upgrade_unchanged(self):
+        sid = self._session()
+        payload = json.dumps({"values": {
+            "INCLOGDIR": "/usr/cnc/logs", "NEW_GENERIC": "5.5.0", "NEW_LOAD": "03",
+            "DEPOTFILE": "/depot/netFLEX-CORE-5.5.0.03-1.x86_64.rpm"}}).encode()
+        status, _, body = api.dispatch("POST", "/api/config/save", {}, payload,
+                                       {"nfu_sid": sid}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 200)
+        saved = json.loads(body.decode())["saved"]
+        self.assertEqual(saved, os.path.join(self.ctx.inclogdir, "nfupgrader_user.cfg"))
+        events = self._audit()
+        rec = [r for r in events if r["event"] == "config_saved"][0]
+        self.assertEqual(rec["mode"], "upgrade")
 
     def test_launch_409_while_upgrader_running(self):
         self._set_running(True)
