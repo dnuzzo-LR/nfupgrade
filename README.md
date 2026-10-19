@@ -95,7 +95,8 @@ runs in **install mode** (`GET /api/install/status` reports `"mode": "install"`)
 itself in the background unless `NFI_FOREGROUND=YES`.
 
 ```sh
-nf_install -c <config file> -i     # fresh install (refused if unfinished or already installed)
+nf_install -c <config file> -i     # fresh install (refused if unfinished, already installed,
+                                   # /usr/cnc_stage left over, or DEPOTFILE/CNCCNFG unreadable)
 nf_install -c <config file> -r     # resume an unfinished install at its recorded step
 nf_install -c <config file> -x     # reset a failed install
 nf_install -h                      # help
@@ -116,6 +117,11 @@ trace path to send to support, with two actions:
 
 - **Resume install** re-runs the pre-flight checks (hard checks are skipped on a
   resume) and relaunches `nf_install -r`, which continues from the failed step.
+  Past the prepare step, resume refuses (changing nothing) unless `/usr/cnc` is
+  the install's link to the recorded load dir and `/usr/cnc_stage` is absent or
+  that same link, so it never runs install steps over a netFLEX it did not create.
+  Install and resume both need a saved install configuration (readable
+  `DEPOTFILE` and `CNCCNFG`, a writable `INCLOGDIR` outside `/usr/cnc`).
 - **Reset and start over** asks for a reason (audited) and runs `nf_install -x`. It
   removes only what this install provably created: the netFLEX-CORE RPM if
   installed, the `/usr/cnc` and `/usr/cnc_stage` links only if they point at the

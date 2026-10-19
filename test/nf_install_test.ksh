@@ -62,6 +62,9 @@ mk "$R/mbin/license-migrate" "exit \${FAIL_LICMIG:-0}"
 W="${NFI_INCROOT}/web"
 mk "${NFT_SB}/tarsrc/lwebsetup" "read a; read b; mkdir -p $W/data $W/maps $W/maps.default $W/bin; echo m > $W/maps.default/m1; echo s > $W/data/def.sys_config.flx; echo d > $W/data/def.system_defines.flx; printf \"#!/bin/sh\\nexit 0\\n\" > $W/bin/cpjsmap.osm; chmod +x $W/bin/cpjsmap.osm"
 tar cf "$R/GUI_REL/LINUXWEB64.rhel8.tar" -C "${NFT_SB}/tarsrc" lwebsetup
+# Simulate something replacing the stage link after the RPM went in.
+if [ -n "${STAGE_REAL}" ]; then rm -f "$R"; mkdir -p "$R/keep"; fi
+if [ -n "${STAGE_FOREIGN}" ]; then rm -f "$R"; mkdir -p "${NFT_SB}/usr4/other"; ln -s "${NFT_SB}/usr4/other" "$R"; fi
 exit 0'
 	PATH="${SB}/bin:${ORIG_PATH}"
 	export PATH
@@ -71,7 +74,7 @@ exit 0'
 	export NFI_STAGEROOT="${SB}/usr/cnc_stage"
 	export NFI_LOADROOT="${SB}/usr4"
 	export NFI_PKGTOOL="${SB}/bin/dnf"
-	unset NFI_CHILD FAIL_POSTINSTALL FAIL_LICMIG
+	unset NFI_CHILD FAIL_POSTINSTALL FAIL_LICMIG STAGE_REAL STAGE_FOREIGN
 }
 
 cleanup() {
@@ -346,6 +349,155 @@ assert_match "reset rpm -e fails: FATAL" ' FATAL ' "$(rtrace)"
 assert_eq    "reset rpm -e fails: /usr/cnc kept" "${SB}/usr4/inc5.3.002" "$(readlink "${SB}/usr/cnc")"
 assert_eq    "reset rpm -e fails: load dir kept" yes "$(exists "${SB}/usr4/inc5.3.002")"
 assert_eq    "reset rpm -e fails: state" ispostinstall "$(state)"
+
+# --- I2: leftover /usr/cnc_stage refuses a fresh install (R1) ---------------
+setup
+mkdir -p "${SB}/usr/cnc_stage/keep"
+"${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+assert_rc    "leftover stage dir: rc" 1 "$rc"
+assert_match "leftover stage dir: FATAL" ' FATAL .*cnc_stage' "$(trace)"
+assert_eq    "leftover stage dir: no dnf" 0 "$(count_of dnf)"
+assert_eq    "leftover stage dir: no state" no "$(exists "${SB}/logs/.h1_INSTALL_STATE")"
+assert_eq    "leftover stage dir: no info" no "$(exists "${SB}/logs/.h1_INSTALL_INFO")"
+assert_eq    "leftover stage dir: kept" yes "$(exists "${SB}/usr/cnc_stage/keep")"
+assert_eq    "leftover stage dir: no /usr/cnc" no "$(exists "${SB}/usr/cnc")"
+
+setup
+ln -s "${SB}/nowhere" "${SB}/usr/cnc_stage"
+"${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+assert_rc    "leftover stage link: rc" 1 "$rc"
+assert_eq    "leftover stage link: no state" no "$(exists "${SB}/logs/.h1_INSTALL_STATE")"
+assert_eq    "leftover stage link: no info" no "$(exists "${SB}/logs/.h1_INSTALL_INFO")"
+assert_eq    "leftover stage link: kept" "${SB}/nowhere" "$(readlink "${SB}/usr/cnc_stage")"
+
+# --- I3: unreadable DEPOTFILE / CNCCNFG refuse a fresh install (R1) --------
+setup
+sed "s|^DEPOTFILE=.*|DEPOTFILE=${SB}/missing.rpm|" "${SB}/test.cfg" > "${SB}/t2.cfg"
+"${NFI}" -c "${SB}/t2.cfg" -i; rc=$?
+assert_rc    "unreadable depot: rc" 1 "$rc"
+assert_match "unreadable depot: FATAL" ' FATAL .*DEPOTFILE' "$(trace)"
+assert_eq    "unreadable depot: no state" no "$(exists "${SB}/logs/.h1_INSTALL_STATE")"
+assert_eq    "unreadable depot: no info" no "$(exists "${SB}/logs/.h1_INSTALL_INFO")"
+assert_eq    "unreadable depot: no /usr/cnc" no "$(exists "${SB}/usr/cnc")"
+
+setup
+sed "s|^CNCCNFG=.*|CNCCNFG=${SB}/missing.cnfg|" "${SB}/test.cfg" > "${SB}/t2.cfg"
+"${NFI}" -c "${SB}/t2.cfg" -i; rc=$?
+assert_rc    "unreadable cnc.cnfg: rc" 1 "$rc"
+assert_match "unreadable cnc.cnfg: FATAL" ' FATAL .*CNCCNFG' "$(trace)"
+assert_eq    "unreadable cnc.cnfg: no state" no "$(exists "${SB}/logs/.h1_INSTALL_STATE")"
+assert_eq    "unreadable cnc.cnfg: no info" no "$(exists "${SB}/logs/.h1_INSTALL_INFO")"
+assert_eq    "unreadable cnc.cnfg: no dnf" 0 "$(count_of dnf)"
+
+# --- I1: resume refuses when /usr/cnc is not our link ----------------------
+# mkfake <dir> — a post-install.sh / cnc.cnfg target under <dir> that logs if run.
+mkfake() {
+	mkdir -p "$1/bin" "$1/features"
+	printf '#!/bin/sh\necho "post-install.sh $*" >> "%s/calls"\nexit 0\n' "${SB}" > "$1/bin/post-install.sh"
+	chmod +x "$1/bin/post-install.sh"
+}
+setup
+mkfake "${SB}/usr/cnc"
+print ispostinstall > "${SB}/logs/.h1_INSTALL_STATE"
+printf 'LOADDIR=%s\nLOADDIR_CREATED=yes\n' "${SB}/usr4/inc5.3.002" > "${SB}/logs/.h1_INSTALL_INFO"
+"${NFI}" -c "${SB}/test.cfg" -r; rc=$?
+assert_rc    "resume /usr/cnc real dir: rc" 1 "$rc"
+assert_match "resume /usr/cnc real dir: FATAL" ' FATAL .*usr/cnc' "$(trace)"
+assert_eq    "resume /usr/cnc real dir: nothing run" 0 "$(count_of post-install.sh)"
+assert_eq    "resume /usr/cnc real dir: state" ispostinstall "$(state)"
+assert_eq    "resume /usr/cnc real dir: dir kept" yes "$(exists "${SB}/usr/cnc/bin/post-install.sh")"
+
+setup
+mkfake "${SB}/usr4/other"
+mkdir -p "${SB}/usr4/inc5.3.002"
+ln -s "${SB}/usr4/other" "${SB}/usr/cnc"
+print ispostinstall > "${SB}/logs/.h1_INSTALL_STATE"
+printf 'LOADDIR=%s\nLOADDIR_CREATED=yes\n' "${SB}/usr4/inc5.3.002" > "${SB}/logs/.h1_INSTALL_INFO"
+"${NFI}" -c "${SB}/test.cfg" -r; rc=$?
+assert_rc    "resume /usr/cnc foreign link: rc" 1 "$rc"
+assert_eq    "resume /usr/cnc foreign link: nothing run" 0 "$(count_of post-install.sh)"
+assert_eq    "resume /usr/cnc foreign link: state" ispostinstall "$(state)"
+assert_eq    "resume /usr/cnc foreign link: link kept" "${SB}/usr4/other" "$(readlink "${SB}/usr/cnc")"
+
+setup
+mkdir -p "${SB}/usr4/inc5.3.002"
+print isrpm > "${SB}/logs/.h1_INSTALL_STATE"
+printf 'LOADDIR=%s\nLOADDIR_CREATED=yes\n' "${SB}/usr4/inc5.3.002" > "${SB}/logs/.h1_INSTALL_INFO"
+"${NFI}" -c "${SB}/test.cfg" -r; rc=$?
+assert_rc    "resume /usr/cnc absent: rc" 1 "$rc"
+assert_eq    "resume /usr/cnc absent: no dnf" 0 "$(count_of dnf)"
+assert_eq    "resume /usr/cnc absent: state" isrpm "$(state)"
+
+# --- I1: resume past isunstage refuses a foreign /usr/cnc_stage ------------
+setup
+FAIL_POSTINSTALL=1 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+mkdir -p "${SB}/usr4/other"
+ln -s "${SB}/usr4/other" "${SB}/usr/cnc_stage"
+"${NFI}" -c "${SB}/test.cfg" -r; rc=$?
+assert_rc    "resume foreign stage: rc" 1 "$rc"
+assert_eq    "resume foreign stage: post-install once" 1 "$(count_of post-install.sh)"
+assert_eq    "resume foreign stage: state" ispostinstall "$(state)"
+assert_eq    "resume foreign stage: link kept" "${SB}/usr4/other" "$(readlink "${SB}/usr/cnc_stage")"
+
+setup
+FAIL_POSTINSTALL=1 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+mkdir -p "${SB}/usr/cnc_stage/keep"
+"${NFI}" -c "${SB}/test.cfg" -r; rc=$?
+assert_rc    "resume real stage dir: rc" 1 "$rc"
+assert_eq    "resume real stage dir: post-install once" 1 "$(count_of post-install.sh)"
+assert_eq    "resume real stage dir: kept" yes "$(exists "${SB}/usr/cnc_stage/keep")"
+
+# --- F3: -r refuses when the config's LOADDIR differs from the recorded (R3) -
+setup
+FAIL_POSTINSTALL=1 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+sed 's/^NEW_LOAD=.*/NEW_LOAD=03/' "${SB}/test.cfg" > "${SB}/t2.cfg"
+"${NFI}" -c "${SB}/t2.cfg" -r; rc=$?
+assert_rc    "resume LOADDIR mismatch: rc" 1 "$rc"
+assert_match "resume LOADDIR mismatch: FATAL" ' FATAL .*use reset' "$(trace)"
+assert_eq    "resume LOADDIR mismatch: post-install once" 1 "$(count_of post-install.sh)"
+assert_eq    "resume LOADDIR mismatch: state" ispostinstall "$(state)"
+assert_eq    "resume LOADDIR mismatch: no new load dir" no "$(exists "${SB}/usr4/inc5.3.003")"
+
+# --- F3: isprepare refuses a pre-existing real stage dir / foreign link ----
+setup
+print isprepare > "${SB}/logs/.h1_INSTALL_STATE"
+printf 'LOADDIR=%s\n' "${SB}/usr4/inc5.3.002" > "${SB}/logs/.h1_INSTALL_INFO"
+mkdir -p "${SB}/usr/cnc_stage/keep"
+"${NFI}" -c "${SB}/test.cfg" -r; rc=$?
+assert_rc    "isprepare real stage dir: rc" 1 "$rc"
+assert_match "isprepare real stage dir: FATAL" ' FATAL .*cnc_stage exists' "$(trace)"
+assert_eq    "isprepare real stage dir: kept" yes "$(exists "${SB}/usr/cnc_stage/keep")"
+assert_eq    "isprepare real stage dir: state" isprepare "$(state)"
+assert_eq    "isprepare real stage dir: no dnf" 0 "$(count_of dnf)"
+
+setup
+print isprepare > "${SB}/logs/.h1_INSTALL_STATE"
+printf 'LOADDIR=%s\n' "${SB}/usr4/inc5.3.002" > "${SB}/logs/.h1_INSTALL_INFO"
+mkdir -p "${SB}/usr4/other"
+ln -s "${SB}/usr4/other" "${SB}/usr/cnc_stage"
+"${NFI}" -c "${SB}/test.cfg" -r; rc=$?
+assert_rc    "isprepare foreign stage link: rc" 1 "$rc"
+assert_match "isprepare foreign stage link: FATAL" ' FATAL .*cnc_stage is a link to' "$(trace)"
+assert_eq    "isprepare foreign stage link: kept" "${SB}/usr4/other" "$(readlink "${SB}/usr/cnc_stage")"
+assert_eq    "isprepare foreign stage link: state" isprepare "$(state)"
+assert_eq    "isprepare foreign stage link: no dnf" 0 "$(count_of dnf)"
+
+# --- F3/M7: isunstage refuses a real dir and a foreign link ----------------
+setup
+STAGE_REAL=1 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+assert_rc    "isunstage real dir: rc" 1 "$rc"
+assert_match "isunstage real dir: FATAL" ' FATAL .*cnc_stage' "$(trace)"
+assert_eq    "isunstage real dir: kept" yes "$(exists "${SB}/usr/cnc_stage/keep")"
+assert_eq    "isunstage real dir: state" isunstage "$(state)"
+assert_eq    "isunstage real dir: no linux_packages" 0 "$(count_of linux_packages)"
+
+setup
+STAGE_FOREIGN=1 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+assert_rc    "isunstage foreign link: rc" 1 "$rc"
+assert_match "isunstage foreign link: FATAL" ' FATAL .*cnc_stage is a link to' "$(trace)"
+assert_eq    "isunstage foreign link: kept" "${SB}/usr4/other" "$(readlink "${SB}/usr/cnc_stage")"
+assert_eq    "isunstage foreign link: state" isunstage "$(state)"
+assert_eq    "isunstage foreign link: no linux_packages" 0 "$(count_of linux_packages)"
 
 # --- backgrounding: without NFI_FOREGROUND it returns 0 at once --------------
 setup

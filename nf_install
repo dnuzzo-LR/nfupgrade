@@ -85,6 +85,24 @@ function info_value
 	sed -n "s/^$1=//p" "${INFOFILE}" | sed -n '$p'
 }
 
+# state_index <state> — the 0-based position of <state> in INSTALL_STATES
+# (nothing printed for an unknown state).
+function state_index
+{
+	typeset s
+	integer i=0
+	for s in ${INSTALL_STATES}
+	do
+		if [ "$1" = "$s" ]
+		then
+			print ${i}
+			return 0
+		fi
+		i=i+1
+	done
+	return 1
+}
+
 function is_valid_state
 {
 	typeset s
@@ -102,7 +120,10 @@ function netflex_rpm_installed
 
 # --- steps --------------------------------------------------------------------
 
-# Fresh-start guard (never run on resume): netFLEX must not be present.
+# Fresh-start guard (never run on resume): netFLEX must not be present. A
+# leftover ${STAGEROOT} (real dir or any link) also refuses: isprepare would
+# refuse it anyway, but only after state was written, leaving a resume point
+# that can never get past isprepare (ruling R9).
 function check_not_installed
 {
 	if netflex_rpm_installed
@@ -112,6 +133,10 @@ function check_not_installed
 	if [ -e "${INCROOT}" -o -L "${INCROOT}" ]
 	then
 		die "${INCROOT} already exists - refusing a fresh install"
+	fi
+	if [ -e "${STAGEROOT}" -o -L "${STAGEROOT}" ]
+	then
+		die "${STAGEROOT} already exists - refusing a fresh install"
 	fi
 	loginfo "netFLEX is not installed on ${HOSTNAME}"
 }
@@ -208,10 +233,18 @@ function do_isrpm
 	loginfo "RPM install complete"
 }
 
+# do_isunstage — remove the ${STAGEROOT} link, but only if it is ours (points
+# at LOADDIR); a link elsewhere or a real directory is refused untouched.
 function do_isunstage
 {
+	typeset target
 	if [ -L "${STAGEROOT}" ]
 	then
+		target=$(readlink "${STAGEROOT}")
+		if [ "${target}" != "${LOADDIR}" ]
+		then
+			die "${STAGEROOT} is a link to ${target}, not ${LOADDIR} - not removing it"
+		fi
 		run_logged unstage rm -f "${STAGEROOT}" || die "cannot remove ${STAGEROOT}"
 		loginfo "Removed ${STAGEROOT} link"
 	elif [ -e "${STAGEROOT}" ]
@@ -368,6 +401,10 @@ function start_fresh
 	fi
 	check_not_installed
 	check_loadroot_mounted
+	[ -n "${DEPOTFILE}" -a -f "${DEPOTFILE}" -a -r "${DEPOTFILE}" ] \
+		|| die "cannot read DEPOTFILE ${DEPOTFILE} - refusing a fresh install"
+	[ -n "${CNCCNFG}" -a -f "${CNCCNFG}" -a -r "${CNCCNFG}" ] \
+		|| die "cannot read CNCCNFG ${CNCCNFG} - refusing a fresh install"
 	if [ "${cur}" = "isdone" ]
 	then
 		ts=$(date '+%Y%m%d%H%M%S')
@@ -388,9 +425,14 @@ function start_fresh
 }
 
 # Resume (-r). Requires an unfinished state; skips the not-installed guard.
+# Once isprepare has run, the install owns ${INCROOT} (a link to LOADDIR) and
+# ${STAGEROOT} (that link, or removed by isunstage): resume refuses, changing
+# nothing, if either is anything else, so it never runs install steps over a
+# netFLEX it did not create.
 function start_resume
 {
-	typeset cur infoload
+	typeset cur infoload target
+	integer idx prep
 	cur=$(read_state)
 	if [ -z "${cur}" -o "${cur}" = "isdone" ]
 	then
@@ -404,6 +446,21 @@ function start_resume
 		die "install in progress is for ${infoload} but the config names ${LOADDIR} - use reset"
 	fi
 	LOADDIR="${infoload}"
+	idx=$(state_index "${cur}")
+	prep=$(state_index isprepare)
+	if [ ${idx} -gt ${prep} ]
+	then
+		if [ -L "${INCROOT}" ]
+		then
+			target=$(readlink "${INCROOT}")
+			[ "${target}" = "${LOADDIR}" ] \
+				|| die "${INCROOT} is a link to ${target}, not ${LOADDIR} - refusing resume, nothing changed"
+		else
+			die "${INCROOT} is not a link to ${LOADDIR} - refusing resume, nothing changed"
+		fi
+		reset_link_ok "${STAGEROOT}" \
+			|| die "${STAGEROOT} is not ours - refusing resume, nothing changed"
+	fi
 	loginfo "Resuming install of ${VERSION} into ${LOADDIR} at step ${cur}"
 }
 
