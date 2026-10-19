@@ -414,6 +414,26 @@ class TestApi(unittest.TestCase):
         rec = [r for r in events if r["event"] == "config_saved"][0]
         self.assertEqual(rec["mode"], "install")
 
+    def test_save_install_invalid_hostname_writes_nothing(self):
+        sid = self._session()
+        ctx = self.ctx._replace(hostname="bad host")
+        cnc_path = os.path.join(ctx.inclogdir, "nfupgrader_cnc.cnfg")
+        open(cnc_path, "w").write("PRE-EXISTING\n")
+        pre_cnc = open(cnc_path, "rb").read()
+        saved_path = os.path.join(ctx.inclogdir, "nfupgrader_user.cfg")
+        self.assertFalse(os.path.exists(saved_path))
+        values = {"BOXTYPE": "SINGLE", "INCLOGDIR": "/usr/cnc/logs", "NEW_GENERIC": "5.5.0",
+                  "NEW_LOAD": "03", "DEPOTFILE": "/depot/x.rpm"}
+        payload = json.dumps({"values": values, "mode": "install"}).encode()
+        status, _, body = api.dispatch("POST", "/api/config/save", {}, payload,
+                                       {"nfu_sid": sid}, "127.0.0.1", ctx)
+        self.assertEqual(status, 400)
+        data = json.loads(body.decode())
+        self.assertEqual(data["error"], "config invalid")
+        self.assertTrue(any(i["level"] == "ERROR" for i in data["issues"]))
+        self.assertEqual(open(cnc_path, "rb").read(), pre_cnc)
+        self.assertFalse(os.path.exists(saved_path))
+
     def test_save_upgrade_unchanged(self):
         sid = self._session()
         payload = json.dumps({"values": {

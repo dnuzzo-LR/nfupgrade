@@ -395,15 +395,30 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
             return _json(400, {"error": "mode must be one of {}".format("/".join(cfg.MODES))})
         if any(i["level"] == "ERROR" for i in issues):
             return _json(400, {"error": "config invalid", "issues": issues})
+        cnc_path = None
+        cnc_text = None
         if mode == "install":
             cnc_path = os.path.join(ctx.inclogdir, "nfupgrader_cnc.cnfg")
-            with open(cnc_path, "w") as fh:
-                fh.write(cnccnfg.render_from_values(values, ctx.hostname))
+            # Render into a local first: cfg.validate does not check thishost
+            # (ctx.hostname) itself, only MATEHOST/MASTERHOST, so an invalid
+            # hostname is only caught here. Nothing is written to disk until
+            # this and the .cfg render below both succeed, so a bad hostname
+            # never truncates a previously-good cnc.cnfg.
+            try:
+                cnc_text = cnccnfg.render_from_values(values, ctx.hostname)
+            except ValueError as exc:
+                return _json(400, {"error": "config invalid",
+                                   "issues": issues + [{"field": "CNCCNFG", "level": "ERROR",
+                                                        "message": str(exc)}]})
             values = dict(values)
             values["CNCCNFG"] = cnc_path
+        rendered = cfg.render_cfg(values)
+        if mode == "install":
+            with open(cnc_path, "w") as fh:
+                fh.write(cnc_text)
         saved = os.path.join(ctx.inclogdir, "nfupgrader_user.cfg")
         with open(saved, "w") as fh:
-            fh.write(cfg.render_cfg(values))
+            fh.write(rendered)
         if ctx.state is not None:
             ctx.state["user_config"] = saved
         ctx.audit.record("config_saved", path=saved, mode=mode, client=client_ip)
