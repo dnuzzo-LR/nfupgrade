@@ -7,7 +7,7 @@ fail=0
 # --- 1. Syntax --------------------------------------------------------------
 # (stderr suppressed: the originals use `...` backticks, which ksh -n warns
 #  about but accepts; those warnings are inherited and not our concern.)
-for f in nf_upgrade nf_upgrader; do
+for f in nf_upgrade nf_upgrader nf_install; do
 	if ksh -n "$f" 2>/dev/null; then echo "ok   syntax $f"
 	else echo "FAIL syntax $f"; fail=1; fi
 done
@@ -59,7 +59,7 @@ check_coverage nf_upgrade \
 	-e '/^function print_usage$/,/^}$/d'
 
 # --- 4. Grammar: every log*/logfatal call carries a quoted message. ---------
-for f in nf_upgrade nf_upgrader; do
+for f in nf_upgrade nf_upgrader nf_install; do
 	bad=$(grep -nE '^[[:space:]]*(loginfo|logwarn|logerror|logfatal)([[:space:]]|$)' "$f" \
 		| grep -vE '(loginfo|logwarn|logerror|logfatal)[[:space:]]+"' || true)
 	if [ -z "$bad" ]; then echo "ok   grammar $f"

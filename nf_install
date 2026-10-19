@@ -1,0 +1,491 @@
+#! /usr/bin/ksh
+#
+# nf_install — fresh install of netFLEX CORE on the local host, with resume.
+#
+#   Usage: nf_install -c <config file> -i|-r|-x [-h]
+#
+#     -c: config file (sourced; INCLOGDIR, NEW_GENERIC, NEW_LOAD, DEPOTFILE,
+#         CNCCNFG, INSTALLWEBGUI)
+#     -i: fresh install (refused if an install is unfinished or netFLEX is
+#         already present)
+#     -r: resume an unfinished install from its recorded step
+#     -x: reset a failed install (not implemented yet)
+#     -h: show this help
+#
+# Runs as root. Re-runs itself in the background (like nf_upgrade launching
+# nf_upgrader) unless NFI_FOREGROUND=YES or NFI_CHILD is set.
+#
+# State: ${INCLOGDIR}/.${HOSTNAME}_INSTALL_STATE holds the step to run NEXT; a
+# fatal step exits 1 leaving the state at that step (the resume point). Info:
+# ${INCLOGDIR}/.${HOSTNAME}_INSTALL_INFO (LOADDIR, VERSION, DEPOTFILE). Never
+# touches ${INCLOGDIR}/.${HOSTNAME}_STATE (nf_upgrader's resume point).
+#
+# ksh88-safe: no arrays, no PIPESTATUS, no pipefail.
+
+trap '' HUP
+umask 022
+
+PATH=${PATH}:/usr/sbin:/sbin
+export PATH
+NF_LOG_LIB="$(dirname "$0")/nf_log.ksh"
+if [ ! -r "${NF_LOG_LIB}" ]
+then
+	print -u2 "nf_install: cannot read ${NF_LOG_LIB}"
+	exit 1
+fi
+. "${NF_LOG_LIB}"
+
+PROG=${0##*/}
+
+# Roots: overridable so the test suite can run in a sandbox.
+INCROOT=${NFI_INCROOT:-/usr/cnc}
+STAGEROOT=${NFI_STAGEROOT:-/usr/cnc_stage}
+LOADROOT=${NFI_LOADROOT:-/usr4}
+
+# All valid states, in order. The state file holds the step to run next.
+INSTALL_STATES="isstart isprepare isrpm isunstage iscnfg ispackages iscmmperm islicmigrate ispostinstall isdatabase iswebgui islicense isdone"
+
+function print_usage
+{
+	print -u2 "Usage: ${PROG} -c <config file> -i|-r|-x [-h]"
+	print -u2 "   -c: config file"
+	print -u2 "   -i: fresh install"
+	print -u2 "   -r: resume an unfinished install"
+	print -u2 "   -x: reset a failed install"
+	print -u2 "   -h: show this help"
+}
+
+# die <message> — log FATAL and exit 1. The state file is NOT advanced, so it
+# still names the failed step (the resume point).
+function die
+{
+	logfatal "$1"
+	logfatal "Aborting install"
+	exit 1
+}
+
+function write_state
+{
+	printf '%s\n' "$1" > "${STATEFILE}"
+}
+
+# read_state — print the recorded state (first line, blanks stripped), or
+# nothing if the file is absent/empty.
+function read_state
+{
+	[ -f "${STATEFILE}" ] || return 0
+	sed -e '1!d' -e 's/[[:space:]]//g' "${STATEFILE}"
+}
+
+# info_value <KEY> — the value of KEY= from the info file (not sourced).
+function info_value
+{
+	[ -f "${INFOFILE}" ] || return 0
+	sed -n "s/^$1=//p" "${INFOFILE}" | sed -n '$p'
+}
+
+function is_valid_state
+{
+	typeset s
+	for s in ${INSTALL_STATES}
+	do
+		[ "$1" = "$s" ] && return 0
+	done
+	return 1
+}
+
+function netflex_rpm_installed
+{
+	rpm -q netFLEX-CORE >/dev/null 2>&1
+}
+
+# --- steps --------------------------------------------------------------------
+
+# Fresh-start guard (never run on resume): netFLEX must not be present.
+function check_not_installed
+{
+	if netflex_rpm_installed
+	then
+		die "netFLEX-CORE RPM is already installed - refusing a fresh install"
+	fi
+	if [ -e "${INCROOT}" -o -L "${INCROOT}" ]
+	then
+		die "${INCROOT} already exists - refusing a fresh install"
+	fi
+	loginfo "netFLEX is not installed on ${HOSTNAME}"
+}
+
+function check_loadroot_mounted
+{
+	# (no "if !": ksh88 has no pipeline negation)
+	if mountpoint -q "${LOADROOT}"
+	then
+		loginfo "${LOADROOT} is mounted"
+	else
+		die "${LOADROOT} is not a mounted filesystem"
+	fi
+}
+
+function do_isstart
+{
+	check_loadroot_mounted
+}
+
+# link_to_loaddir <link> — create <link> -> LOADDIR, accept an existing link
+# already pointing there, refuse anything else.
+function link_to_loaddir
+{
+	typeset link="$1"
+	typeset target
+	if [ -L "${link}" ]
+	then
+		target=$(readlink "${link}")
+		if [ "${target}" = "${LOADDIR}" ]
+		then
+			loginfo "${link} already points to ${LOADDIR}"
+			return 0
+		fi
+		die "${link} is a link to ${target}, not ${LOADDIR}"
+	fi
+	if [ -e "${link}" ]
+	then
+		die "${link} exists and is not a link to ${LOADDIR}"
+	fi
+	run_logged ln ln -s "${LOADDIR}" "${link}" || die "cannot link ${link} to ${LOADDIR}"
+	loginfo "Linked ${link} -> ${LOADDIR}"
+}
+
+function do_isprepare
+{
+	run_logged mkdir mkdir -p "${LOADDIR}" || die "cannot create ${LOADDIR}"
+	link_to_loaddir "${INCROOT}"
+	link_to_loaddir "${STAGEROOT}"
+}
+
+function do_isrpm
+{
+	typeset have want pkgtool
+	if netflex_rpm_installed
+	then
+		have=$(rpm -q --qf '%{VERSION}-%{RELEASE}' netFLEX-CORE 2>/dev/null)
+		want=$(rpm -qp --qf '%{VERSION}-%{RELEASE}' "${DEPOTFILE}" 2>/dev/null)
+		if [ -n "${have}" -a "${have}" = "${want}" ]
+		then
+			loginfo "netFLEX-CORE ${have} already installed"
+			return 0
+		fi
+		die "netFLEX-CORE ${have} is installed but ${DEPOTFILE} is ${want}"
+	fi
+	[ -r "${DEPOTFILE}" ] || die "cannot read DEPOTFILE ${DEPOTFILE}"
+	if [ -n "${NFI_PKGTOOL}" ]
+	then
+		pkgtool="${NFI_PKGTOOL}"
+	elif [ -x /usr/bin/dnf ]
+	then
+		pkgtool=dnf
+	else
+		pkgtool=yum
+	fi
+	loginfo "Installing ${DEPOTFILE} with ${pkgtool}"
+	run_logged rpm "${pkgtool}" install -y "${DEPOTFILE}" || die "RPM install of ${DEPOTFILE} failed"
+	loginfo "RPM install complete"
+}
+
+function do_isunstage
+{
+	if [ -L "${STAGEROOT}" ]
+	then
+		run_logged unstage rm -f "${STAGEROOT}" || die "cannot remove ${STAGEROOT}"
+		loginfo "Removed ${STAGEROOT} link"
+	elif [ -e "${STAGEROOT}" ]
+	then
+		die "${STAGEROOT} is not a link - not removing it"
+	else
+		loginfo "${STAGEROOT} already absent"
+	fi
+}
+
+function do_iscnfg
+{
+	[ -n "${CNCCNFG}" -a -r "${CNCCNFG}" ] || die "cannot read CNCCNFG ${CNCCNFG}"
+	run_logged cnccnfg cp "${CNCCNFG}" "${INCROOT}/features/cnc.cnfg" \
+		|| die "cannot copy ${CNCCNFG} to ${INCROOT}/features/cnc.cnfg"
+	loginfo "Installed ${INCROOT}/features/cnc.cnfg"
+}
+
+function do_ispackages
+{
+	run_logged linux_packages "${INCROOT}/bin/linux_packages" || die "linux_packages failed"
+	loginfo "linux_packages complete"
+}
+
+function do_iscmmperm
+{
+	run_logged cmmperm su cmm -c "${INCROOT}/bin/cmmperm" || die "cmmperm failed"
+	loginfo "cmmperm complete"
+}
+
+function do_islicmigrate
+{
+	if run_logged license-migrate su cmm -c "${INCROOT}/mbin/license-migrate"
+	then
+		loginfo "license-migrate complete"
+	else
+		logwarn "license-migrate failed - continuing"
+	fi
+}
+
+function do_ispostinstall
+{
+	run_logged post-install "${INCROOT}/bin/post-install.sh" || die "post-install.sh failed"
+	loginfo "post-install complete"
+}
+
+function do_isdatabase
+{
+	run_logged database "${INCROOT}/bin/nf_upgrade_pg.sh" || die "nf_upgrade_pg.sh failed"
+	loginfo "database setup complete"
+}
+
+# webgui_setup — the nf-install 530gui.sh sequence. Runs in a subshell (it
+# changes directory); returns non-zero at the first failure.
+function webgui_setup
+{
+	typeset tarfile f
+	tarfile=""
+	for f in "${INCROOT}"/GUI_REL/LINUXWEB64.*.tar
+	do
+		if [ -f "${f}" ]
+		then
+			tarfile="${f}"
+			break
+		fi
+	done
+	if [ -z "${tarfile}" ]
+	then
+		logwarn "No LINUXWEB64.*.tar in ${INCROOT}/GUI_REL"
+		return 1
+	fi
+	loginfo "Installing web GUI from ${tarfile}"
+	PATH=${PATH}:${INCROOT}/web/bin:${INCROOT}/bin:${INCROOT}/web/data
+	cd "${INCROOT}/GUI_REL" || return 1
+	run_logged webtar tar xof "${tarfile}" || return 1
+	run_logged lwebsetup ./lwebsetup <<EOF || return 1
+n
+n
+EOF
+	cd "${INCROOT}/web/data" || return 1
+	run_logged maps cp "${INCROOT}"/web/maps.default/* "${INCROOT}/web/maps" || return 1
+	run_logged cpjsmap cpjsmap.osm jsmap || return 1
+	run_logged sysconfig cp -p def.sys_config.flx sys_config || return 1
+	run_logged sysdefines cp -p def.system_defines.flx system_defines || return 1
+	printf '[%s_i]\n   host=%s\n   protocol=ssh\n' "${HOSTNAME}" "${HOSTNAME}" > ./Interfaces || return 1
+	run_logged webchown chown cmm:cmm sys_config system_defines Interfaces || return 1
+	return 0
+}
+
+function do_iswebgui
+{
+	if [ "${INSTALLWEBGUI}" = "NO" ]
+	then
+		loginfo "Web GUI install skipped (INSTALLWEBGUI=NO)"
+		return 0
+	fi
+	if ( webgui_setup )
+	then
+		loginfo "Web GUI install complete"
+	else
+		logwarn "Web GUI install failed - continuing without it"
+	fi
+}
+
+function do_islicense
+{
+	loginfo "license setup not yet implemented - skipped"
+}
+
+# --- master loop --------------------------------------------------------------
+
+function run_install
+{
+	STATE=$(read_state)
+	while true
+	do
+		loginfo "Current install STATE is ${STATE}"
+		case ${STATE} in
+		isstart )       do_isstart;       STATE=isprepare ;;
+		isprepare )     do_isprepare;     STATE=isrpm ;;
+		isrpm )         do_isrpm;         STATE=isunstage ;;
+		isunstage )     do_isunstage;     STATE=iscnfg ;;
+		iscnfg )        do_iscnfg;        STATE=ispackages ;;
+		ispackages )    do_ispackages;    STATE=iscmmperm ;;
+		iscmmperm )     do_iscmmperm;     STATE=islicmigrate ;;
+		islicmigrate )  do_islicmigrate;  STATE=ispostinstall ;;
+		ispostinstall ) do_ispostinstall; STATE=isdatabase ;;
+		isdatabase )    do_isdatabase;    STATE=iswebgui ;;
+		iswebgui )      do_iswebgui;      STATE=islicense ;;
+		islicense )     do_islicense;     STATE=isdone ;;
+		isdone )
+			loginfo "netFLEX install of ${VERSION} on ${HOSTNAME} complete"
+			break
+			;;
+		* )
+			die "Unsupported install state (${STATE})"
+			;;
+		esac
+		write_state "${STATE}"
+	done
+}
+
+# Fresh start (-i). Order matters (ruling R1): refuse an unfinished install
+# first, then run the not-installed guard and the mount check, and only then
+# archive a finished state and write new state/info files, so a refused
+# install never leaves a resumable state behind.
+function start_fresh
+{
+	typeset cur ts
+	cur=$(read_state)
+	if [ -n "${cur}" -a "${cur}" != "isdone" ]
+	then
+		die "unfinished install (state ${cur}) on ${HOSTNAME} - use resume or reset"
+	fi
+	check_not_installed
+	check_loadroot_mounted
+	if [ "${cur}" = "isdone" ]
+	then
+		ts=$(date '+%Y%m%d%H%M%S')
+		run_logged archive mv "${STATEFILE}" "${STATEFILE}.${ts}" || die "cannot archive ${STATEFILE}"
+		if [ -f "${INFOFILE}" ]
+		then
+			run_logged archive mv "${INFOFILE}" "${INFOFILE}.${ts}" || die "cannot archive ${INFOFILE}"
+		fi
+		loginfo "Archived previous install state as ${STATEFILE}.${ts}"
+	fi
+	{
+		printf 'LOADDIR=%s\n' "${LOADDIR}"
+		printf 'VERSION=%s\n' "${VERSION}"
+		printf 'DEPOTFILE=%s\n' "${DEPOTFILE}"
+	} > "${INFOFILE}" || die "cannot write ${INFOFILE}"
+	write_state isstart
+	loginfo "Starting fresh install of ${VERSION} into ${LOADDIR}"
+}
+
+# Resume (-r). Requires an unfinished state; skips the not-installed guard.
+function start_resume
+{
+	typeset cur infoload
+	cur=$(read_state)
+	if [ -z "${cur}" -o "${cur}" = "isdone" ]
+	then
+		die "no unfinished install to resume on ${HOSTNAME}"
+	fi
+	is_valid_state "${cur}" || die "Unsupported install state (${cur}) in ${STATEFILE}"
+	infoload=$(info_value LOADDIR)
+	[ -n "${infoload}" ] || die "no LOADDIR in ${INFOFILE} - cannot resume"
+	if [ "${infoload}" != "${LOADDIR}" ]
+	then
+		die "install in progress is for ${infoload} but the config names ${LOADDIR} - use reset"
+	fi
+	LOADDIR="${infoload}"
+	loginfo "Resuming install of ${VERSION} into ${LOADDIR} at step ${cur}"
+}
+
+function do_reset
+{
+	die "reset (-x) is not implemented yet"
+}
+
+# --- main -----------------------------------------------------------------------
+
+ACTION=""
+ACTIONFLAG=""
+CONFIGFILE=""
+integer NACTIONS=0
+while getopts "c:irxh" c
+do
+	case $c in
+	c) CONFIGFILE=${OPTARG} ;;
+	i) ACTION=install; ACTIONFLAG=-i; NACTIONS=NACTIONS+1 ;;
+	r) ACTION=resume;  ACTIONFLAG=-r; NACTIONS=NACTIONS+1 ;;
+	x) ACTION=reset;   ACTIONFLAG=-x; NACTIONS=NACTIONS+1 ;;
+	h) print_usage; exit 0 ;;
+	*) print_usage; exit 1 ;;
+	esac
+done
+
+if [ ${NACTIONS} -ne 1 ]
+then
+	logerror "Must provide one and only one of -i, -r or -x"
+	print_usage
+	exit 1
+fi
+if [ -z "${CONFIGFILE}" ]
+then
+	logerror "No config file given (-c)"
+	print_usage
+	exit 1
+fi
+case "${CONFIGFILE}" in
+*/*) ;;
+*) CONFIGFILE="./${CONFIGFILE}" ;;
+esac
+if [ ! -f "${CONFIGFILE}" -o ! -r "${CONFIGFILE}" ]
+then
+	logerror "Config file (${CONFIGFILE}) not found"
+	exit 1
+fi
+. "${CONFIGFILE}"
+
+if [ -z "${INCLOGDIR}" -o ! -d "${INCLOGDIR}" -o ! -w "${INCLOGDIR}" ]
+then
+	logerror "INCLOGDIR [${INCLOGDIR}] is not a writable directory"
+	exit 1
+fi
+if [ -z "${NEW_GENERIC}" -o -z "${NEW_LOAD}" ]
+then
+	logerror "NEW_GENERIC and NEW_LOAD must be set in ${CONFIGFILE}"
+	exit 1
+fi
+
+# Re-run in the background, detached, like nf_upgrade launching nf_upgrader.
+if [ "${NFI_FOREGROUND}" != "YES" -a -z "${NFI_CHILD}" ]
+then
+	NFI_CHILD=1 nohup "$0" -c "${CONFIGFILE}" ${ACTIONFLAG} </dev/null >/dev/null 2>&1 &
+	exit 0
+fi
+
+HOSTNAME=$(hostname)
+if [ -z "${HOSTNAME}" ]
+then
+	logerror "Cannot determine host name"
+	exit 1
+fi
+STATEFILE="${INCLOGDIR}/.${HOSTNAME}_INSTALL_STATE"
+INFOFILE="${INCLOGDIR}/.${HOSTNAME}_INSTALL_INFO"
+LOADDIR="${LOADROOT}/inc${NEW_GENERIC}${NEW_LOAD}"
+VERSION="${NEW_GENERIC}.${NEW_LOAD}"
+
+if [ "${ACTION}" = "reset" ]
+then
+	TRACEFILE="${INCLOGDIR}/reset_inc_${HOSTNAME}.$$"
+else
+	TRACEFILE="${INCLOGDIR}/install_inc_${HOSTNAME}.$$"
+fi
+exec >>"${TRACEFILE}" 2>&1
+
+loginfo "${PROG} ${ACTIONFLAG} started on ${HOSTNAME} (pid $$, config ${CONFIGFILE})"
+
+case ${ACTION} in
+install)
+	start_fresh
+	run_install
+	;;
+resume)
+	start_resume
+	run_install
+	;;
+reset)
+	do_reset
+	;;
+esac
+exit 0
