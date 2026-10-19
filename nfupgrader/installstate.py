@@ -39,9 +39,12 @@ def netflex_installed(host):
     return rpm_rc == 0 or path_rc == 0
 
 
-def host_mode(host, hostname, logdir):
+def host_mode(host, hostname, logdir, installed=None):
     """'install' if an install is unfinished, or netFLEX is not yet installed;
-    else 'upgrade'."""
-    if unfinished(hostname, logdir) or not netflex_installed(host):
+    else 'upgrade'. Pass installed (a netflex_installed result) to reuse one
+    already computed instead of probing the host again."""
+    if unfinished(hostname, logdir):
         return "install"
-    return "upgrade"
+    if installed is None:
+        installed = netflex_installed(host)
+    return "upgrade" if installed else "install"

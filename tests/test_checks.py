@@ -671,6 +671,15 @@ class TestInstallPhase(unittest.TestCase):
         link = FakeHost({("sh", "-c", "test -e /usr/cnc || test -L /usr/cnc"): RunResult(0, "", "")})
         self.assertFalse(checks.evaluate(link, {"name": "x", "kind": "netflex_absent"}, "preflight")["passed"])
 
+    def test_netflex_absent_fails_on_leftover_cnc_stage(self):
+        # Ruling R9: a leftover /usr/cnc_stage (dir or any link) fails the
+        # fresh-install precondition, with its own detail.
+        stage = FakeHost({("sh", "-c", "test -e /usr/cnc_stage || test -L /usr/cnc_stage"):
+                          RunResult(0, "", "")})
+        r = checks.evaluate(stage, {"name": "x", "kind": "netflex_absent", "hard": True}, "preflight")
+        self.assertFalse(r["passed"]); self.assertTrue(r["hard"])
+        self.assertEqual(r["detail"], "/usr/cnc_stage exists")
+
     def test_hard_failures(self):
         rs = [{"hard": True, "passed": False, "name": "a"}, {"hard": False, "passed": False, "name": "b"},
               {"hard": True, "passed": True, "name": "c"}]
@@ -682,6 +691,19 @@ class TestInstallPhase(unittest.TestCase):
         self.assertTrue(checks.evaluate(h, {"name": "m", "kind": "mountpoint", "params": {"path": "/usr4"}}, "preflight")["passed"])
         r = checks.evaluate(h, {"name": "p", "kind": "path_mode", "params": {"path": "/usr4", "mode": "775"}}, "preflight")
         self.assertFalse(r["passed"]); self.assertEqual(r["fix"], "chmod 775 /usr4")
+
+    def test_path_mode_ignores_special_bits(self):
+        # A setgid /usr4 (stat %a 2775) has the expected 775 permission bits.
+        def ev(found, mode="775"):
+            h = FakeHost({("stat", "-c", "%a", "/usr4"): RunResult(0, found + "\n", "")})
+            return checks.evaluate(h, {"name": "p", "kind": "path_mode",
+                                       "params": {"path": "/usr4", "mode": mode}}, "preflight")["passed"]
+        self.assertTrue(ev("2775"))
+        self.assertTrue(ev("775"))
+        self.assertTrue(ev("775", "2775"))
+        self.assertFalse(ev("2755"))
+        self.assertFalse(ev("755"))
+        self.assertFalse(ev(""))
 
     def test_path_mode_fix_runs_chmod_and_rejects_bad_args(self):
         h = FakeHost({("chmod", "775", "/usr4"): RunResult(0, "", "")})

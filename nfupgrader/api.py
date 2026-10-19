@@ -104,9 +104,47 @@ def upgrade_logdir(ctx):
                 d = cfg.parse_cfg(fh.read()).get("INCLOGDIR", "").strip()
         except (IOError, OSError):
             d = ""
-        if d.startswith("/") and "$" not in d and "`" not in d:
+        if _plain_abs_path(d):
             return d
     return ctx.inclogdir
+
+
+def _plain_abs_path(value):
+    """True for an absolute path the shell would not expand ($VAR, `cmd`)."""
+    return value.startswith("/") and "$" not in value and "`" not in value
+
+
+def install_config_error(ctx):
+    """Why an install/resume launch cannot use the active config, or None.
+    nf_install sources that config: it needs CNCCNFG and DEPOTFILE readable
+    files, and INCLOGDIR (its state/info/trace dir) an existing writable
+    absolute directory outside /usr/cnc, which a reset removes (the same plain
+    absolute path rule as upgrade_logdir)."""
+    path = active_config(ctx)
+    if not path:
+        return "save an install configuration on the Config tab first"
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            values = cfg.parse_cfg(fh.read())
+    except (IOError, OSError):
+        return "cannot read the install configuration {}".format(path)
+    for key in ("DEPOTFILE", "CNCCNFG"):
+        v = values.get(key, "").strip()
+        if not v:
+            return "{} is not set in {}".format(key, path)
+        if not (os.path.isfile(v) and os.access(v, os.R_OK)):
+            return "{} {} is not a readable file".format(key, v)
+    d = values.get("INCLOGDIR", "").strip()
+    if not d:
+        return "INCLOGDIR is not set in {}".format(path)
+    if not _plain_abs_path(d):
+        return "INCLOGDIR {} must be a plain absolute path".format(d)
+    norm = os.path.normpath(d)
+    if norm == "/usr/cnc" or norm.startswith("/usr/cnc/"):
+        return "INCLOGDIR {} must not be under /usr/cnc".format(d)
+    if not (os.path.isdir(d) and os.access(d, os.W_OK)):
+        return "INCLOGDIR {} is not an existing writable directory".format(d)
+    return None
 
 
 def host_mode(ctx):
@@ -232,9 +270,10 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         state = progress.read_state(ctx.hostname, logdir, "install")
         trace = logtail.latest_of(logdir, ["install", "reset"], ctx.hostname)
         fatal = [e["msg"] for e in logtail.tail(trace, "ERROR", 10)]
+        installed = installstate.netflex_installed(ctx.host)
         return _json(200, {
-            "mode": host_mode(ctx),
-            "installed": installstate.netflex_installed(ctx.host),
+            "mode": installstate.host_mode(ctx.host, ctx.hostname, logdir, installed=installed),
+            "installed": installed,
             "running": launcher.installer_running(ctx.host),
             "unfinished": installstate.unfinished(ctx.hostname, logdir),
             "state": state,
@@ -494,6 +533,12 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
             return _json(409, {"error": "check fix in progress"})
         if launcher.anything_running(ctx.host):
             return _json(409, {"error": "upgrade already running"})
+        if mode == "install":
+            # Fresh install and resume alike: nf_install sources this config.
+            # Checked before anything reads the logdir it names.
+            err = install_config_error(ctx)
+            if err:
+                return _json(409, {"error": err})
         hm = host_mode(ctx)
         if mode == "install":
             if hm != "install":
@@ -517,7 +562,7 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         if hard:
             # Hard failures are a stop, not a blocking check: never
             # overridable, regardless of what the caller passed.
-            return _json(409, {"error": "netFLEX is already installed", "hard": hard})
+            return _json(409, {"error": "fresh-install precondition failed", "hard": hard})
         blocking = checks.blocking_failures(results)
         # Every blocking failure must be overridden by name; names for checks
         # that now pass (or never existed) are simply ignored.

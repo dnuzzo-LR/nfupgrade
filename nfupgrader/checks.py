@@ -200,14 +200,20 @@ def netflex_present_rcs(host, pkg="netFLEX-CORE", path="/usr/cnc"):
 
 def _netflex_absent(host, p):
     """A fresh-install precondition: neither the netFLEX package nor /usr/cnc
-    is present (a dangling symlink left by a previous uninstall still counts)."""
+    is present (a dangling symlink left by a previous uninstall still counts),
+    and no /usr/cnc_stage is left over (nf_install -i refuses one too, ruling
+    R9). The stage path is not part of netflex_present_rcs: a leftover stage
+    blocks a fresh install but does not make the host "installed"."""
     pkg = p.get("pkg", "netFLEX-CORE")
     path = p.get("path", "/usr/cnc")
+    stage = p.get("stage_path", "/usr/cnc_stage")
     rpm_rc, path_rc = netflex_present_rcs(host, pkg, path)
     if rpm_rc == 0:
         return False, "{} installed".format(pkg)
     if path_rc == 0:
         return False, "{} exists".format(path)
+    if host.run(["sh", "-c", "test -e {0} || test -L {0}".format(stage)]).rc == 0:
+        return False, "{} exists".format(stage)
     return True, "not installed"
 
 
@@ -218,9 +224,13 @@ def _mountpoint(host, p):
 
 
 def _path_mode(host, p):
+    """The permission bits of path match mode. Only the low three octal digits
+    are compared, so setuid/setgid/sticky bits (e.g. a setgid /usr4, 2775) do
+    not fail a 775 check."""
     path, mode = p["path"], p["mode"]
     found = host.run(["stat", "-c", "%a", path]).out.strip()
-    return found == mode, "{} mode {}".format(path, found)
+    ok = len(found) >= 3 and found[-3:] == str(mode)[-3:]
+    return ok, "{} mode {}".format(path, found)
 
 
 def _ulimit(host, p):

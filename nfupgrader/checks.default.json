@@ -15,7 +15,7 @@
   {
     "name": "netflex-absent",
     "category": "NETFLEX",
-    "description": "netFLEX is not already installed",
+    "description": "netFLEX is not already installed (no netFLEX-CORE RPM, /usr/cnc or /usr/cnc_stage)",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "install",

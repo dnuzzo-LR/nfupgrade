@@ -29,6 +29,19 @@ class TestInstallState(unittest.TestCase):
         self.put(".h1_INSTALL_STATE", "isdatabase\n")
         self.assertEqual(installstate.host_mode(FakeHost(rpm), "h1", self.d), "install")
 
+    def test_cnc_stage_alone_is_not_installed(self):
+        # R9: /usr/cnc_stage fails the netflex-absent CHECK, but "installed"
+        # (and so host_mode) stays rpm + /usr/cnc only.
+        stage = {("sh", "-c", "test -e /usr/cnc_stage || test -L /usr/cnc_stage"): RunResult(0, "", "")}
+        self.assertFalse(installstate.netflex_installed(FakeHost(stage)))
+        self.assertEqual(installstate.host_mode(FakeHost(stage), "h1", self.d), "install")
+
+    def test_host_mode_with_precomputed_installed(self):
+        h = FakeHost({})
+        self.assertEqual(installstate.host_mode(h, "h1", self.d, installed=True), "upgrade")
+        self.assertEqual(installstate.host_mode(h, "h1", self.d, installed=False), "install")
+        self.assertEqual(h.calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()

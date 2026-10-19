@@ -1,3 +1,4 @@
+import collections
 import datetime
 import json
 import os
@@ -989,12 +990,33 @@ class TestUpgradeLogdir(unittest.TestCase):
 INSTALL_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "checks.install.json")
 
 
-def install_ctx(tmp, installed=False, state=None, running=False):
+def write_install_cfg(tmp, **over):
+    """Write a saved install config into tmp (INCLOGDIR=tmp, a readable depot
+    RPM and cnc.cnfg) with KEY=value overrides (None drops the key); return its path."""
+    depot = os.path.join(tmp, "netFLEX-CORE-5.3.0.02-1.x86_64.rpm")
+    open(depot, "w").close()
+    vals = collections.OrderedDict([
+        ("INCLOGDIR", tmp), ("NEW_GENERIC", "5.3.0"), ("NEW_LOAD", "02"),
+        ("DEPOTFILE", depot), ("CNCCNFG", os.path.join(tmp, "cnc.cnfg"))])
+    for k, v in over.items():
+        if v is None:
+            vals.pop(k, None)
+        else:
+            vals[k] = v
+    path = os.path.join(tmp, "nfupgrader_user.cfg")
+    with open(path, "w") as fh:
+        fh.write("".join("{}={}\n".format(k, v) for k, v in vals.items()))
+    return path
+
+
+def install_ctx(tmp, installed=False, state=None, running=False, config=True):
     """A Context modelling a host mid new-install (or not yet installed): built
     from make_ctx (nf_upgrader idle), with the install-mode check fixture, and
-    optionally an installed netFLEX-CORE, an install state file, and a live
-    nf_install process."""
+    optionally an installed netFLEX-CORE, an install state file, a live
+    nf_install process, and (by default) a valid saved install config."""
     ctx = make_ctx(tmp, running=False)
+    if config:
+        ctx = ctx._replace(user_config=write_install_cfg(tmp))
     if not installed:
         # Not installed: rpm says absent; the /usr/cnc existence probe is left
         # unmocked, so FakeHost's default (rc 1, "not present") applies too.
@@ -1069,7 +1091,7 @@ class TestInstallApi(unittest.TestCase):
         self.assertEqual(status, 202)
         self.assertEqual(data, {"accepted": True, "mode": "install", "action": "install"})
 
-    def test_launch_install_hard_stop_not_overridable(self):
+    def test_launch_install_refused_when_installed(self):
         ctx = install_ctx(self.tmp, installed=True)
         ctx.state["phase"] = "install"
         for payload in ({"mode": "install"},
@@ -1077,6 +1099,106 @@ class TestInstallApi(unittest.TestCase):
             status, data = self._post(ctx, "/api/launch", payload)
             self.assertEqual(status, 409, payload)
             self.assertEqual(data["error"], "netFLEX is already installed")
+
+    def test_launch_hard_failure_never_overridable(self):
+        # F2: host_mode says install (no rpm, no /usr/cnc), so the launch reaches
+        # the hard_failures branch: netflex-absent fails on a leftover
+        # /usr/cnc_stage (R9) and stays a stop even when named with a reason.
+        ctx = install_ctx(self.tmp)
+        ctx.host.responses[("sh", "-c", "test -e /usr/cnc_stage || test -L /usr/cnc_stage")] = \
+            RunResult(0, "", "")
+        for payload in ({"mode": "install"},
+                        {"mode": "install", "overrides": ["netflex-absent"], "reason": "go"}):
+            status, data = self._post(ctx, "/api/launch", payload)
+            self.assertEqual(status, 409, payload)
+            self.assertEqual([h["name"] for h in data["hard"]], ["netflex-absent"])
+            self.assertEqual(data["hard"][0]["detail"], "/usr/cnc_stage exists")
+            self.assertNotIn("not_overridden", data)
+        self.assertNotIn("launch", self._events())
+        self.assertNotIn("override", self._events())
+
+    def _events(self):
+        try:
+            with open(os.path.join(self.tmp, "audit.jsonl")) as fh:
+                return [json.loads(l)["event"] for l in fh.read().splitlines()]
+        except (IOError, OSError):
+            return []
+
+    def _refused(self, ctx, needle):
+        status, data = self._post(ctx, "/api/launch", {"mode": "install"})
+        self.assertEqual(status, 409, data)
+        self.assertIn(needle, data["error"])
+        self.assertNotIn("launch", self._events())
+
+    def test_launch_install_requires_saved_config(self):
+        ctx = install_ctx(self.tmp, config=False)
+        self._refused(ctx, "save an install configuration on the Config tab first")
+
+    def test_launch_resume_requires_saved_config(self):
+        ctx = install_ctx(self.tmp, installed=True, state="ispostinstall", config=False)
+        self._refused(ctx, "save an install configuration on the Config tab first")
+
+    def test_launch_install_config_file_missing(self):
+        ctx = install_ctx(self.tmp, config=False)._replace(
+            user_config=os.path.join(self.tmp, "gone.cfg"))
+        self._refused(ctx, "cannot read")
+
+    def _refused_with(self, needle, **over):
+        # One ctx per test (the redemption token is single-use); the saved
+        # config in ctx.state wins over ctx.user_config, like a Config-tab save.
+        if not hasattr(self, "_cfg_ctx"):
+            self._cfg_ctx = install_ctx(self.tmp, config=False)
+        self._cfg_ctx.state["user_config"] = write_install_cfg(self.tmp, **over)
+        self._refused(self._cfg_ctx, needle)
+
+    def test_launch_install_depotfile_checked(self):
+        self._refused_with("DEPOTFILE", DEPOTFILE=None)
+        self._refused_with("DEPOTFILE", DEPOTFILE=os.path.join(self.tmp, "missing.rpm"))
+        self._refused_with("DEPOTFILE", DEPOTFILE=self.tmp)   # a directory
+
+    def test_launch_install_cnccnfg_checked(self):
+        self._refused_with("CNCCNFG", CNCCNFG=None)
+        self._refused_with("CNCCNFG", CNCCNFG=os.path.join(self.tmp, "missing.cnfg"))
+
+    def test_launch_install_inclogdir_checked(self):
+        self._refused_with("INCLOGDIR", INCLOGDIR=None)
+        self._refused_with("INCLOGDIR", INCLOGDIR="logs")
+        self._refused_with("INCLOGDIR", INCLOGDIR="$HOME/logs")
+        self._refused_with("INCLOGDIR", INCLOGDIR=os.path.join(self.tmp, "nodir"))
+        self._refused_with("/usr/cnc", INCLOGDIR="/usr/cnc/logs")
+        self._refused_with("/usr/cnc", INCLOGDIR="/usr/cnc")
+        self._refused_with("/usr/cnc", INCLOGDIR="/usr/cnc/../cnc/logs")
+        # and a valid one is accepted on the same ctx
+        self._cfg_ctx.state["user_config"] = write_install_cfg(self.tmp)
+        status, data = self._post(self._cfg_ctx, "/api/launch", {"mode": "install"})
+        self.assertEqual(status, 202, data)
+
+    def test_launch_install_inclogdir_not_writable(self):
+        orig = os.access
+        def fake_access(path, mode):
+            if os.path.realpath(path) == os.path.realpath(self.tmp) and mode == os.W_OK:
+                return False
+            return orig(path, mode)
+        ctx = install_ctx(self.tmp)
+        api.os.access = fake_access
+        try:
+            self._refused(ctx, "INCLOGDIR")
+        finally:
+            api.os.access = orig
+
+    def test_status_computes_installed_once(self):
+        ctx = install_ctx(self.tmp)
+        status, data = self._get(ctx, "/api/install/status")
+        self.assertEqual(status, 200)
+        self.assertEqual((data["mode"], data["installed"]), ("install", False))
+        self.assertEqual(ctx.host.calls.count(["rpm", "-q", "netFLEX-CORE"]), 1)
+        ctx2 = install_ctx(tempfile.mkdtemp(), installed=True, state="isrpm")
+        status, data = self._get(ctx2, "/api/install/status")
+        self.assertEqual((data["mode"], data["installed"], data["unfinished"]),
+                         ("install", True, True))
+        ctx3 = install_ctx(tempfile.mkdtemp(), installed=True)
+        status, data = self._get(ctx3, "/api/install/status")
+        self.assertEqual((data["mode"], data["installed"]), ("upgrade", True))
 
     def test_launch_resume_skips_hard(self):
         ctx = install_ctx(self.tmp, installed=True, state="ispostinstall")
