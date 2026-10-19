@@ -188,6 +188,32 @@ def _limit_ok(found, expected, compare):
         return False
 
 
+def _netflex_absent(host, p):
+    """A fresh-install precondition: neither the netFLEX package nor /usr/cnc
+    is present (a dangling symlink left by a previous uninstall still counts)."""
+    pkg = p.get("pkg", "netFLEX-CORE")
+    path = p.get("path", "/usr/cnc")
+    rpm_rc = host.run(["rpm", "-q", pkg]).rc
+    path_rc = host.run(["sh", "-c", "test -e {0} || test -L {0}".format(path)]).rc
+    if rpm_rc == 0:
+        return False, "{} installed".format(pkg)
+    if path_rc == 0:
+        return False, "{} exists".format(path)
+    return True, "not installed"
+
+
+def _mountpoint(host, p):
+    path = p["path"]
+    ok = host.run(["mountpoint", "-q", path]).rc == 0
+    return ok, ("{} mounted".format(path) if ok else "{} is not a mount point".format(path))
+
+
+def _path_mode(host, p):
+    path, mode = p["path"], p["mode"]
+    found = host.run(["stat", "-c", "%a", path]).out.strip()
+    return found == mode, "{} mode {}".format(path, found)
+
+
 def _ulimit(host, p):
     """A limits.conf / limits.d entry (domain type item value) that must equal
     the expected value, or be at least it with compare "min". Read locally (like
@@ -223,6 +249,9 @@ KINDS = {
     "system_define": _system_define,
     "kernel_param": _kernel_param,
     "ulimit": _ulimit,
+    "netflex_absent": _netflex_absent,
+    "mountpoint": _mountpoint,
+    "path_mode": _path_mode,
 }
 
 
@@ -423,6 +452,13 @@ def _fix_ulimit(host, p):
     return True, "'{}' written to {}".format(entry, target)
 
 
+def _fix_path_mode(host, p):
+    r = host.run(["chmod", p["mode"], p["path"]])
+    if r.rc != 0:
+        return False, _cmd_detail(r)
+    return True, "{} set to {}".format(p["path"], p["mode"])
+
+
 def _fix_touchfile(host, p):
     path = "/usr/cnc/features/" + p["file"]
     r = host.run([SCMD, "touch", path], timeout=30)
@@ -441,6 +477,7 @@ FIXES = {
     "ulimit": (_describe_ulimit, _fix_ulimit),
     "touchfile": (lambda p: "{} touch /usr/cnc/features/{}".format(SCMD, p["file"]),
                   _fix_touchfile),
+    "path_mode": (lambda p: "chmod {} {}".format(p["mode"], p["path"]), _fix_path_mode),
 }
 
 # kind -> params -> bool: names that must never reach a root command line.
@@ -448,6 +485,7 @@ _FIX_ARGS_OK = {
     "rpm_installed": lambda p: _arg_ok(p["pkg"]),
     "service_active": lambda p: _arg_ok(p["name"]),
     "touchfile": lambda p: _touchfile_name_ok(p["file"]),
+    "path_mode": lambda p: p["path"].startswith("/") and re.match(r"^[0-7]{3,4}$", p["mode"]) is not None,
 }
 
 
@@ -492,7 +530,10 @@ def _applies(check, when, phase, machtype):
     if check.get("when") != when:
         return False
     cphase = check.get("phase", "any")
-    if cphase not in ("any", phase):
+    if isinstance(cphase, list):
+        if "any" not in cphase and phase not in cphase:
+            return False
+    elif cphase not in ("any", phase):
         return False
     cmt = check.get("machtype")
     if cmt is not None and cmt != machtype:
@@ -558,6 +599,7 @@ def evaluate(host, c, when):
         "blocking": (when == "preflight" and severity == "ERROR" and not passed),
         "fix": None if passed else describe_fix(c),
         "output": "" if passed else _captured_output(rec.runs),
+        "hard": bool(c.get("hard", False)),
     }
 
 
@@ -577,3 +619,18 @@ def find_check(check_list, name, when, phase, machtype=None):
 def blocking_failures(results):
     """The subset of results that block a launch."""
     return [r for r in results if r["blocking"]]
+
+
+def hard_failures(results):
+    """The subset of results marked "hard" that failed: these must block an
+    install even outside the normal preflight-ERROR blocking rule (e.g. a
+    postflight re-check of a hard precondition)."""
+    return [r for r in results if r.get("hard") and not r["passed"]]
+
+
+def install_postflight(host, check_list):
+    """Re-run every rpm_installed check bound to (preflight, install) as
+    postflight, to confirm packages a fix just installed actually landed.
+    Always advisory: a postflight result never blocks."""
+    return [evaluate(host, c, "postflight") for c in check_list
+            if c.get("kind") == "rpm_installed" and _applies(c, "preflight", "install", None)]

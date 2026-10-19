@@ -568,7 +568,8 @@ class TestFixes(unittest.TestCase):
             self.assertEqual(p["target"], "/etc/security/limits.d/99-nproc.conf")
             self.assertEqual(p["reference"], ["/usr/cnc_stage/features/linux-nproc.conf",
                                               "/usr/cnc/features/linux-nproc.conf"])
-            self.assertNotIn("expected_value", p)
+            # Fallback for a fresh install, where neither reference file exists yet.
+            self.assertEqual(p["expected_value"], "32768")
 
     # --- honest kernel_param persistence ---
 
@@ -647,6 +648,88 @@ class TestFixes(unittest.TestCase):
                             cl[0], "preflight")
         self.assertTrue(r["passed"])
         self.assertIsNone(r["fix"])
+
+
+class TestInstallPhase(unittest.TestCase):
+    def test_phase_list_and_any_match_install(self):
+        c_any = {"when": "preflight", "phase": "any", "kind": "file_exists", "params": {"path": "/x"}}
+        c_su = {"when": "preflight", "phase": ["stage", "upgrade"], "kind": "file_exists", "params": {"path": "/x"}}
+        c_in = {"when": "preflight", "phase": "install", "kind": "file_exists", "params": {"path": "/x"}}
+        self.assertTrue(checks._applies(c_any, "preflight", "install", None))
+        self.assertFalse(checks._applies(c_su, "preflight", "install", None))
+        self.assertTrue(checks._applies(c_su, "preflight", "upgrade", None))
+        self.assertTrue(checks._applies(c_in, "preflight", "install", None))
+        self.assertFalse(checks._applies(c_in, "preflight", "stage", None))
+
+    def test_netflex_absent(self):
+        absent = FakeHost({})          # every command rc 1
+        r = checks.evaluate(absent, {"name": "x", "kind": "netflex_absent", "hard": True}, "preflight")
+        self.assertTrue(r["passed"]); self.assertTrue(r["hard"])
+        rpm = FakeHost({("rpm", "-q", "netFLEX-CORE"): RunResult(0, "netFLEX-CORE-5.4.0-29\n", "")})
+        r = checks.evaluate(rpm, {"name": "x", "kind": "netflex_absent", "hard": True}, "preflight")
+        self.assertFalse(r["passed"]); self.assertTrue(r["blocking"])
+        link = FakeHost({("sh", "-c", "test -e /usr/cnc || test -L /usr/cnc"): RunResult(0, "", "")})
+        self.assertFalse(checks.evaluate(link, {"name": "x", "kind": "netflex_absent"}, "preflight")["passed"])
+
+    def test_hard_failures(self):
+        rs = [{"hard": True, "passed": False, "name": "a"}, {"hard": False, "passed": False, "name": "b"},
+              {"hard": True, "passed": True, "name": "c"}]
+        self.assertEqual([r["name"] for r in checks.hard_failures(rs)], ["a"])
+
+    def test_mountpoint_and_path_mode(self):
+        h = FakeHost({("mountpoint", "-q", "/usr4"): RunResult(0, "", ""),
+                      ("stat", "-c", "%a", "/usr4"): RunResult(0, "755\n", "")})
+        self.assertTrue(checks.evaluate(h, {"name": "m", "kind": "mountpoint", "params": {"path": "/usr4"}}, "preflight")["passed"])
+        r = checks.evaluate(h, {"name": "p", "kind": "path_mode", "params": {"path": "/usr4", "mode": "775"}}, "preflight")
+        self.assertFalse(r["passed"]); self.assertEqual(r["fix"], "chmod 775 /usr4")
+
+    def test_path_mode_fix_runs_chmod_and_rejects_bad_args(self):
+        h = FakeHost({("chmod", "775", "/usr4"): RunResult(0, "", "")})
+        ok, _ = checks.apply_fix(h, {"kind": "path_mode", "params": {"path": "/usr4", "mode": "775"}})
+        self.assertTrue(ok); self.assertIn(["chmod", "775", "/usr4"], h.calls)
+        self.assertIsNone(checks.describe_fix({"kind": "path_mode", "params": {"path": "usr4", "mode": "775"}}))
+        self.assertIsNone(checks.describe_fix({"kind": "path_mode", "params": {"path": "/usr4", "mode": "-R"}}))
+
+    def test_install_postflight_reevaluates_packages_only(self):
+        lst = [{"name": "ksh", "when": "preflight", "phase": "any", "kind": "rpm_installed", "params": {"pkg": "ksh"}},
+               {"name": "gr", "when": "preflight", "phase": ["stage", "upgrade"], "kind": "rpm_installed", "params": {"pkg": "x"}},
+               {"name": "fw", "when": "preflight", "phase": "any", "kind": "service_active", "params": {"name": "firewalld"}}]
+        rs = checks.install_postflight(FakeHost({}), lst)
+        self.assertEqual([r["name"] for r in rs], ["ksh"])
+        self.assertFalse(rs[0]["blocking"])
+
+
+class TestDefaultChecksInstall(unittest.TestCase):
+    def setUp(self):
+        self.lst = checks.load_checks(os.path.join(os.path.dirname(checks.__file__), "checks.default.json"))
+
+    def names(self, phase):
+        return {c["name"] for c in self.lst if checks._applies(c, "preflight", phase, None)}
+
+    def test_install_preflight_set(self):
+        n = self.names("install")
+        for want in ("netflex-absent", "usr4-mounted", "usr4-mode", "disk-usr4", "ksh", "apache",
+                     "tmux", "lvm2", "firewall", "nproc_soft", "nproc_hard"):
+            self.assertIn(want, n)
+        for gone in ("gr-idle", "no-grestore", "ems_mode", "nms_mode", "dbchg_mode", "hide_passwd_mode",
+                     "no_passwd_mode", "del_chk_ties_mode", "curlhttps", "msditestmode",
+                     "dbcheck-clean", "staged-present"):
+            self.assertNotIn(gone, n)
+
+    def test_upgrade_preflight_unchanged_by_install_entries(self):
+        self.assertNotIn("netflex-absent", self.names("upgrade"))
+        self.assertIn("gr-idle", self.names("stage"))
+        self.assertIn("ems_mode", self.names("upgrade"))
+
+    def test_netflex_absent_is_hard(self):
+        c = [c for c in self.lst if c["name"] == "netflex-absent"][0]
+        self.assertTrue(c["hard"]); self.assertEqual(c["phase"], "install")
+
+    def test_nproc_has_fallback_value(self):
+        for name in ("nproc_soft", "nproc_hard"):
+            c = [c for c in self.lst if c["name"] == name][0]
+            self.assertEqual(c["params"]["expected_value"], "32768")
+            self.assertEqual(checks._ulimit_expected(dict(c["params"], reference=["/nonexistent"]))[0], "32768")
 
 
 if __name__ == "__main__":

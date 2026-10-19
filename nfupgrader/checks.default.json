@@ -13,12 +13,48 @@
     }
   },
   {
+    "name": "netflex-absent",
+    "category": "NETFLEX",
+    "description": "netFLEX is not already installed",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "install",
+    "hard": true,
+    "kind": "netflex_absent",
+    "params": {}
+  },
+  {
+    "name": "usr4-mounted",
+    "category": "SYSTEM",
+    "description": "/usr4 is a mounted filesystem",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "install",
+    "kind": "mountpoint",
+    "params": {
+      "path": "/usr4"
+    }
+  },
+  {
+    "name": "usr4-mode",
+    "category": "SYSTEM",
+    "description": "/usr4 is mode 775",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "install",
+    "kind": "path_mode",
+    "params": {
+      "path": "/usr4",
+      "mode": "775"
+    }
+  },
+  {
     "name": "gr-idle",
     "category": "NETFLEX",
     "description": "No GR transfer in progress",
     "fail_text": "ERROR",
     "when": "preflight",
-    "phase": "any",
+    "phase": ["stage", "upgrade"],
     "kind": "command_output_match",
     "params": {
       "argv": [
@@ -35,7 +71,7 @@
     "description": "No GR restore in progress",
     "fail_text": "ERROR",
     "when": "preflight",
-    "phase": "any",
+    "phase": ["stage", "upgrade"],
     "kind": "file_absent",
     "params": {
       "path": "/usr/cnc/grestore.pid"
@@ -533,7 +569,7 @@
     "description": "EMS mode Check",
     "fail_text": "WARNING",
     "when": "preflight",
-    "phase": "any",
+    "phase": ["stage", "upgrade"],
     "kind": "touchfile",
     "params": {
       "file": "ems"
@@ -545,7 +581,7 @@
     "description": "NMS mode Check",
     "fail_text": "WARNING",
     "when": "preflight",
-    "phase": "any",
+    "phase": ["stage", "upgrade"],
     "kind": "touchfile",
     "params": {
       "file": "nms"
@@ -557,7 +593,7 @@
     "description": "DBCHG mode Check",
     "fail_text": "WARNING",
     "when": "preflight",
-    "phase": "any",
+    "phase": ["stage", "upgrade"],
     "kind": "touchfile",
     "params": {
       "file": "dbchg"
@@ -569,7 +605,7 @@
     "description": "HIDE_PASSWD mode Check",
     "fail_text": "WARNING",
     "when": "preflight",
-    "phase": "any",
+    "phase": ["stage", "upgrade"],
     "kind": "touchfile",
     "params": {
       "file": "hide_passwd"
@@ -581,7 +617,7 @@
     "description": "NO_PASSWD mode Check",
     "fail_text": "WARNING",
     "when": "preflight",
-    "phase": "any",
+    "phase": ["stage", "upgrade"],
     "kind": "touchfile",
     "params": {
       "file": "nopasswd"
@@ -593,7 +629,7 @@
     "description": "DEL_CHK_TIES mode Check",
     "fail_text": "WARNING",
     "when": "preflight",
-    "phase": "any",
+    "phase": ["stage", "upgrade"],
     "kind": "touchfile",
     "params": {
       "file": "del_chk_ties"
@@ -605,7 +641,7 @@
     "description": "Curl Commands HTTPS",
     "fail_text": "WARNING",
     "when": "preflight",
-    "phase": "any",
+    "phase": ["stage", "upgrade"],
     "kind": "system_define",
     "params": {
       "variable": "INC_API_LIBCURL",
@@ -621,7 +657,7 @@
     "description": "M_SDI_TEST_MODE",
     "fail_text": "WARNING",
     "when": "preflight",
-    "phase": "any",
+    "phase": ["stage", "upgrade"],
     "kind": "system_define",
     "params": {
       "variable": "M_SDI_TEST_MODE",
@@ -685,7 +721,8 @@
         "/usr/cnc_stage/features/linux-nproc.conf",
         "/usr/cnc/features/linux-nproc.conf"
       ],
-      "target": "/etc/security/limits.d/99-nproc.conf"
+      "target": "/etc/security/limits.d/99-nproc.conf",
+      "expected_value": "32768"
     }
   },
   {
@@ -705,7 +742,8 @@
         "/usr/cnc_stage/features/linux-nproc.conf",
         "/usr/cnc/features/linux-nproc.conf"
       ],
-      "target": "/etc/security/limits.d/99-nproc.conf"
+      "target": "/etc/security/limits.d/99-nproc.conf",
+      "expected_value": "32768"
     }
   }
 ]
