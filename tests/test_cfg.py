@@ -86,5 +86,36 @@ class TestDepots(unittest.TestCase):
         self.assertEqual(cfg.list_depots(h, ["/none"]), [])
 
 
+class TestInstallMode(unittest.TestCase):
+    BASE = {"INCLOGDIR": "/l", "NEW_GENERIC": "5.3.0", "NEW_LOAD": "02", "DEPOTFILE": "/d/x.rpm"}
+
+    def test_fields_for(self):
+        inst = [f["name"] for f in cfg.fields_for("install")]
+        self.assertIn("BOXTYPE", inst); self.assertIn("INSTALLWEBGUI", inst)
+        self.assertNotIn("UNLINKDIR", inst); self.assertNotIn("RESTARTINC", inst)
+        self.assertNotIn("BOXTYPE", [f["name"] for f in cfg.fields_for("upgrade")])
+
+    def test_single_ok(self):
+        self.assertEqual(cfg.validate(dict(self.BASE, BOXTYPE="SINGLE"), "install", "h1"), [])
+
+    def test_upgrade_validation_ignores_install_fields(self):
+        self.assertEqual([i for i in cfg.validate(self.BASE) if i["field"] == "BOXTYPE"], [])
+
+    def test_install_rejects_bad_mate(self):
+        for mate in ("", "h1", "b 1", " "):
+            issues = cfg.validate(dict(self.BASE, BOXTYPE="FEP", MATEHOST=mate, MASTERHOST="h1"), "install", "h1")
+            self.assertIn("MATEHOST", [i["field"] for i in issues if i["level"] == "ERROR"], mate)
+
+    def test_master_must_be_one_of_pair(self):
+        issues = cfg.validate(dict(self.BASE, BOXTYPE="BEP", MATEHOST="f1", MASTERHOST="x"), "install", "h1")
+        self.assertIn("MASTERHOST", [i["field"] for i in issues])
+        self.assertEqual(cfg.validate(dict(self.BASE, BOXTYPE="BEP", MATEHOST="f1", MASTERHOST="f1"), "install", "h1"), [])
+
+    def test_render_includes_install_keys(self):
+        out = cfg.render_cfg(dict(self.BASE, BOXTYPE="FEP", MATEHOST="b1", MASTERHOST="h1", CNCCNFG="/l/c"))
+        for k in ('BOXTYPE="FEP"', 'MATEHOST="b1"', 'MASTERHOST="h1"', 'CNCCNFG="/l/c"'):
+            self.assertIn(k, out)
+
+
 if __name__ == "__main__":
     unittest.main()

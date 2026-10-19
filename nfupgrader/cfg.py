@@ -1,30 +1,54 @@
-"""cfg.py — upgrade .cfg field metadata, parse/render/validate, and helpers for
-the config builder. render_cfg always forces PROMPTFORVALIDATE=NO; the customer's
-own file is never edited (import parses a copy of the values)."""
+"""cfg.py — upgrade/install .cfg field metadata, parse/render/validate, and
+helpers for the config builder. render_cfg always forces PROMPTFORVALIDATE=NO;
+the customer's own file is never edited (import parses a copy of the values).
+
+Each FIELDS entry carries a "modes" list ("upgrade", "install", or both)
+naming which Config-tab mode shows and validates it; fields_for() and
+validate() filter on this."""
 import re
+
+from nfupgrader import cnccnfg
+
+#: Modes fields_for()/validate() accept.
+MODES = ("upgrade", "install")
 
 FIELDS = [
     {"name": "INCLOGDIR", "required": True, "kind": "path", "default": "/usr/cnc/logs",
-     "help": "Upgrade log directory (the form defaults it to nfupgrader's INCLOGDIR)"},
-    {"name": "NEW_GENERIC", "required": True, "kind": "string", "help": "Target generic, e.g. 5.5.0"},
-    {"name": "NEW_LOAD", "required": True, "kind": "string", "help": "Target load, e.g. 03"},
-    {"name": "DEPOTFILE", "required": True, "kind": "path", "help": "CORE RPM path"},
-    {"name": "PATCHDEPOTFILE", "required": False, "kind": "path"},
-    {"name": "EXTDEPOTFILE", "required": False, "kind": "path"},
-    {"name": "ATTEXTPATCHDEPOTFILE", "required": False, "kind": "path"},
-    {"name": "INSTALLWEBGUI", "required": False, "kind": "enum", "values": ["YES", "NO"], "default": "YES"},
-    {"name": "RESTARTINC", "required": False, "kind": "enum", "values": ["YES", "NO"], "default": "YES"},
-    {"name": "INIT_CARD_DB", "required": False, "kind": "enum", "values": ["YES", "NO"], "default": "YES"},
-    {"name": "UNLINKDIR", "required": False, "kind": "path"},
-    {"name": "STAGENICEVAL", "required": False, "kind": "int", "default": "39"},
-    {"name": "UPGRADENICEVAL", "required": False, "kind": "int", "default": "-39"},
-    {"name": "LINUXPACKAGES", "required": False, "kind": "enum", "values": ["YES", "NO"], "default": "YES"},
-    {"name": "REMOVEINCLOGS", "required": False, "kind": "enum", "values": ["YES", "NO"]},
-    {"name": "CLEANUPPROCDIR", "required": False, "kind": "enum", "values": ["YES", "NO"]},
-    {"name": "MAX_ELAPSED_GR_WAIT_TIME", "required": False, "kind": "int", "default": "14400"},
-    {"name": "CUSTOMER_UPGRADE", "required": False, "kind": "enum", "values": ["YES", "NO"], "default": "YES"},
+     "help": "Upgrade log directory (the form defaults it to nfupgrader's INCLOGDIR)",
+     "modes": ["upgrade", "install"]},
+    {"name": "NEW_GENERIC", "required": True, "kind": "string", "help": "Target generic, e.g. 5.5.0",
+     "modes": ["upgrade", "install"]},
+    {"name": "NEW_LOAD", "required": True, "kind": "string", "help": "Target load, e.g. 03",
+     "modes": ["upgrade", "install"]},
+    {"name": "DEPOTFILE", "required": True, "kind": "path", "help": "CORE RPM path",
+     "modes": ["upgrade", "install"]},
+    {"name": "PATCHDEPOTFILE", "required": False, "kind": "path", "modes": ["upgrade"]},
+    {"name": "EXTDEPOTFILE", "required": False, "kind": "path", "modes": ["upgrade"]},
+    {"name": "ATTEXTPATCHDEPOTFILE", "required": False, "kind": "path", "modes": ["upgrade"]},
+    {"name": "INSTALLWEBGUI", "required": False, "kind": "enum", "values": ["YES", "NO"], "default": "YES",
+     "modes": ["upgrade", "install"]},
+    {"name": "RESTARTINC", "required": False, "kind": "enum", "values": ["YES", "NO"], "default": "YES",
+     "modes": ["upgrade"]},
+    {"name": "INIT_CARD_DB", "required": False, "kind": "enum", "values": ["YES", "NO"], "default": "YES",
+     "modes": ["upgrade"]},
+    {"name": "UNLINKDIR", "required": False, "kind": "path", "modes": ["upgrade"]},
+    {"name": "STAGENICEVAL", "required": False, "kind": "int", "default": "39", "modes": ["upgrade"]},
+    {"name": "UPGRADENICEVAL", "required": False, "kind": "int", "default": "-39", "modes": ["upgrade"]},
+    {"name": "LINUXPACKAGES", "required": False, "kind": "enum", "values": ["YES", "NO"], "default": "YES",
+     "modes": ["upgrade"]},
+    {"name": "REMOVEINCLOGS", "required": False, "kind": "enum", "values": ["YES", "NO"], "modes": ["upgrade"]},
+    {"name": "CLEANUPPROCDIR", "required": False, "kind": "enum", "values": ["YES", "NO"], "modes": ["upgrade"]},
+    {"name": "MAX_ELAPSED_GR_WAIT_TIME", "required": False, "kind": "int", "default": "14400",
+     "modes": ["upgrade"]},
+    {"name": "CUSTOMER_UPGRADE", "required": False, "kind": "enum", "values": ["YES", "NO"], "default": "YES",
+     "modes": ["upgrade"]},
+    {"name": "BOXTYPE", "required": True, "kind": "enum", "values": list(cnccnfg.BOX_TYPES),
+     "modes": ["install"]},
+    {"name": "MATEHOST", "required": False, "kind": "string", "modes": ["install"]},
+    {"name": "MASTERHOST", "required": False, "kind": "string", "modes": ["install"]},
+    {"name": "CNCCNFG", "required": False, "kind": "path", "modes": ["install"], "hidden": True},
     {"name": "PROMPTFORVALIDATE", "required": False, "kind": "enum", "values": ["NO"],
-     "default": "NO", "fixed": True},
+     "default": "NO", "fixed": True, "modes": ["upgrade", "install"]},
 ]
 
 _FIELD_NAMES = [f["name"] for f in FIELDS]
@@ -83,12 +107,34 @@ def list_depots(host, dirs):
     return out
 
 
-def validate(values):
+def fields_for(mode):
+    """Return the FIELDS entries shown/validated in a given Config-tab mode.
+
+    @param mode  "upgrade" or "install".
+    @return List of FIELDS entries whose "modes" list contains mode.
+    @raises ValueError  mode is not one of MODES.
+    """
+    if mode not in MODES:
+        raise ValueError("unknown mode: {0!r}".format(mode))
+    return [f for f in FIELDS if mode in f["modes"]]
+
+
+def validate(values, mode="upgrade", hostname=None):
     """Structural validation of a values dict. Returns a list of
     {field, level, message}. level is ERROR or WARNING. Does not touch the
-    filesystem (path existence is checked separately, with a Host)."""
+    filesystem (path existence is checked separately, with a Host).
+
+    required/enum/int rules apply only to fields_for(mode). In "install" mode,
+    a FEP/BEP BOXTYPE additionally requires MATEHOST (a valid host name,
+    distinct from hostname) and MASTERHOST (must equal hostname or MATEHOST).
+
+    @param values    Mapping of field name to raw string value.
+    @param mode      "upgrade" (default) or "install".
+    @param hostname  This host's name, used for the install mate/master checks.
+    @return List of {field, level, message} issue dicts.
+    """
     issues = []
-    for f in FIELDS:
+    for f in fields_for(mode):
         name = f["name"]
         v = values.get(name, "")
         v = "" if v is None else str(v).strip()
@@ -107,6 +153,21 @@ def validate(values):
             except ValueError:
                 issues.append({"field": name, "level": "ERROR",
                                "message": "{} must be an integer".format(name)})
+
+    if mode == "install":
+        boxtype = values.get("BOXTYPE", "")
+        boxtype = "" if boxtype is None else str(boxtype).strip()
+        if boxtype in ("FEP", "BEP"):
+            mate = values.get("MATEHOST", "")
+            mate = "" if mate is None else str(mate).strip()
+            master = values.get("MASTERHOST", "")
+            master = "" if master is None else str(master).strip()
+            if not mate or not cnccnfg.valid_hostname(mate) or mate == hostname:
+                issues.append({"field": "MATEHOST", "level": "ERROR",
+                               "message": "MATEHOST must be a valid host name, different from this host"})
+            if not master or master not in (hostname, mate):
+                issues.append({"field": "MASTERHOST", "level": "ERROR",
+                               "message": "MASTERHOST must be this host or MATEHOST"})
     return issues
 
 
