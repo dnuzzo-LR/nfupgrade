@@ -204,6 +204,8 @@ assert_eq    "reset after failure: no info" no "$(exists "${SB}/logs/.h1_INSTALL
 assert_match "reset after failure: state archived" '\.h1_INSTALL_STATE\.[0-9]{14}$' "$(ls "${SB}"/logs/.h1_INSTALL_STATE.* 2>/dev/null)"
 assert_match "reset after failure: info archived" '\.h1_INSTALL_INFO\.[0-9]{14}$' "$(ls "${SB}"/logs/.h1_INSTALL_INFO.* 2>/dev/null)"
 assert_match "reset after failure: reset trace" 'reset_inc_h1\.[0-9]+$' "$(ls "${SB}"/logs/reset_inc_h1.* 2>/dev/null)"
+assert_match "reset after failure: marker recorded" '^LOADDIR_CREATED=yes$' "$(cat "${SB}"/logs/.h1_INSTALL_INFO.* 2>/dev/null)"
+assert_match "reset after failure: probe logged" 'rpm -q netFLEX-CORE \(rc 0\)' "$(rtrace)"
 assert_match "reset after failure: reset complete" ' INFO  .*reset complete' "$(rtrace)"
 assert_eq    "reset after failure: no FATAL" "" "$(rtrace | grep FATAL)"
 assert_match "reset after failure: install trace kept" 'install_inc_h1\.[0-9]+$' "$(ls "${SB}"/logs/install_inc_h1.* 2>/dev/null)"
@@ -217,14 +219,49 @@ mkdir -p "${SB}/usr4/inc5.3.002"
 ln -s "${SB}/usr4/inc5.3.002" "${SB}/usr/cnc"
 ln -s "${SB}/usr4/inc5.3.002" "${SB}/usr/cnc_stage"
 print isrpm > "${SB}/logs/.h1_INSTALL_STATE"
-print "LOADDIR=${SB}/usr4/inc5.3.002" > "${SB}/logs/.h1_INSTALL_INFO"
+printf 'LOADDIR=%s\nLOADDIR_CREATED=yes\n' "${SB}/usr4/inc5.3.002" > "${SB}/logs/.h1_INSTALL_INFO"
 "${NFI}" -c "${SB}/test.cfg" -x; rc=$?
 assert_rc    "reset no rpm: rc" 0 "$rc"
+assert_match "reset no rpm: probe logged" 'rpm -q netFLEX-CORE \(rc 1\)' "$(rtrace)"
 assert_eq    "reset no rpm: no rpm -e" 0 "$(awk '$1 == "rpm" && $2 == "-e"' "${SB}/calls" | wc -l | tr -d ' ')"
 assert_eq    "reset no rpm: /usr/cnc gone" no "$(exists "${SB}/usr/cnc")"
 assert_eq    "reset no rpm: cnc_stage gone" no "$(exists "${SB}/usr/cnc_stage")"
 assert_eq    "reset no rpm: load dir gone" no "$(exists "${SB}/usr4/inc5.3.002")"
 assert_eq    "reset no rpm: no state" no "$(exists "${SB}/logs/.h1_INSTALL_STATE")"
+
+# --- reset keeps a pre-existing load dir (R5) --------------------------------
+setup
+mkdir -p "${SB}/usr4/inc5.3.002"
+print keep > "${SB}/usr4/inc5.3.002/sentinel"
+FAIL_POSTINSTALL=1 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+assert_rc    "reset pre-existing dir: install rc" 1 "$rc"
+assert_eq    "reset pre-existing dir: no marker" "" "$(grep LOADDIR_CREATED "${SB}/logs/.h1_INSTALL_INFO")"
+"${NFI}" -c "${SB}/test.cfg" -x; rc=$?
+assert_rc    "reset pre-existing dir: rc" 0 "$rc"
+assert_eq    "reset pre-existing dir: load dir kept" yes "$(exists "${SB}/usr4/inc5.3.002")"
+assert_eq    "reset pre-existing dir: sentinel kept" keep "$(cat "${SB}/usr4/inc5.3.002/sentinel" 2>/dev/null)"
+assert_match "reset pre-existing dir: WARN" ' WARN  .*not created by this install' "$(rtrace)"
+assert_eq    "reset pre-existing dir: rpmdb gone" no "$(exists "${SB}/rpmdb")"
+assert_eq    "reset pre-existing dir: /usr/cnc gone" no "$(exists "${SB}/usr/cnc")"
+assert_eq    "reset pre-existing dir: cnc_stage gone" no "$(exists "${SB}/usr/cnc_stage")"
+assert_eq    "reset pre-existing dir: no state" no "$(exists "${SB}/logs/.h1_INSTALL_STATE")"
+assert_match "reset pre-existing dir: state archived" '\.h1_INSTALL_STATE\.[0-9]{14}$' "$(ls "${SB}"/logs/.h1_INSTALL_STATE.* 2>/dev/null)"
+assert_match "reset pre-existing dir: reset complete" 'reset complete' "$(rtrace)"
+
+# --- resume keeps the marker, so a later reset still removes the dir (R5) ----
+# Fail at post-install, force the state back to isprepare so the resume
+# re-runs isprepare over the dir it created, and fail again.
+setup
+FAIL_POSTINSTALL=1 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+print isprepare > "${SB}/logs/.h1_INSTALL_STATE"
+FAIL_POSTINSTALL=1 "${NFI}" -c "${SB}/test.cfg" -r; rc=$?
+assert_rc    "resume keeps marker: resume rc" 1 "$rc"
+assert_eq    "resume keeps marker: state" ispostinstall "$(state)"
+assert_eq    "resume keeps marker: marker once" 1 "$(grep -c '^LOADDIR_CREATED=yes$' "${SB}/logs/.h1_INSTALL_INFO")"
+assert_match "resume keeps marker: isprepare logged" 'already created by this install' "$(trace)"
+"${NFI}" -c "${SB}/test.cfg" -x; rc=$?
+assert_rc    "resume keeps marker: reset rc" 0 "$rc"
+assert_eq    "resume keeps marker: load dir gone" no "$(exists "${SB}/usr4/inc5.3.002")"
 
 # --- reset refuses foreign link ----------------------------------------------
 setup

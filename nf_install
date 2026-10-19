@@ -156,9 +156,25 @@ function link_to_loaddir
 	loginfo "Linked ${link} -> ${LOADDIR}"
 }
 
+# do_isprepare — create LOADDIR and the links. LOADDIR_CREATED=yes is recorded
+# in the info file only when this install actually creates LOADDIR (ruling R5),
+# so reset never removes a directory it cannot prove is ours. The info file is
+# only appended to, so a resumed isprepare keeps an earlier marker.
 function do_isprepare
 {
-	run_logged mkdir mkdir -p "${LOADDIR}" || die "cannot create ${LOADDIR}"
+	if [ -e "${LOADDIR}" -o -L "${LOADDIR}" ]
+	then
+		if [ "$(info_value LOADDIR_CREATED)" = "yes" ]
+		then
+			loginfo "${LOADDIR} already created by this install"
+		else
+			loginfo "Using existing directory ${LOADDIR} (not created by this install)"
+		fi
+	else
+		run_logged mkdir mkdir -p "${LOADDIR}" || die "cannot create ${LOADDIR}"
+		printf 'LOADDIR_CREATED=yes\n' >> "${INFOFILE}" || die "cannot record LOADDIR_CREATED in ${INFOFILE}"
+		loginfo "Created ${LOADDIR}"
+	fi
 	link_to_loaddir "${INCROOT}"
 	link_to_loaddir "${STAGEROOT}"
 }
@@ -418,10 +434,12 @@ function reset_link_ok
 
 # Reset (-x): undo a failed install, removing ONLY what it provably created.
 # Every refusal check runs before anything is removed; a refusal is FATAL and
-# leaves the RPM, links, load dir, state and info untouched. Traces are kept.
+# leaves the RPM, links, load dir, state and info untouched. The load dir is
+# removed only if the info file says this install created it (LOADDIR_CREATED).
+# Traces are kept.
 function do_reset
 {
-	typeset cur infoload rest ts
+	typeset cur infoload rest ts rpmout rpmrc
 	cur=$(read_state)
 	if [ -z "${cur}" -o "${cur}" = "isdone" ]
 	then
@@ -444,7 +462,12 @@ function do_reset
 	reset_link_ok "${STAGEROOT}" || die "${STAGEROOT} is not ours - refusing reset, nothing removed"
 	loginfo "Resetting failed install (state ${cur}) of ${LOADDIR} on ${HOSTNAME}"
 
-	if netflex_rpm_installed
+	# Probe with its output logged, so an rpmdb error that reads as "not
+	# installed" is visible in the trace.
+	rpmout=$(rpm -q netFLEX-CORE 2>&1)
+	rpmrc=$?
+	loginfo "rpm -q netFLEX-CORE (rc ${rpmrc}): ${rpmout}"
+	if [ ${rpmrc} -eq 0 ]
 	then
 		run_logged rpm rpm -e netFLEX-CORE || die "rpm -e netFLEX-CORE failed"
 		loginfo "Removed netFLEX-CORE RPM"
@@ -461,7 +484,10 @@ function do_reset
 		run_logged unlink rm -f "${STAGEROOT}" || die "cannot remove ${STAGEROOT}"
 		loginfo "Removed ${STAGEROOT} link"
 	fi
-	if [ -e "${LOADDIR}" -o -L "${LOADDIR}" ]
+	if [ "$(info_value LOADDIR_CREATED)" != "yes" ]
+	then
+		logwarn "${LOADDIR} was not created by this install - left in place"
+	elif [ -e "${LOADDIR}" -o -L "${LOADDIR}" ]
 	then
 		run_logged loaddir rm -rf "${LOADDIR}" || die "cannot remove ${LOADDIR}"
 		loginfo "Removed ${LOADDIR}"
