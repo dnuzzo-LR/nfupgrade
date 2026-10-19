@@ -29,15 +29,17 @@ def write_effective_config(user_config, effective_path):
 
 _SHELLS = ("ksh", "ksh93", "sh", "bash")
 
+INSTALL_ACTIONS = {"install": "-i", "resume": "-r", "reset": "-x"}
 
-def is_upgrader_argv(argv):
-    """True iff argv is nf_upgrader itself: exec'd directly, or run by a shell as
-    `<shell> [-opts] .../nf_upgrader ...` (its #!/usr/bin/ksh shebang). An editor,
+
+def is_script_argv(argv, script):
+    """True iff argv is `script` itself: exec'd directly, or run by a shell as
+    `<shell> [-opts] .../<script> ...` (its #!/usr/bin/ksh shebang). An editor,
     pager or grep that merely names the file is not."""
     if not argv:
         return False
     names = [os.path.basename(a) for a in argv]
-    if names[0] == "nf_upgrader":
+    if names[0] == script:
         return True
     if names[0] in _SHELLS:
         for arg, name in zip(argv[1:], names[1:]):
@@ -45,22 +47,49 @@ def is_upgrader_argv(argv):
                 if arg == "-c":          # `sh -c "<command string>"` is a wrapper, not the script
                     return False
                 continue
-            return name == "nf_upgrader"
+            return name == script
     return False
 
 
-def upgrader_running(host):
-    """True iff an nf_upgrader process is alive on the host. `pgrep -f` only
-    finds candidates (any command line containing the name); each candidate's
-    exact argv is then read from /proc/<pid>/cmdline."""
-    r = host.run(["pgrep", "-f", "nf_upgrader"])
+def is_upgrader_argv(argv):
+    """True iff argv is nf_upgrader itself. See is_script_argv for the rules."""
+    return is_script_argv(argv, "nf_upgrader")
+
+
+def script_running(host, script):
+    """True iff a `script` process is alive on the host. `pgrep -f` only finds
+    candidates (any command line containing the name); each candidate's exact
+    argv is then read from /proc/<pid>/cmdline."""
+    r = host.run(["pgrep", "-f", script])
     if r.rc != 0:
         return False
     for pid in r.out.split():
         c = host.run(["cat", "/proc/{}/cmdline".format(pid)])
-        if c.rc == 0 and is_upgrader_argv([a for a in c.out.split("\0") if a]):
+        if c.rc == 0 and is_script_argv([a for a in c.out.split("\0") if a], script):
             return True
     return False
+
+
+def upgrader_running(host):
+    """True iff an nf_upgrader process is alive on the host."""
+    return script_running(host, "nf_upgrader")
+
+
+def installer_running(host):
+    """True iff an nf_install process is alive on the host."""
+    return script_running(host, "nf_install")
+
+
+def anything_running(host):
+    """True iff either nf_upgrader or nf_install is alive on the host."""
+    return upgrader_running(host) or installer_running(host)
+
+
+def build_install_argv(nf_install_path, config_path, action):
+    """Return the argv to launch nf_install for the given action."""
+    if action not in INSTALL_ACTIONS:
+        raise ValueError("bad action: {}".format(action))
+    return [nf_install_path, "-c", config_path, INSTALL_ACTIONS[action]]
 
 
 def launch(nf_upgrade_path, config_path, mode, cwd=None):
@@ -68,6 +97,15 @@ def launch(nf_upgrade_path, config_path, mode, cwd=None):
     nf_upgrade backgrounds nf_upgrader). Progress is tracked via the state file
     and upgrader_running(), not this handle."""
     argv = build_launch_argv(nf_upgrade_path, config_path, mode)
+    return subprocess.Popen(
+        argv, cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+def launch_install(nf_install_path, config_path, action, cwd=None):
+    """Launch nf_install detached. Returns the Popen, exactly like launch()."""
+    argv = build_install_argv(nf_install_path, config_path, action)
     return subprocess.Popen(
         argv, cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         start_new_session=True,

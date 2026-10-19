@@ -74,6 +74,23 @@ class TestLauncher(unittest.TestCase):
         fake = FakeHost({("pgrep", "-f", "nf_upgrader"): RunResult(1, "", "")})
         self.assertFalse(launcher.upgrader_running(fake))
 
+    def test_install_argv(self):
+        self.assertEqual(launcher.build_install_argv("/o/nf_install", "/l/e.cfg", "resume"),
+                         ["/o/nf_install", "-c", "/l/e.cfg", "-r"])
+        with self.assertRaises(ValueError):
+            launcher.build_install_argv("/o/nf_install", "/l/e.cfg", "stage")
+
+    def test_installer_running(self):
+        h = FakeHost({("pgrep", "-f", "nf_install"): RunResult(0, "77\n", ""),
+                      ("cat", "/proc/77/cmdline"): RunResult(0, "/usr/bin/ksh\0/opt/nfupgrader/nf_install\0-c\0x\0-i\0", "")})
+        self.assertTrue(launcher.installer_running(h))
+        self.assertTrue(launcher.anything_running(h))
+        self.assertFalse(launcher.upgrader_running(h))
+
+    def test_editor_on_nf_install_is_not_running(self):
+        self.assertFalse(launcher.is_script_argv(["vi", "nf_install"], "nf_install"))
+        self.assertFalse(launcher.is_script_argv(["/usr/bin/ksh", "/o/nf_installer"], "nf_install"))
+
 
 if __name__ == "__main__":
     unittest.main()
