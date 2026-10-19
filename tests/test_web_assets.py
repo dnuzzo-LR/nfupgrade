@@ -15,6 +15,9 @@ REQUIRED_IDS = [
     "log-file", "modal", "modal-title", "modal-body", "modal-ok", "modal-cancel",
     "install-cfg", "cfg-boxtype", "cfg-mate", "cfg-hosts", "cfg-master-me",
     "cfg-master-mate", "cfg-webgui", "cfg-license", "cfg-cnc-preview", "cfg-title",
+    "not-installed", "install-failed", "install-fatal", "install-trace",
+    "btn-install-resume", "btn-install-reset", "install-done", "btn-install-continue",
+    "tab-btn-upgrade",
 ]
 
 
@@ -43,8 +46,10 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn(">Refresh depots</button>", self.html)
         self.assertNotIn("List depots", self.html)
         self.assertIn("function loadDepots(", self.js)
-        startup = self.js.split("buildForm();", 1)[1]
-        self.assertIn("loadDepots();", startup)
+        # The top-level startup sequence (after the single initTabs() call),
+        # not some function body that happens to call buildForm().
+        startup = self.js.split("\ninitTabs();", 1)[1]
+        self.assertIn("\nloadDepots();", startup)
         self.assertIn("esc(x.path)", self.js)
 
     def test_log_follows_trace_file_changes(self):
@@ -247,6 +252,23 @@ class TestWebAssets(unittest.TestCase):
                   "mode: hostMode", "webguiTouched"):
             self.assertIn(s, self.js, "missing %r" % s)
         self.assertIn("setInterval(refreshInstall", self.js)
+
+    def test_hard_checks_not_overridable(self):
+        self.assertIn("r.hard", self._fn("renderChecks"))
+        self.assertIn("hardFailures()", self._fn("updateLaunchState"))
+        self.assertIn("r.hard && !r.passed", self._fn("hardFailures"))
+
+    def test_reset_requires_reason_in_modal(self):
+        self.assertIn("id='reset-reason'", self.js)
+        self.assertIn('"/api/install/reset"', self.js)
+
+    def test_done_banner_waits_for_continue(self):
+        self.assertIn("installSeen", self.js)
+        self.assertIn('"btn-install-continue"', self.js)
+        self.assertIn("installSeen", self._fn("refreshInstall"))
+
+    def test_resume_label(self):
+        self.assertIn('"Resume install"', self.js)
 
     def test_es5_only(self):
         # ES5-only per project constraints: no arrow functions, let/const, or

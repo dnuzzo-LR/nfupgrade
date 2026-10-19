@@ -25,7 +25,7 @@
   <nav class="tabs">
     <button class="tab active" data-tab="overview">Overview</button>
     <button class="tab" data-tab="config">Config</button>
-    <button class="tab" data-tab="upgrade">Upgrade</button>
+    <button class="tab" data-tab="upgrade" id="tab-btn-upgrade">Upgrade</button>
     <button class="tab" data-tab="reports">Reports</button>
     <button class="tab" data-tab="log">Log</button>
   </nav>
@@ -34,6 +34,10 @@
     <!-- OVERVIEW -->
     <section class="panel active" id="tab-overview">
       <div class="card">
+        <div id="not-installed" class="notice" style="display:none">
+          netFLEX is not installed on this host. Set up the install on the
+          <a href="#" id="not-installed-cfg">Config tab</a>.
+        </div>
         <h2>Site <span id="site-spin" class="spinner" style="display:none"></span></h2>
         <table id="site-table">
           <thead><tr>
@@ -116,6 +120,25 @@
 
     <!-- UPGRADE workflow -->
     <section class="panel" id="tab-upgrade">
+      <div id="install-done" class="card banner-done" style="display:none">
+        <h2>Install complete</h2>
+        <p>netFLEX is installed on this host. The install progress, post-flight results
+          and any warnings stay on screen until you continue.</p>
+        <pre id="install-warn" style="display:none"></pre>
+        <button type="button" id="btn-install-continue" class="primary">Continue to upgrade view</button>
+      </div>
+      <div id="install-failed" class="card banner-failed" style="display:none">
+        <h2>The install did not finish</h2>
+        <p>Failed at step: <b id="install-failed-step">-</b></p>
+        <pre id="install-fatal"></pre>
+        <p id="install-trace"></p>
+        <p class="muted">Resume re-runs the pre-flight checks and continues from the failed
+          step. Reset removes what this install created so it can start over. Support can
+          also clean up by hand from the trace file.</p>
+        <button type="button" id="btn-install-resume" class="primary">Resume install</button>
+        <button type="button" id="btn-install-reset" class="danger">Reset and start over</button>
+        <span id="install-reset-msg"></span>
+      </div>
       <div class="card">
         <h2>Pre-flight checks &amp; launch</h2>
         <div style="margin-bottom:.5rem">
@@ -129,7 +152,7 @@
         <div id="preflight"></div>
         <div id="fix-msg"></div>
         <div id="override-box" style="display:none">
-          <p>Tick <b>Override</b> on each failed check you accept, and give a reason.</p>
+          <p id="override-help">Tick <b>Override</b> on each failed check you accept, and give a reason.</p>
           <input type="text" id="reason" placeholder="reason (required to override)" size="40">
           <span id="override-msg"></span>
         </div>

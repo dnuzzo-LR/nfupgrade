@@ -13,6 +13,7 @@ Design and plans live in `~/WorkNotes`:
 | Path | What |
 |------|------|
 | `nf_upgrade`, `nf_upgrader` | Forks of netFLEX `inc_upgrade` / `inc_upgrader`, behavior-identical to the originals but with a cleaned-up, severity-prefixed log. Intended to eventually replace the originals in the product. |
+| `nf_install` | New (not a fork): fresh netFLEX CORE install of the local host, with resume and reset. See *Installing on a new host*. |
 | `nf_log.ksh` | Sourced logging helpers: `loginfo` / `logwarn` / `logerror` / `logfatal` and the status-preserving `run_logged` sub-command wrapper. |
 | `ref/inc_upgrade`, `ref/inc_upgrader` | Pinned snapshots of the originals (netFLEX commit `776f42242`), used only as the baseline for the equivalence test. Not shipped. |
 | `test/` | ksh unit tests and the fork verifier. |
@@ -69,10 +70,66 @@ export NFU_USER_CONFIG=/opt/apt/upgrade/my.cfg   # only needed to Launch
 ./run.sh    # browse the printed http://<host>:8099/auth?token=… URL
 ```
 
+## Installing on a new host
+
+When netFLEX is not installed on the host (or an install is unfinished), the tool
+runs in **install mode** (`GET /api/install/status` reports `"mode": "install"`):
+
+- **Overview** says netFLEX is not installed and points to the Config tab; the site
+  table is hidden.
+- **Config** shows the install form: CORE RPM, box type (Singlebox/FEP/BEP), mate
+  host and master for a FEP/BEP pair, web GUI, and a live `cnc.cnfg` preview.
+  **Use this config** saves it.
+- The **Upgrade** tab becomes the **Install** tab with a single *Install* phase. Run
+  the pre-flight checks, then Launch. A *hard* check (e.g. "netFLEX already
+  installed") can never be overridden; other blocking checks can, with a reason.
+- Launch runs `nf_install` in the background; the progress strip shows the 13
+  install steps and the Log tab follows the install trace.
+- When it finishes, an **Install complete** banner keeps the progress, post-flight
+  results and any WARN lines from the trace on screen. **Continue to upgrade view**
+  (or a page reload) switches the page to the normal stage/upgrade mode.
+
+### `nf_install`
+
+`nf_install` is new (not a fork of a netFLEX script). It runs as root and re-runs
+itself in the background unless `NFI_FOREGROUND=YES`.
+
+```sh
+nf_install -c <config file> -i     # fresh install (refused if unfinished or already installed)
+nf_install -c <config file> -r     # resume an unfinished install at its recorded step
+nf_install -c <config file> -x     # reset a failed install
+nf_install -h                      # help
+```
+
+Files, all in the config's `INCLOGDIR`:
+
+| File | What |
+|------|------|
+| `.<host>_INSTALL_STATE` | The step to run next. A fatal step leaves it at that step (the resume point); `isdone` when finished. Kept afterwards as a record. The install never writes `.<host>_STATE` (nf_upgrader's resume point). |
+| `.<host>_INSTALL_INFO` | `KEY=VALUE`: `LOADDIR`, `VERSION`, `DEPOTFILE`, and `LOADDIR_CREATED=yes` once the install has created the load dir itself. |
+| `install_inc_<host>.<pid>` / `reset_inc_<host>.<pid>` | Trace files (severity-prefixed log) for an install/resume and a reset. Never deleted. |
+
+### When an install fails
+
+The Install tab shows the failed step, the ERROR/FATAL lines from the trace and the
+trace path to send to support, with two actions:
+
+- **Resume install** re-runs the pre-flight checks (hard checks are skipped on a
+  resume) and relaunches `nf_install -r`, which continues from the failed step.
+- **Reset and start over** asks for a reason (audited) and runs `nf_install -x`. It
+  removes only what this install provably created: the netFLEX-CORE RPM if
+  installed, the `/usr/cnc` and `/usr/cnc_stage` links only if they point at the
+  recorded load dir, and the load dir itself only if `LOADDIR_CREATED=yes` (otherwise
+  it is left in place). Every refusal check runs first; if a link points elsewhere,
+  or the recorded load dir is not a `/usr4/inc*` directory, nothing is removed. The
+  state/info files are archived with a timestamp and the traces are kept. Reset is
+  refused while anything is running.
+
 ## Testing
 
 ```sh
 ksh test/nf_log_test.ksh                          # unit tests for nf_log.ksh
+ksh test/nf_install_test.ksh                      # nf_install in a sandbox
 sh  test/nf_fork_verify.sh                         # fork syntax/equivalence/coverage/grammar
 python3 -m unittest discover -s tests -p 'test_*.py'   # Phase 2 python tests
 ```

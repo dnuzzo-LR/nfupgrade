@@ -18,6 +18,13 @@ var logOffset = 0;
 var logFile = "";   // trace file the log pane is showing (server picks the newest)
 var hostMode = null;        // "install" or "upgrade", from /api/install/status
 var webguiTouched = false;  // the operator changed the web-GUI checkbox by hand
+var installStatus = null;   // last /api/install/status response
+// This page has shown install mode. A finished install then keeps the install view
+// (and the "Install complete" banner) until the operator clicks Continue, instead of
+// flipping to upgrade mode as soon as the status poll says netFLEX is installed.
+var installSeen = false;
+var installWarnLoaded = false;  // the done banner has fetched the trace's WARN lines
+var showTab = null;         // set by initTabs: switch to a tab by name
 
 function getJSON(url, cb, onError) {
   var x = new XMLHttpRequest();
@@ -75,6 +82,7 @@ function initTabs() {
     panels.forEach(function (p) { p.classList.toggle("active", p.id === "tab-" + name); });
     try { localStorage.setItem("nfu_tab", name); } catch (e) {}
   }
+  showTab = show;
   tabs.forEach(function (t) { t.onclick = function () { show(t.getAttribute("data-tab")); }; });
   var saved;
   try { saved = localStorage.getItem("nfu_tab"); } catch (e) {}
@@ -259,8 +267,13 @@ function renderChecks(el, data, overridable) {
     var mark = r.passed ? "✅" : (r.severity === "ERROR" ? "❌" : "⚠️");
     var extra = "";
     if (overridable) {
-      extra = "<td>" + (r.blocking
-        ? "<input type='checkbox' class='ovr' data-name='" + esc(r.name) + "'>" : "") + "</td>" +
+      // A hard check (e.g. "netFLEX already installed") is a stop, never overridable;
+      // a resume skips it, exactly as the server does.
+      var ovr = r.hard
+        ? (r.passed ? "" : "<span class='hard'>" +
+           (hardSkipped() ? "skipped on resume" : "cannot override") + "</span>")
+        : (r.blocking ? "<input type='checkbox' class='ovr' data-name='" + esc(r.name) + "'>" : "");
+      extra = "<td>" + ovr + "</td>" +
         "<td>" + (r.fix
         ? "<button type='button' class='fix' data-name='" + esc(r.name) + "' data-fix='" +
           esc(r.fix) + "' title='" + esc(r.fix) + "'>Fix</button>" : "") + "</td>";
@@ -299,28 +312,56 @@ function overriddenNames() {
   return Array.prototype.map.call(boxes, function (b) { return b.getAttribute("data-name"); });
 }
 
+// Resuming an unfinished install skips the hard (fresh-install-only) checks.
+function hardSkipped() {
+  return hostMode === "install" && !!(installStatus && installStatus.unfinished);
+}
+
+// Failed hard checks that stop a launch outright (no override possible).
+function hardFailures() {
+  if (!preflight || hardSkipped()) return [];
+  return preflight.results.filter(function (r) { return r.hard && !r.passed; });
+}
+
+// Blocking failures the operator can override (every blocking one but the hard ones).
+function overridableBlocking(data) {
+  return data.blocking.filter(function (r) { return !r.hard; });
+}
+
 function updateLaunchState() {
   var btn = document.getElementById("btn-launch");
   var why = document.getElementById("override-msg");
   if (!preflight) { btn.disabled = true; why.textContent = ""; return; }
-  var total = preflight.blocking.length;
+  var hard = hardFailures();
+  var total = overridableBlocking(preflight).length;
   var missing = total - overriddenNames().length;
   var reason = document.getElementById("reason").value.trim();
   var msg = "";
-  if (missing > 0) msg = missing + " of " + total + " blocking checks not overridden";
+  if (hard.length) {
+    msg = "cannot launch: " + hard.map(function (r) { return r.name; }).join(", ") +
+          " failed (cannot be overridden)";
+  }
+  else if (missing > 0) msg = missing + " of " + total + " blocking checks not overridden";
   else if (total > 0 && !reason) msg = "reason required to override";
   why.textContent = msg;
   btn.disabled = fixing || msg !== "";
 }
 
-function runPreflight() {
+// after (optional) runs once the new results are rendered (not on an error).
+function runPreflight(after) {
   var mode = document.getElementById("mode").value;
   getJSON("/api/checks?when=preflight&phase=" + mode, function (data) {
     preflight = data;
     renderChecks(document.getElementById("preflight"), data, true);
-    document.getElementById("override-box").style.display =
-      data.blocking.length > 0 ? "block" : "none";
     updateLaunchState();
+    // The box's message line also carries the hard-stop message; the override
+    // help and reason only show when something can be overridden.
+    var canOverride = overridableBlocking(data).length > 0;
+    document.getElementById("override-box").style.display =
+      canOverride || hardFailures().length ? "block" : "none";
+    document.getElementById("override-help").style.display = canOverride ? "" : "none";
+    document.getElementById("reason").style.display = canOverride ? "" : "none";
+    if (typeof after === "function") after();
   }, function (status) {
     // Keep the old table but make it usable again (a fix may have disabled it).
     Array.prototype.forEach.call(document.querySelectorAll("#preflight button.fix"),
@@ -334,26 +375,35 @@ function runPreflight() {
 }
 
 var modalOnOk = null;        // callback for the open confirmation dialog
+var modalValidate = null;    // OK is refused (dialog stays open) while this returns false
 var modalReturnFocus = null; // element to refocus when it closes
 
 // In-page replacement for the browser's built-in confirm. opts: {title, body (text; newlines
-// kept), ok (button label), danger (red OK button)}. onOk runs only on confirm.
+// kept), html (body markup instead of body; the caller escapes it), ok (button label),
+// danger (red OK button), focus (id to focus instead of Cancel), validate (fn; false keeps
+// the dialog open)}. onOk runs only on confirm.
 function showConfirm(opts, onOk) {
   document.getElementById("modal-title").textContent = opts.title;
-  document.getElementById("modal-body").textContent = opts.body || "";
+  if (opts.html) document.getElementById("modal-body").innerHTML = opts.html;
+  else document.getElementById("modal-body").textContent = opts.body || "";
   var ok = document.getElementById("modal-ok");
   ok.textContent = opts.ok || "OK";
   ok.className = opts.danger ? "danger" : "primary";
   modalOnOk = onOk;
+  modalValidate = opts.validate || null;
   modalReturnFocus = document.activeElement;
   document.getElementById("modal").style.display = "flex";
-  // Default focus on Cancel so a stray Enter never launches or fixes.
-  document.getElementById("modal-cancel").focus();
+  // Default focus on Cancel so a stray Enter never launches or fixes. (A typed-reason
+  // dialog focuses its input; Enter there does nothing.)
+  if (opts.focus) document.getElementById(opts.focus).focus();
+  else document.getElementById("modal-cancel").focus();
 }
 
 function closeModal(confirmed) {
+  if (confirmed && modalValidate && !modalValidate()) return;
   var cb = modalOnOk;
   modalOnOk = null;
+  modalValidate = null;
   document.getElementById("modal").style.display = "none";
   if (modalReturnFocus && modalReturnFocus.focus) modalReturnFocus.focus();
   if (confirmed && cb) cb();
@@ -414,8 +464,35 @@ function resetPreflight() {
   updateLaunchState();
 }
 
+function thisHost() {
+  return lastInfo && lastInfo.host ? lastInfo.host : "this host";
+}
+
+// True when a launch in install mode resumes an unfinished install (the server
+// decides the same way).
+function resuming(mode) {
+  return mode === "install" && !!(installStatus && installStatus.unfinished);
+}
+
+function installConfirmBase() {
+  var s = installStatus || {};
+  if (s.unfinished) {
+    var rpm = (s.info || {}).DEPOTFILE;
+    return "Resume the netFLEX install on " + thisHost() + " from the failed step: " +
+      (s.label || s.state || "unknown") + (s.state ? " (" + s.state + ")" : "") + "." +
+      (rpm ? "\nRPM: " + rpm : "") +
+      "\nSteps that already finished are not repeated. This runs the real install " +
+      "and cannot be paused.";
+  }
+  var dep = document.querySelector("[name='DEPOTFILE']");
+  return "Install netFLEX on " + thisHost() + " from " +
+    (dep && dep.value ? dep.value : "the CORE RPM chosen on the Config tab") +
+    " now? This runs the real install and cannot be paused.";
+}
+
 function launchConfirmText(mode) {
-  var base = "Start the " + mode.toUpperCase() +
+  var base = mode === "install" ? installConfirmBase()
+           : "Start the " + mode.toUpperCase() +
              " now? This runs the real upgrade and cannot be paused.";
   var ticked = overriddenNames();
   var over = preflight.results.filter(function (r) {
@@ -436,7 +513,8 @@ function launchConfirmText(mode) {
     warn.forEach(function (r) { lines.push("  - " + r.name + " — " + (r.detail || "")); });
     lines.push("");
   }
-  lines.push("Upgrading with unresolved pre-flight failures may leave the system " +
+  lines.push((mode === "install" ? "Installing" : "Upgrading") +
+             " with unresolved pre-flight failures may leave the system " +
              "in an unsupported state.", "", base);
   return lines.join("\n");
 }
@@ -445,11 +523,12 @@ function launch() {
   var mode = document.getElementById("mode").value;
   if (!preflight) return;
   var unresolved = launchConfirmText(mode).indexOf("WARNING:") === 0;
+  var resume = resuming(mode);
   showConfirm({
     title: unresolved ? "Launch with unresolved pre-flight failures?"
-                      : "Start the " + mode + " now?",
+         : (resume ? "Resume the install now?" : "Start the " + mode + " now?"),
     body: launchConfirmText(mode),
-    ok: "Start " + mode,
+    ok: resume ? "Resume install" : "Start " + mode,
     danger: true
   }, function () { startLaunch(mode); });
 }
@@ -461,7 +540,15 @@ function startLaunch(mode) {
       var msg = document.getElementById("launch-msg");
       if (status === 202) {
         if (body.snapshot) { msg.textContent = "Taking before snapshot…"; refreshReportsJob(); }
+        else if (body.action === "resume") { msg.textContent = "Resuming install…"; }
         else { msg.textContent = "Launched " + mode + "…"; }
+      }
+      // A failed hard check is a stop, not something to override.
+      else if (status === 409 && body.hard) {
+        document.getElementById("btn-launch").disabled = true;
+        msg.textContent = "Not launched: " + (body.error || status) + " — " +
+          body.hard.map(function (r) { return r.name; }).join(", ") + ". Checks re-run.";
+        runPreflight();
       }
       else if (status === 409 && body.not_overridden) {
         document.getElementById("btn-launch").disabled = true;  // until re-run lands
@@ -479,6 +566,8 @@ function startLaunch(mode) {
 function refreshPostflight() {
   var mode = document.getElementById("mode").value;
   getJSON("/api/checks?when=postflight&phase=" + mode, function (data) {
+    // The phase list changes with the host mode; drop an answer for the old one.
+    if (document.getElementById("mode").value !== mode) return;
     if (data.results.length) renderChecks(document.getElementById("postflight"), data);
   });
 }
@@ -734,19 +823,157 @@ function loadHosts() {
   });
 }
 
+// In install mode the Upgrade tab is the Install tab: one "Install" phase. Leaving
+// it puts Stage/Upgrade back (an upgrade-mode page keeps the operator's pick).
+function setModeOptions(install) {
+  var sel = document.getElementById("mode");
+  if (install) sel.innerHTML = "<option value='install'>Install</option>";
+  else if (sel.value === "install" || !sel.options.length) {
+    sel.innerHTML = "<option value='stage'>Stage</option><option value='upgrade'>Upgrade</option>";
+  }
+}
+
 function applyHostMode(s) {
   hostMode = s.mode;
+  var install = hostMode === "install";
+  if (install) installSeen = true;
   document.getElementById("cfg-title").textContent =
-    hostMode === "install" ? "Install configuration" : "Upgrade configuration";
-  document.getElementById("install-cfg").style.display = hostMode === "install" ? "block" : "none";
-  if (hostMode === "install") loadHosts();
+    install ? "Install configuration" : "Upgrade configuration";
+  document.getElementById("install-cfg").style.display = install ? "block" : "none";
+  document.getElementById("tab-btn-upgrade").textContent = install ? "Install" : "Upgrade";
+  setModeOptions(install);
+  resetPreflight();
+  document.getElementById("postflight").textContent = "-";
+  refreshPostflight();
+  if (install) loadHosts();
   buildForm();
+  renderInstall(s);
+}
+
+// A finished install seen by this page: keep showing it until Continue.
+function installDone(s) {
+  return installSeen && s.state === "isdone" && !!s.installed;
+}
+
+// Install-mode panels that follow every status poll: overview notice, failure
+// panel, done banner, and the Launch button's label.
+function renderInstall(s) {
+  var install = hostMode === "install";
+  var done = install && installDone(s);
+  var failed = install && !!s.unfinished && !s.running;
+  document.getElementById("not-installed").style.display = install && !done ? "block" : "none";
+  document.getElementById("site-table").style.display = install && !done ? "none" : "";
+  document.getElementById("install-failed").style.display = failed ? "block" : "none";
+  if (failed) {
+    document.getElementById("install-failed-step").textContent =
+      (s.label || s.state || "unknown") + (s.state ? " (" + s.state + ")" : "");
+    document.getElementById("install-fatal").textContent = (s.fatal || []).length
+      ? s.fatal.join("\n") : "(no ERROR or FATAL lines in the trace file)";
+    document.getElementById("install-trace").textContent =
+      "Send this file to support: " + (s.trace || "-");
+  }
+  document.getElementById("install-done").style.display = done ? "block" : "none";
+  if (done && !installWarnLoaded) loadInstallWarnings();
+  document.getElementById("btn-launch").textContent =
+    install && s.unfinished ? "Resume install" : "Launch";
+}
+
+// WARN-and-worse lines from the finished install's trace (web GUI, license
+// migration…), shown in the done banner. The active phase is still "install", so
+// /api/log reads the install trace.
+function loadInstallWarnings() {
+  installWarnLoaded = true;
+  getJSON("/api/log?offset=0&min=WARN", function (d) {
+    var pre = document.getElementById("install-warn");
+    var lines = (d.entries || []).map(function (e) {
+      return (e.ts ? e.ts + " " : "") + e.severity + "  " + e.msg;
+    });
+    pre.textContent = lines.length ? "Warnings from the install:\n" + lines.join("\n") : "";
+    pre.style.display = lines.length ? "block" : "none";
+  }, function () { installWarnLoaded = false; });
 }
 
 function refreshInstall() {
   getJSON("/api/install/status", function (s) {
-    if (s.mode !== hostMode) applyHostMode(s);
+    installStatus = s;
+    // A just-finished install reads as upgrade mode; hold the install view (done
+    // banner) until the operator continues.
+    var hold = hostMode === "install" && installSeen && installDone(s);
+    if (s.mode !== hostMode && !hold) applyHostMode(s);
+    else renderInstall(s);
   });
+}
+
+// Resume = the normal pre-flight -> confirm -> launch flow (the server turns an
+// install launch into a resume while the install is unfinished).
+function resumeInstall() {
+  if (showTab) showTab("upgrade");
+  var msg = document.getElementById("launch-msg");
+  msg.textContent = "Re-running pre-flight checks before resuming…";
+  runPreflight(function () {
+    if (!document.getElementById("btn-launch").disabled) { msg.textContent = ""; launch(); }
+    else msg.textContent = "Resolve or override the pre-flight failures below, then click Resume install.";
+  });
+}
+
+function confirmReset() {
+  var info = (installStatus || {}).info || {};
+  var dir = info.LOADDIR || "";
+  var lines = [
+    "This undoes the unfinished install on " + thisHost() + " so it can start over. " +
+    "It removes only what this install created:",
+    "",
+    "  - the netFLEX-CORE RPM, if it is installed",
+    "  - the /usr/cnc and /usr/cnc_stage links, only if they point at " +
+      (dir || "the install's load directory"),
+    dir && info.LOADDIR_CREATED === "yes"
+      ? "  - the load directory " + dir + " and everything in it (this install created it)"
+      : "  - NOT the load directory" + (dir ? " " + dir : "") +
+        ": it is removed only if this install created it, and it did not, so it is left in place",
+    "",
+    "The install state file is archived and the trace files are kept. If anything does " +
+    "not match (a link pointing elsewhere, no recorded load directory), the reset stops " +
+    "without removing anything.",
+    ""
+  ];
+  var html = esc(lines.join("\n")) +
+    "<label for='reset-reason'>Reason (required, recorded in the audit log):</label>\n" +
+    "<input id='reset-reason' type='text' size='50'> <span id='reset-reason-msg' class='issue ERROR'></span>";
+  showConfirm({
+    title: "Reset the unfinished install on " + thisHost() + "?",
+    html: html,
+    ok: "Reset install",
+    danger: true,
+    focus: "reset-reason",
+    validate: function () {
+      var ok = document.getElementById("reset-reason").value.trim() !== "";
+      document.getElementById("reset-reason-msg").textContent = ok ? "" : "A reason is required.";
+      return ok;
+    }
+  }, function () { applyReset(document.getElementById("reset-reason").value.trim()); });
+}
+
+function applyReset(reason) {
+  if (!reason) return;   // never post an empty reason (the server 400s anyway)
+  var msg = document.getElementById("install-reset-msg");
+  msg.textContent = "Starting reset…";
+  postJSON("/api/install/reset", { reason: reason }, function (status, body) {
+    var text = status === 202 ? "Reset started — follow it on the Log tab."
+                              : "Not reset: " + (body.error || status);
+    msg.textContent = text;
+    document.getElementById("launch-msg").textContent = text;
+    if (status === 202) refreshInstall();
+  });
+}
+
+function continueAfterInstall() {
+  installSeen = false;
+  installWarnLoaded = false;
+  var s = installStatus || {};
+  s.mode = "upgrade";
+  applyHostMode(s);
+  refreshInfo();
+  refreshSite();
 }
 
 function renderIssues(issues) {
@@ -814,7 +1041,14 @@ document.getElementById("cfg-webgui").onchange = function () { webguiTouched = t
 refreshInstall();
 loadDepots();
 
-document.getElementById("btn-check").onclick = runPreflight;
+document.getElementById("btn-check").onclick = function () { runPreflight(); };
+document.getElementById("btn-install-resume").onclick = resumeInstall;
+document.getElementById("btn-install-reset").onclick = confirmReset;
+document.getElementById("btn-install-continue").onclick = continueAfterInstall;
+document.getElementById("not-installed-cfg").onclick = function (ev) {
+  ev.preventDefault();
+  if (showTab) showTab("config");
+};
 document.getElementById("btn-launch").onclick = launch;
 document.getElementById("modal-ok").onclick = function () { closeModal(true); };
 document.getElementById("modal-cancel").onclick = function () { closeModal(false); };
@@ -824,11 +1058,13 @@ document.getElementById("modal").onclick = function (ev) {
 document.addEventListener("keydown", function (ev) {
   if (!modalOpen()) return;
   if (ev.key === "Escape" || ev.key === "Esc") { ev.preventDefault(); closeModal(false); return; }
-  if (ev.key === "Tab") {   // keep focus inside the dialog
-    var a = document.getElementById("modal-cancel"), b = document.getElementById("modal-ok");
-    var next = document.activeElement === a ? b : a;
+  if (ev.key === "Tab") {   // keep focus inside the dialog (inputs, Cancel, OK)
+    var f = Array.prototype.slice.call(
+      document.querySelectorAll("#modal-body input, #modal-cancel, #modal-ok"));
+    var i = f.indexOf(document.activeElement);
+    var next = ev.shiftKey ? (i <= 0 ? f.length - 1 : i - 1) : (i + 1) % f.length;
     ev.preventDefault();
-    next.focus();
+    f[next].focus();
   }
 });
 document.getElementById("preflight").onchange = updateLaunchState;
