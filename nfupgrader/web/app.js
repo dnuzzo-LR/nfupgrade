@@ -855,6 +855,14 @@ function installDone(s) {
   return installSeen && s.state === "isdone" && !!s.installed;
 }
 
+// Set an element's text only when it differs: the install poll re-renders every
+// 2 s, and rewriting unchanged text would clear the operator's selection (e.g.
+// of the trace path they are copying).
+function setTextIfChanged(id, text) {
+  var el = document.getElementById(id);
+  if (el.textContent !== text) el.textContent = text;
+}
+
 // Install-mode panels that follow every status poll: overview notice, failure
 // panel, done banner, and the Launch button's label.
 function renderInstall(s) {
@@ -865,17 +873,15 @@ function renderInstall(s) {
   document.getElementById("site-table").style.display = install && !done ? "none" : "";
   document.getElementById("install-failed").style.display = failed ? "block" : "none";
   if (failed) {
-    document.getElementById("install-failed-step").textContent =
-      (s.label || s.state || "unknown") + (s.state ? " (" + s.state + ")" : "");
-    document.getElementById("install-fatal").textContent = (s.fatal || []).length
-      ? s.fatal.join("\n") : "(no ERROR or FATAL lines in the trace file)";
-    document.getElementById("install-trace").textContent =
-      "Send this file to support: " + (s.trace || "-");
+    setTextIfChanged("install-failed-step",
+      (s.label || s.state || "unknown") + (s.state ? " (" + s.state + ")" : ""));
+    setTextIfChanged("install-fatal", (s.fatal || []).length
+      ? s.fatal.join("\n") : "(no ERROR or FATAL lines in the trace file)");
+    setTextIfChanged("install-trace", "Send this file to support: " + (s.trace || "-"));
   }
   document.getElementById("install-done").style.display = done ? "block" : "none";
   if (done && !installWarnLoaded) loadInstallWarnings();
-  document.getElementById("btn-launch").textContent =
-    install && s.unfinished ? "Resume install" : "Launch";
+  setTextIfChanged("btn-launch", install && s.unfinished ? "Resume install" : "Launch");
 }
 
 // WARN-and-worse lines from the finished install's trace (web GUI, license
@@ -978,7 +984,8 @@ function continueAfterInstall() {
 
 function renderIssues(issues) {
   document.getElementById("cfg-issues").innerHTML = issues.map(function (i) {
-    return "<div class='issue " + i.level + "'>" + i.level + ": " + i.field + " — " + i.message + "</div>";
+    return "<div class='issue " + esc(i.level) + "'>" + esc(i.level) + ": " + esc(i.field) +
+      " — " + esc(i.message) + "</div>";
   }).join("");
 }
 

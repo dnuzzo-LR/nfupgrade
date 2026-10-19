@@ -270,6 +270,22 @@ class TestWebAssets(unittest.TestCase):
     def test_resume_label(self):
         self.assertIn('"Resume install"', self.js)
 
+    def test_install_poll_keeps_selection(self):
+        # F1: the 2 s poll must not rewrite unchanged text (it would clear the
+        # operator's selection of the trace path).
+        fn = self._fn("renderInstall")
+        for el in ("install-failed-step", "install-fatal", "install-trace"):
+            self.assertIn('setTextIfChanged("{}"'.format(el), fn)
+        self.assertNotIn(".textContent =", fn)
+        helper = self._fn("setTextIfChanged")
+        self.assertIn("!==", helper)
+
+    def test_config_issues_escaped(self):
+        # M1: issue text includes operator-typed values (MATEHOST).
+        fn = self._fn("renderIssues")
+        for part in ("esc(i.level)", "esc(i.field)", "esc(i.message)"):
+            self.assertIn(part, fn)
+
     def test_es5_only(self):
         # ES5-only per project constraints: no arrow functions, let/const, or
         # template literals in the shipped JS.
