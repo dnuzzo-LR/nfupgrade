@@ -13,6 +13,8 @@ REQUIRED_IDS = [
     "btn-reports-run", "reports-job", "reports-list", "cmp-a", "cmp-b",
     "cmp-style", "btn-compare", "cmp-table", "local-detail",
     "log-file", "modal", "modal-title", "modal-body", "modal-ok", "modal-cancel",
+    "install-cfg", "cfg-boxtype", "cfg-mate", "cfg-hosts", "cfg-master-me",
+    "cfg-master-mate", "cfg-webgui", "cfg-license", "cfg-cnc-preview", "cfg-title",
 ]
 
 
@@ -226,6 +228,25 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn("try {", post)
         self.assertIn("JSON.parse(x.responseText)", post)
         self.assertIn('{ error: "HTTP " + x.status }', post)
+
+    def test_mate_is_type_or_pick(self):
+        # Mate host is a single type-or-pick box: a text input bound to a
+        # datalist, not a locked-down <select>.
+        self.assertIn('list="cfg-hosts"', self.html)
+        self.assertIn('<datalist id="cfg-hosts">', self.html)
+
+    def test_license_stub_disabled(self):
+        m = re.search(r'<input[^>]*id="cfg-license"[^>]*>', self.html)
+        self.assertIsNotNone(m, "no #cfg-license element in index.html")
+        el = m.group(0)
+        self.assertIn("disabled", el)
+        self.assertIn("coming later", el)
+
+    def test_install_form_wiring(self):
+        for s in ("function applyHostMode(", "/api/install/status", "/api/install/hosts",
+                  "mode: hostMode", "webguiTouched"):
+            self.assertIn(s, self.js, "missing %r" % s)
+        self.assertIn("setInterval(refreshInstall", self.js)
 
     def test_es5_only(self):
         # ES5-only per project constraints: no arrow functions, let/const, or

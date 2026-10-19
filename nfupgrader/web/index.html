@@ -54,11 +54,54 @@
     <!-- CONFIG -->
     <section class="panel" id="tab-config">
       <div class="card">
-        <h2>Upgrade configuration</h2>
+        <h2 id="cfg-title">Upgrade configuration</h2>
         <div style="margin-bottom:.5rem">
           <select id="cfg-depot"><option value="">— choose a CORE RPM —</option></select>
           <button id="cfg-load-depots">Refresh depots</button>
           <span id="cfg-depot-msg"></span>
+        </div>
+        <div id="install-cfg" style="display:none">
+          <div class="cfg-row">
+            <label for="cfg-boxtype">Box type</label>
+            <select id="cfg-boxtype">
+              <option value="SINGLE">Singlebox</option>
+              <option value="FEP">FEP</option>
+              <option value="BEP">BEP</option>
+            </select>
+            <span class="hint">BOXTYPE</span>
+          </div>
+          <div class="cfg-row">
+            <label for="cfg-thishost">This host</label>
+            <input id="cfg-thishost" readonly>
+            <span class="hint">This host's name</span>
+          </div>
+          <div class="cfg-row" id="cfg-mate-row">
+            <label for="cfg-mate" id="cfg-mate-label">Mate host</label>
+            <input id="cfg-mate" list="cfg-hosts" autocomplete="off" placeholder="type or pick a host">
+            <datalist id="cfg-hosts"></datalist>
+            <span class="hint" id="cfg-mate-warn"></span>
+          </div>
+          <div class="cfg-row" id="cfg-master-row">
+            <label>Master</label>
+            <span>
+              <label><input type="radio" name="cfg-master" id="cfg-master-me" checked>
+                <span id="cfg-master-me-name">this host</span></label>
+              <label><input type="radio" name="cfg-master" id="cfg-master-mate">
+                <span id="cfg-master-mate-name">mate</span></label>
+            </span>
+          </div>
+          <div class="cfg-row">
+            <label for="cfg-webgui">Install web GUI</label>
+            <input type="checkbox" id="cfg-webgui" checked>
+            <span class="hint">INSTALLWEBGUI</span>
+          </div>
+          <div class="cfg-row">
+            <label for="cfg-license">License file</label>
+            <input id="cfg-license" type="text" disabled value="License file — coming later">
+            <span class="hint">coming later</span>
+          </div>
+          <h3>cnc.cnfg preview</h3>
+          <pre id="cfg-cnc-preview"></pre>
         </div>
         <form id="cfg-form"></form>
         <div style="margin:.5rem 0">

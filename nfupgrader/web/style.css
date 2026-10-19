@@ -76,10 +76,11 @@ table.checks tr.fail-WARNING { background: #fff8e1; }
 .issue.ERROR { color: var(--err); } .issue.WARNING { color: var(--warn); }
 
 /* log console */
-#log, #cfg-rendered { background: #0f1720; color: #d7e0ea; padding: .75rem;
+#log, #cfg-rendered, #cfg-cnc-preview { background: #0f1720; color: #d7e0ea; padding: .75rem;
   border-radius: var(--radius); font-family: var(--mono); font-size: 12px;
   overflow: auto; white-space: pre-wrap; }
 #log { height: 60vh; }
+#cfg-mate-warn { color: var(--warn); }
 .sev-WARN { color: #e9c46a; } .sev-ERROR { color: #e76f51; }
 .sev-FATAL { color: #ff6b6b; font-weight: bold; } .sev-EXEC { color: #8895a3; }
 

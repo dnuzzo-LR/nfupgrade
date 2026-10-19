@@ -16,6 +16,8 @@ window.onerror = function (msg, src, line) {
 };
 var logOffset = 0;
 var logFile = "";   // trace file the log pane is showing (server picks the newest)
+var hostMode = null;        // "install" or "upgrade", from /api/install/status
+var webguiTouched = false;  // the operator changed the web-GUI checkbox by hand
 
 function getJSON(url, cb, onError) {
   var x = new XMLHttpRequest();
@@ -635,12 +637,20 @@ function loadDiff(name, cell) {
 
 var cfgFields = [];
 
+// Install-only fields: the install block below the depot picker renders these
+// itself, so the generic form must not also render them.
+var INSTALL_OWN_FIELDS = ["BOXTYPE", "MATEHOST", "MASTERHOST", "INSTALLWEBGUI"];
+
 function buildForm() {
-  getJSON("/api/config/fields", function (d) {
+  getJSON("/api/config/fields?mode=" + hostMode, function (d) {
     cfgFields = d.fields;
+    document.getElementById("cfg-thishost").value = d.hostname || "";
+    document.getElementById("cfg-master-me-name").textContent = d.hostname || "this host";
     var f = document.getElementById("cfg-form");
     f.innerHTML = "";
     cfgFields.forEach(function (fld) {
+      if (fld.hidden) return;
+      if (hostMode === "install" && INSTALL_OWN_FIELDS.indexOf(fld.name) >= 0) return;
       var wrap = document.createElement("div");
       wrap.className = "cfg-row";
       var label = fld.name + (fld.required ? " *" : "");
@@ -655,6 +665,10 @@ function buildForm() {
         "<span class='hint'>" + (fld.help || "") + "</span>";
       f.appendChild(wrap);
     });
+    if (hostMode === "install") {
+      applyBoxType();
+      previewInstall();
+    }
   });
 }
 
@@ -664,7 +678,75 @@ function formValues() {
     var el = document.querySelector("[name='" + fld.name + "']");
     if (el) v[fld.name] = el.value;
   });
+  if (hostMode === "install") {
+    v.BOXTYPE = document.getElementById("cfg-boxtype").value;
+    v.MATEHOST = document.getElementById("cfg-mate").value.trim();
+    v.MASTERHOST = document.getElementById("cfg-master-mate").checked
+      ? v.MATEHOST
+      : document.getElementById("cfg-thishost").value;
+    v.INSTALLWEBGUI = document.getElementById("cfg-webgui").checked ? "YES" : "NO";
+  }
   return v;
+}
+
+// The mate is always the other box type: a FEP's mate is a BEP, and vice versa.
+function applyMateLabel() {
+  var boxtype = document.getElementById("cfg-boxtype").value;
+  document.getElementById("cfg-mate-label").textContent =
+    boxtype === "BEP" ? "Mate (FEP) host" : "Mate (BEP) host";
+}
+
+function applyBoxType() {
+  var boxtype = document.getElementById("cfg-boxtype").value;
+  var multi = boxtype !== "SINGLE";
+  document.getElementById("cfg-mate-row").style.display = multi ? "" : "none";
+  document.getElementById("cfg-master-row").style.display = multi ? "" : "none";
+  applyMateLabel();
+  // Default ticked for Singlebox/FEP, unticked for BEP — until the operator
+  // overrides it by hand, after which their choice sticks across box types.
+  if (!webguiTouched) document.getElementById("cfg-webgui").checked = boxtype !== "BEP";
+  previewInstall();
+}
+
+function updateMasterMateName() {
+  var mate = document.getElementById("cfg-mate").value.trim();
+  document.getElementById("cfg-master-mate-name").textContent = mate || "mate";
+}
+
+// Live cnc.cnfg preview + mate-not-in-/etc/hosts warning, re-run on every
+// install-field input/change.
+function previewInstall() {
+  if (hostMode !== "install") return;
+  postJSON("/api/config/preview", { values: formValues(), mode: hostMode }, function (status, d) {
+    document.getElementById("cfg-cnc-preview").textContent = d.cnc_cnfg || "";
+    var warn = (d.issues || []).filter(function (i) {
+      return i.field === "MATEHOST" && i.level === "WARNING";
+    });
+    document.getElementById("cfg-mate-warn").textContent = warn.length ? warn[0].message : "";
+  });
+}
+
+function loadHosts() {
+  getJSON("/api/install/hosts", function (d) {
+    document.getElementById("cfg-hosts").innerHTML = d.hosts.map(function (h) {
+      return "<option value='" + esc(h.name) + "'>" + esc(h.ip) + "</option>";
+    }).join("");
+  });
+}
+
+function applyHostMode(s) {
+  hostMode = s.mode;
+  document.getElementById("cfg-title").textContent =
+    hostMode === "install" ? "Install configuration" : "Upgrade configuration";
+  document.getElementById("install-cfg").style.display = hostMode === "install" ? "block" : "none";
+  if (hostMode === "install") loadHosts();
+  buildForm();
+}
+
+function refreshInstall() {
+  getJSON("/api/install/status", function (s) {
+    if (s.mode !== hostMode) applyHostMode(s);
+  });
 }
 
 function renderIssues(issues) {
@@ -709,21 +791,27 @@ document.getElementById("cfg-depot").onchange = function () {
 };
 
 document.getElementById("cfg-preview").onclick = function () {
-  postJSON("/api/config/preview", { values: formValues() }, function (status, d) {
+  postJSON("/api/config/preview", { values: formValues(), mode: hostMode }, function (status, d) {
     document.getElementById("cfg-rendered").textContent = d.rendered || "";
     renderIssues(d.issues || []);
   });
 };
 
 document.getElementById("cfg-save").onclick = function () {
-  postJSON("/api/config/save", { values: formValues() }, function (status, d) {
+  postJSON("/api/config/save", { values: formValues(), mode: hostMode }, function (status, d) {
     var msg = document.getElementById("cfg-msg");
     if (status === 200) { msg.textContent = "Saved — this config will be used on launch."; renderIssues([]); }
     else { msg.textContent = "Not saved — fix the errors."; renderIssues(d.issues || []); }
   });
 };
 
-buildForm();
+document.getElementById("cfg-boxtype").onchange = applyBoxType;
+document.getElementById("cfg-mate").oninput = function () { updateMasterMateName(); previewInstall(); };
+document.getElementById("cfg-master-me").onchange = previewInstall;
+document.getElementById("cfg-master-mate").onchange = previewInstall;
+document.getElementById("cfg-webgui").onchange = function () { webguiTouched = true; previewInstall(); };
+
+refreshInstall();
 loadDepots();
 
 document.getElementById("btn-check").onclick = runPreflight;
@@ -813,6 +901,7 @@ refreshPostflight();
 refreshReports();
 refreshReportsJob();
 setInterval(refreshProgress, 2000);
+setInterval(refreshInstall, 2000);
 setInterval(refreshLog, 2000);
 setInterval(refreshInfo, 15000);
 setInterval(refreshSite, 15000);
