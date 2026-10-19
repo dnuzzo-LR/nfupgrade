@@ -1,0 +1,17 @@
+[
+  {
+    "name": "netflex-absent", "description": "netFLEX not already installed",
+    "fail_text": "ERROR", "when": "preflight", "phase": "install", "hard": true,
+    "kind": "netflex_absent", "params": {}
+  },
+  {
+    "name": "pkg-ksh", "description": "ksh installed", "fail_text": "WARNING",
+    "when": "preflight", "phase": "any",
+    "kind": "rpm_installed", "params": {"pkg": "ksh"}
+  },
+  {
+    "name": "stage-or-upgrade-only", "description": "a staged load exists",
+    "fail_text": "ERROR", "when": "preflight", "phase": ["stage", "upgrade"],
+    "kind": "staged_present", "params": {}
+  }
+]

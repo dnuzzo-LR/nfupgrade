@@ -35,6 +35,9 @@ def make_ctx(tmp, running=True):
         ("test", "-f", "/usr/cnc/grestore.pid"): RunResult(1, "", ""),
         ("df", "-kP"): RunResult(0, "Filesystem 1024-blocks Used Available Capacity Mounted on\n"
                                     "/dev/sda4 100000000 10000000 90000000 10% /usr4\n", ""),
+        # netflex_installed / host_mode: model an already-installed box, so
+        # existing stage/upgrade tests aren't read as a fresh install.
+        ("rpm", "-q", "netFLEX-CORE"): RunResult(0, "netFLEX-CORE-5.4.0-29\n", ""),
         # default-check commands: stage pre-flight all pass; upgrade blocks on
         # staged-present (no staged load) — see readlink /usr/cnc_stage rc 1 above.
         ("dbcheck", "-AV"): RunResult(0, "clean\n", ""),
@@ -870,6 +873,142 @@ class TestUpgradeLogdir(unittest.TestCase):
         info = self.get("/api/info")
         self.assertEqual(info["upgrade_logdir"], self.updir)
         self.assertEqual(info["nfupgrader_logdir"], self.tmp)
+
+
+INSTALL_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "checks.install.json")
+
+
+def install_ctx(tmp, installed=False, state=None, running=False):
+    """A Context modelling a host mid new-install (or not yet installed): built
+    from make_ctx (nf_upgrader idle), with the install-mode check fixture, and
+    optionally an installed netFLEX-CORE, an install state file, and a live
+    nf_install process."""
+    ctx = make_ctx(tmp, running=False)
+    if not installed:
+        # Not installed: rpm says absent; the /usr/cnc existence probe is left
+        # unmocked, so FakeHost's default (rc 1, "not present") applies too.
+        ctx.host.responses[("rpm", "-q", "netFLEX-CORE")] = RunResult(1, "", "")
+    if running:
+        ctx.host.responses.update({
+            ("pgrep", "-f", "nf_install"): RunResult(0, "5252\n", ""),
+            ("cat", "/proc/5252/cmdline"):
+                RunResult(0, "/usr/bin/ksh\0/opt/nfupgrader/nf_install\0-i\0", ""),
+        })
+    if state is not None:
+        open(os.path.join(tmp, ".h1_INSTALL_STATE"), "w").write(state + "\n")
+    return ctx._replace(checks_path=INSTALL_FIXTURE)
+
+
+class TestInstallApi(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.sids = {}
+
+    def _sid(self, ctx):
+        # The redemption token is single-use; cache the session per ctx so a
+        # test can make several calls against the same context.
+        if id(ctx) not in self.sids:
+            self.sids[id(ctx)] = ctx.auth.redeem("TOK", "127.0.0.1")
+        return self.sids[id(ctx)]
+
+    def _get(self, ctx, path, **q):
+        status, _, body = api.dispatch("GET", path, dict((k, [v]) for k, v in q.items()), b"",
+                                       {"nfu_sid": self._sid(ctx)}, "127.0.0.1", ctx)
+        return status, json.loads(body.decode())
+
+    def _post(self, ctx, path, payload):
+        status, _, body = api.dispatch("POST", path, {}, json.dumps(payload).encode(),
+                                       {"nfu_sid": self._sid(ctx)}, "127.0.0.1", ctx)
+        return status, json.loads(body.decode())
+
+    def test_status_fresh_box(self):
+        ctx = install_ctx(self.tmp)
+        status, data = self._get(ctx, "/api/install/status")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["mode"], "install")
+        self.assertFalse(data["installed"])
+        self.assertFalse(data["unfinished"])
+
+    def test_active_phase_install_from_state_file_after_restart(self):
+        ctx = install_ctx(self.tmp, state="isrpm", running=True)
+        self.assertEqual(ctx.state, {})
+        status, data = self._get(ctx, "/api/progress")
+        self.assertEqual(status, 200)
+        self.assertEqual((data["phase"], data["current"], data["status"]),
+                         ("install", "isrpm", "running"))
+
+    def test_checks_install_excludes_stage_upgrade(self):
+        ctx = install_ctx(self.tmp)
+        status, data = self._get(ctx, "/api/checks", when="preflight", phase="install")
+        self.assertEqual(status, 200)
+        byname = dict((r["name"], r) for r in data["results"])
+        self.assertNotIn("stage-or-upgrade-only", byname)
+        self.assertIn("netflex-absent", byname)
+        self.assertTrue(byname["netflex-absent"]["hard"])
+
+    def test_checks_postflight_install_uses_install_postflight(self):
+        ctx = install_ctx(self.tmp, installed=True)
+        status, data = self._get(ctx, "/api/checks", when="postflight", phase="install")
+        self.assertEqual(status, 200)
+        self.assertEqual([r["name"] for r in data["results"]], ["pkg-ksh"])
+
+    def test_launch_install_ok(self):
+        ctx = install_ctx(self.tmp)
+        status, data = self._post(ctx, "/api/launch", {"mode": "install"})
+        self.assertEqual(status, 202)
+        self.assertEqual(data, {"accepted": True, "mode": "install", "action": "install"})
+
+    def test_launch_install_hard_stop_not_overridable(self):
+        ctx = install_ctx(self.tmp, installed=True)
+        ctx.state["phase"] = "install"
+        for payload in ({"mode": "install"},
+                        {"mode": "install", "overrides": ["netflex-absent"]}):
+            status, data = self._post(ctx, "/api/launch", payload)
+            self.assertEqual(status, 409, payload)
+            self.assertEqual(data["error"], "netFLEX is already installed")
+
+    def test_launch_resume_skips_hard(self):
+        ctx = install_ctx(self.tmp, installed=True, state="ispostinstall")
+        status, data = self._post(ctx, "/api/launch", {"mode": "install"})
+        self.assertEqual(status, 202, data)
+        self.assertEqual(data["action"], "resume")
+
+    def test_launch_stage_refused_when_not_installed(self):
+        ctx = install_ctx(self.tmp)
+        status, data = self._post(ctx, "/api/launch", {"mode": "stage"})
+        self.assertEqual(status, 409)
+        self.assertEqual(data["error"], "netFLEX is not installed")
+
+    def test_reset_requires_reason_and_unfinished(self):
+        ctx = install_ctx(self.tmp)
+        status, data = self._post(ctx, "/api/install/reset", {"reason": "go"})
+        self.assertEqual(status, 409)
+
+        tmp2 = tempfile.mkdtemp()
+        ctx2 = install_ctx(tmp2, state="isrpm")
+        status, data = self._post(ctx2, "/api/install/reset", {"reason": ""})
+        self.assertEqual(status, 400)
+        status, data = self._post(ctx2, "/api/install/reset", {"reason": "cleanup"})
+        self.assertEqual(status, 202)
+        self.assertEqual(data, {"accepted": True, "action": "reset"})
+        events = [json.loads(l)["event"] for l in
+                  open(os.path.join(tmp2, "audit.jsonl")).read().splitlines()]
+        self.assertIn("install_reset", events)
+
+    def test_reset_refused_while_installing(self):
+        ctx = install_ctx(self.tmp, state="isrpm", running=True)
+        status, data = self._post(ctx, "/api/install/reset", {"reason": "go"})
+        self.assertEqual(status, 409)
+
+    def test_status_reports_fatal_lines(self):
+        ctx = install_ctx(self.tmp, state="isrpm")
+        open(os.path.join(self.tmp, "install_inc_h1.123"), "w").write(
+            "2026-10-19 10:00:00 ERROR bad thing\n"
+            "2026-10-19 10:00:01 FATAL worse thing\n")
+        status, data = self._get(ctx, "/api/install/status")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["fatal"], ["bad thing", "worse thing"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -66,6 +66,32 @@ def latest_trace(inclogdir, phase, hostname):
     return best or os.path.join(inclogdir, "{}_inc_{}".format(phase, hostname))
 
 
+def latest_of(inclogdir, phases, hostname):
+    """The newest existing `<phase>_inc_<host>.<pid>` trace across several
+    phases (e.g. nf_install's "install" and "reset" traces share a host's
+    install history). Falls back to latest_trace(inclogdir, phases[0],
+    hostname) -- which in turn falls back to the pid-less path -- when none
+    of the phases have a trace on disk."""
+    pats = [(phase, re.compile(r"^{}_inc_{}\.\d+$".format(re.escape(phase), re.escape(hostname))))
+            for phase in phases]
+    best, best_key = None, None
+    try:
+        names = os.listdir(inclogdir)
+    except OSError:
+        names = []
+    for name in names:
+        if not any(pat.match(name) for _, pat in pats):
+            continue
+        path = os.path.join(inclogdir, name)
+        try:
+            key = (os.path.getmtime(path), name)
+        except OSError:
+            continue
+        if best_key is None or key > best_key:
+            best, best_key = path, key
+    return best or latest_trace(inclogdir, phases[0], hostname)
+
+
 def tail_since(path, offset, min_severity=None):
     """Incremental tail: read from byte `offset`, return new entries and the new
     offset. Lets the UI poll for only what was appended."""

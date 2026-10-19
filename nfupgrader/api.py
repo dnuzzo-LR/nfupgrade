@@ -9,7 +9,7 @@ import time
 import os
 
 from nfupgrader import progress, logtail, launcher, localinfo, siteview, site, checks, cfg
-from nfupgrader import reports, snapjobs
+from nfupgrader import reports, snapjobs, installstate, steps
 
 Context = collections.namedtuple("Context", [
     "host", "hostname", "inclogdir", "phase", "tracefile",
@@ -17,11 +17,12 @@ Context = collections.namedtuple("Context", [
     "effective_config", "user_config", "launch_cwd", "cnc_cnfg_path",
     "peer_host_factory", "checks_path", "state", "depot_dirs",
     "reports_path", "reports_root", "runner",
+    "nf_install_path", "hosts_path",
 ])
 # The trailing fields are only used by side effects (launch), info gathering,
 # checks, the config builder, or reports; default them so the dispatcher/tests
 # need not supply each one. (namedtuple field defaults via __new__.__defaults__ — py3.6.)
-Context.__new__.__defaults__ = (None,) * 11
+Context.__new__.__defaults__ = (None,) * 13
 
 # One check fix at a time: fixes change system state as root (dnf, sysctl, limits).
 # Held for the whole fix request, so launches and snapshots are refused meanwhile
@@ -108,20 +109,37 @@ def upgrade_logdir(ctx):
     return ctx.inclogdir
 
 
+def host_mode(ctx):
+    """'install' while this host is mid-install or not yet installed, else
+    'upgrade'. See installstate.host_mode."""
+    return installstate.host_mode(ctx.host, ctx.hostname, upgrade_logdir(ctx))
+
+
 def _active_phase(ctx):
     """Which phase the progress strip and log follow: the mode of the last
-    accepted launch, else NFU_PHASE, else inferred from the state file."""
+    accepted launch, else install (if the host is mid-install or not yet
+    installed), else NFU_PHASE, else inferred from the state file."""
     st = ctx.state if isinstance(ctx.state, dict) else {}
-    if st.get("phase") in ("stage", "upgrade"):
+    if st.get("phase") in ("stage", "upgrade", "install"):
         return st["phase"]
+    if host_mode(ctx) == "install":
+        return "install"
     if ctx.phase in ("stage", "upgrade"):
         return ctx.phase
     return progress.infer_phase(progress.read_state(ctx.hostname, upgrade_logdir(ctx)))
 
 
 def _active_tracefile(ctx, phase):
-    """An explicit NFU_TRACEFILE, else the newest nf_upgrader trace for the phase."""
-    return ctx.tracefile or logtail.latest_trace(upgrade_logdir(ctx), phase, ctx.hostname)
+    """An explicit NFU_TRACEFILE, else the newest trace for the phase: for
+    install, the newest of either an install or a reset trace (a reset can run
+    after a failed/unfinished install, and the Log tab should follow whichever
+    ran most recently)."""
+    if ctx.tracefile:
+        return ctx.tracefile
+    logdir = upgrade_logdir(ctx)
+    if phase == "install":
+        return logtail.latest_of(logdir, ["install", "reset"], ctx.hostname)
+    return logtail.latest_trace(logdir, phase, ctx.hostname)
 
 
 def _reports_root(ctx):
@@ -144,7 +162,7 @@ def _interrupted_notice(ctx):
         return None
     if any(s.get("pair_of") == newest["id"] for s in snaps if s["label"] == "after"):
         return None
-    if launcher.upgrader_running(ctx.host):
+    if launcher.anything_running(ctx.host):
         return None
     return "Before snapshot {} was interrupted \u2014 the upgrade was not launched.".format(
         newest["id"])
@@ -171,7 +189,9 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         return _json(401, {"error": "authentication required"})
 
     if path == "/api/progress" and method == "GET":
-        running = launcher.upgrader_running(ctx.host)
+        # Either engine can be live (nf_upgrader for stage/upgrade, nf_install
+        # for a new install); at most one runs at a time.
+        running = launcher.anything_running(ctx.host)
         logdir = upgrade_logdir(ctx)
         rec = progress.read_progress(ctx.hostname, _active_phase(ctx), logdir, running)
         rec["logdir"] = logdir
@@ -207,6 +227,45 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         view = siteview.gather_site(hosts, ctx.hostname, cnfg, ctx.host, factory)
         return _json(200, view)
 
+    if path == "/api/install/status" and method == "GET":
+        logdir = upgrade_logdir(ctx)
+        state = progress.read_state(ctx.hostname, logdir, "install")
+        trace = logtail.latest_of(logdir, ["install", "reset"], ctx.hostname)
+        fatal = [e["msg"] for e in logtail.tail(trace, "ERROR", 10)]
+        return _json(200, {
+            "mode": host_mode(ctx),
+            "installed": installstate.netflex_installed(ctx.host),
+            "running": launcher.installer_running(ctx.host),
+            "unfinished": installstate.unfinished(ctx.hostname, logdir),
+            "state": state,
+            "label": steps.label(state) if state else "",
+            "info": installstate.read_install_info(ctx.hostname, logdir),
+            "trace": trace,
+            "fatal": fatal,
+        })
+
+    if path == "/api/install/reset" and method == "POST":
+        payload = _json_object(body)
+        if payload is None:
+            return _json(400, {"error": "bad json"})
+        logdir = upgrade_logdir(ctx)
+        if not installstate.unfinished(ctx.hostname, logdir):
+            return _json(409, {"error": "no unfinished install to reset"})
+        if launcher.anything_running(ctx.host):
+            return _json(409, {"error": "install in progress"})
+        if fix_in_progress():
+            return _json(409, {"error": "check fix in progress"})
+        if _snapshot_busy(ctx):
+            return _json(409, {"error": "report snapshot in progress"})
+        reason = payload.get("reason") or ""
+        reason = reason.strip() if isinstance(reason, str) else ""
+        if not reason:
+            return _json(400, {"error": "reset requires a reason"})
+        ctx.audit.record("install_reset", reason=reason, client=client_ip)
+        # The httpd layer performs the actual reset (side effect); the
+        # dispatcher records intent and returns accepted.
+        return _json(202, {"accepted": True, "action": "reset"})
+
     if path == "/api/checks/fix" and method == "POST":
         payload = _json_object(body)
         if payload is None:
@@ -220,13 +279,13 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
             launched_at = state.get("launched_at")
             if launched_at is not None and _now() - launched_at < FIX_LAUNCH_GRACE:
                 return _json(409, {"error": "upgrade just launched"})
-            if launcher.upgrader_running(ctx.host):
+            if launcher.anything_running(ctx.host):
                 return _json(409, {"error": "upgrade in progress"})
             if _snapshot_busy(ctx):
                 return _json(409, {"error": "report snapshot in progress"})
             phase = payload.get("phase") or _active_phase(ctx)
-            if phase not in ("stage", "upgrade"):
-                return _json(400, {"error": "phase must be stage or upgrade"})
+            if phase not in ("stage", "upgrade", "install"):
+                return _json(400, {"error": "phase must be stage, upgrade, or install"})
             name = payload.get("name") or ""
             check = checks.find_check(_load_checks(ctx), name, "preflight", phase,
                                       _machtype(ctx))
@@ -255,7 +314,13 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
     if path == "/api/checks" and method == "GET":
         when = (query.get("when") or ["preflight"])[0]
         phase = (query.get("phase") or [_active_phase(ctx)])[0]
-        results = checks.run_checks(ctx.host, _load_checks(ctx), when, phase, _machtype(ctx))
+        if when == "postflight" and phase == "install":
+            # Re-checks the rpm_installed preconditions a fix may have just
+            # installed; nothing else from the install check list is relevant
+            # post-install (no "upgrade just finished" style re-checks exist yet).
+            results = checks.install_postflight(ctx.host, _load_checks(ctx))
+        else:
+            results = checks.run_checks(ctx.host, _load_checks(ctx), when, phase, _machtype(ctx))
         return _json(200, {"results": results, "blocking": checks.blocking_failures(results)})
 
     if path == "/api/config/fields" and method == "GET":
@@ -319,9 +384,10 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
     if path == "/api/reports/run" and method == "POST":
         if ctx.runner is None:
             return _json(503, {"error": "reports unavailable"})
-        # A manual snapshot mid-upgrade would capture a half-upgraded system and
-        # could hold the runner when the watcher wants the after snapshot.
-        if launcher.upgrader_running(ctx.host):
+        # A manual snapshot mid-upgrade (or mid-install) would capture a
+        # half-upgraded system and could hold the runner when the watcher
+        # wants the after snapshot.
+        if launcher.anything_running(ctx.host):
             return _json(409, {"error": "upgrade in progress"})
         # Held only while the job is registered: a fix that arrives afterwards
         # sees the runner busy, and one already running makes this a 409.
@@ -366,18 +432,38 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         if payload is None:
             return _json(400, {"error": "bad json"})
         mode = payload.get("mode")
-        if mode not in ("stage", "upgrade"):
-            return _json(400, {"error": "mode must be stage or upgrade"})
+        if mode not in ("stage", "upgrade", "install"):
+            return _json(400, {"error": "mode must be stage, upgrade, or install"})
         if _snapshot_busy(ctx):
             return _json(409, {"error": "report snapshot in progress"})
         if fix_in_progress():
             return _json(409, {"error": "check fix in progress"})
-        if launcher.upgrader_running(ctx.host):
+        if launcher.anything_running(ctx.host):
             return _json(409, {"error": "upgrade already running"})
+        hm = host_mode(ctx)
+        if mode == "install":
+            if hm != "install":
+                return _json(409, {"error": "netFLEX is already installed"})
+        elif hm != "upgrade":
+            return _json(409, {"error": "netFLEX is not installed"})
         overrides = payload.get("overrides", [])
         if not isinstance(overrides, list):
             return _json(400, {"error": "overrides must be a list of check names"})
+        action = None
+        if mode == "install":
+            action = ("resume" if installstate.unfinished(ctx.hostname, upgrade_logdir(ctx))
+                      else "install")
         results = checks.run_checks(ctx.host, _load_checks(ctx), "preflight", mode, _machtype(ctx))
+        if action == "resume":
+            # Resuming skips the fresh-install-only hard preconditions (e.g.
+            # "netFLEX not already installed" -- resuming an install that got
+            # as far as the RPM step is expected to find it already there).
+            results = [r for r in results if not r.get("hard")]
+        hard = checks.hard_failures(results)
+        if hard:
+            # Hard failures are a stop, not a blocking check: never
+            # overridable, regardless of what the caller passed.
+            return _json(409, {"error": "netFLEX is already installed", "hard": hard})
         blocking = checks.blocking_failures(results)
         # Every blocking failure must be overridden by name; names for checks
         # that now pass (or never existed) are simply ignored.
@@ -392,9 +478,9 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
                 return _json(400, {"error": "override requires a reason"})
             ctx.audit.record("override", mode=mode, client=client_ip, reason=reason,
                              checks=[b["name"] for b in blocking])
-        ctx.audit.record("launch", mode=mode, client=client_ip)
+        ctx.audit.record("launch", mode=mode, action=action, client=client_ip)
         # The httpd layer performs the actual launch (side effect); the
         # dispatcher records intent and returns accepted. See httpd on_launch.
-        return _json(202, {"accepted": True, "mode": mode})
+        return _json(202, {"accepted": True, "mode": mode, "action": action})
 
     return _json(404, {"error": "not found"})

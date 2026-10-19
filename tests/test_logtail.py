@@ -83,5 +83,28 @@ class TestLatestTrace(unittest.TestCase):
         self.assertEqual(logtail.latest_trace(os.path.join(self.d, "nope"), "stage", "h1"),
                          os.path.join(self.d, "nope", "stage_inc_h1"))
 
+
+class TestLatestOf(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+
+    def touch(self, name, mtime):
+        p = os.path.join(self.d, name)
+        open(p, "w").write("x\n")
+        os.utime(p, (mtime, mtime))
+        return p
+
+    def test_latest_of_picks_newest_across_phases(self):
+        self.touch("install_inc_h1.100", 1000)
+        newest = self.touch("reset_inc_h1.200", 2000)
+        self.assertEqual(logtail.latest_of(self.d, ["install", "reset"], "h1"), newest)
+        # order of phases passed in doesn't matter -- mtime decides
+        self.assertEqual(logtail.latest_of(self.d, ["reset", "install"], "h1"), newest)
+
+    def test_falls_back_to_first_phase_pidless(self):
+        self.assertEqual(logtail.latest_of(self.d, ["install", "reset"], "h1"),
+                         os.path.join(self.d, "install_inc_h1"))
+
+
 if __name__ == "__main__":
     unittest.main()
