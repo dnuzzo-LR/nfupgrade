@@ -82,6 +82,7 @@ cleanup() {
 
 state()  { cat "${SB}/logs/.h1_INSTALL_STATE" 2>/dev/null; }
 trace()  { cat "${SB}"/logs/install_inc_h1.* 2>/dev/null; }
+rtrace() { cat "${SB}"/logs/reset_inc_h1.* 2>/dev/null; }
 # Ordered names of the interesting commands that ran.
 seq_of() {
 	awk '{print $1}' "${SB}/calls" \
@@ -185,15 +186,142 @@ assert_match "stale done state archived: archive" '\.h1_INSTALL_STATE\.[0-9]{14}
 assert_match "stale done state archived: info archive" '\.h1_INSTALL_INFO\.[0-9]{14}$' "$(ls "${SB}"/logs/.h1_INSTALL_INFO.* 2>/dev/null)"
 assert_eq    "stale done state archived: state" isdone "$(state)"
 
+# --- reset after failure -----------------------------------------------------
+setup
+FAIL_POSTINSTALL=1 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+assert_rc    "reset after failure: install rc" 1 "$rc"
+assert_eq    "reset after failure: rpm installed first" yes "$(exists "${SB}/rpmdb")"
+"${NFI}" -c "${SB}/test.cfg" -x; rc=$?
+assert_rc    "reset after failure: rc" 0 "$rc"
+assert_eq    "reset after failure: rpm -e ran" 1 "$(awk '$1 == "rpm" && $2 == "-e"' "${SB}/calls" | wc -l | tr -d ' ')"
+assert_eq    "reset after failure: rpmdb gone" no "$(exists "${SB}/rpmdb")"
+assert_eq    "reset after failure: /usr/cnc gone" no "$(exists "${SB}/usr/cnc")"
+assert_eq    "reset after failure: cnc_stage gone" no "$(exists "${SB}/usr/cnc_stage")"
+assert_eq    "reset after failure: load dir gone" no "$(exists "${SB}/usr4/inc5.3.002")"
+assert_eq    "reset after failure: /usr4 kept" yes "$(exists "${SB}/usr4")"
+assert_eq    "reset after failure: no state" no "$(exists "${SB}/logs/.h1_INSTALL_STATE")"
+assert_eq    "reset after failure: no info" no "$(exists "${SB}/logs/.h1_INSTALL_INFO")"
+assert_match "reset after failure: state archived" '\.h1_INSTALL_STATE\.[0-9]{14}$' "$(ls "${SB}"/logs/.h1_INSTALL_STATE.* 2>/dev/null)"
+assert_match "reset after failure: info archived" '\.h1_INSTALL_INFO\.[0-9]{14}$' "$(ls "${SB}"/logs/.h1_INSTALL_INFO.* 2>/dev/null)"
+assert_match "reset after failure: reset trace" 'reset_inc_h1\.[0-9]+$' "$(ls "${SB}"/logs/reset_inc_h1.* 2>/dev/null)"
+assert_match "reset after failure: reset complete" ' INFO  .*reset complete' "$(rtrace)"
+assert_eq    "reset after failure: no FATAL" "" "$(rtrace | grep FATAL)"
+assert_match "reset after failure: install trace kept" 'install_inc_h1\.[0-9]+$' "$(ls "${SB}"/logs/install_inc_h1.* 2>/dev/null)"
+"${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+assert_rc    "reset after failure: fresh install again rc" 0 "$rc"
+assert_eq    "reset after failure: fresh install again state" isdone "$(state)"
+
+# --- reset before the RPM went in: no rpm -e --------------------------------
+setup
+mkdir -p "${SB}/usr4/inc5.3.002"
+ln -s "${SB}/usr4/inc5.3.002" "${SB}/usr/cnc"
+ln -s "${SB}/usr4/inc5.3.002" "${SB}/usr/cnc_stage"
+print isrpm > "${SB}/logs/.h1_INSTALL_STATE"
+print "LOADDIR=${SB}/usr4/inc5.3.002" > "${SB}/logs/.h1_INSTALL_INFO"
+"${NFI}" -c "${SB}/test.cfg" -x; rc=$?
+assert_rc    "reset no rpm: rc" 0 "$rc"
+assert_eq    "reset no rpm: no rpm -e" 0 "$(awk '$1 == "rpm" && $2 == "-e"' "${SB}/calls" | wc -l | tr -d ' ')"
+assert_eq    "reset no rpm: /usr/cnc gone" no "$(exists "${SB}/usr/cnc")"
+assert_eq    "reset no rpm: cnc_stage gone" no "$(exists "${SB}/usr/cnc_stage")"
+assert_eq    "reset no rpm: load dir gone" no "$(exists "${SB}/usr4/inc5.3.002")"
+assert_eq    "reset no rpm: no state" no "$(exists "${SB}/logs/.h1_INSTALL_STATE")"
+
+# --- reset refuses foreign link ----------------------------------------------
+setup
+FAIL_POSTINSTALL=1 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+mkdir -p "${SB}/usr4/other"
+rm -f "${SB}/usr/cnc"
+ln -s "${SB}/usr4/other" "${SB}/usr/cnc"
+"${NFI}" -c "${SB}/test.cfg" -x; rc=$?
+assert_rc    "reset refuses foreign link: rc" 1 "$rc"
+assert_match "reset refuses foreign link: FATAL" ' FATAL ' "$(rtrace)"
+assert_eq    "reset refuses foreign link: rpmdb kept" yes "$(exists "${SB}/rpmdb")"
+assert_eq    "reset refuses foreign link: no rpm -e" 0 "$(awk '$1 == "rpm" && $2 == "-e"' "${SB}/calls" | wc -l | tr -d ' ')"
+assert_eq    "reset refuses foreign link: load dir kept" yes "$(exists "${SB}/usr4/inc5.3.002")"
+assert_eq    "reset refuses foreign link: other kept" yes "$(exists "${SB}/usr4/other")"
+assert_eq    "reset refuses foreign link: link kept" "${SB}/usr4/other" "$(readlink "${SB}/usr/cnc")"
+assert_eq    "reset refuses foreign link: state" ispostinstall "$(state)"
+assert_eq    "reset refuses foreign link: info kept" yes "$(exists "${SB}/logs/.h1_INSTALL_INFO")"
+assert_eq    "reset refuses foreign link: no archive" "" "$(ls "${SB}"/logs/.h1_INSTALL_STATE.* 2>/dev/null)"
+
+# --- reset refuses a real directory where a link should be -----------------
+setup
+FAIL_POSTINSTALL=1 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+mkdir -p "${SB}/usr/cnc_stage/keep"
+"${NFI}" -c "${SB}/test.cfg" -x; rc=$?
+assert_rc    "reset refuses non-link: rc" 1 "$rc"
+assert_eq    "reset refuses non-link: dir kept" yes "$(exists "${SB}/usr/cnc_stage/keep")"
+assert_eq    "reset refuses non-link: rpmdb kept" yes "$(exists "${SB}/rpmdb")"
+assert_eq    "reset refuses non-link: /usr/cnc kept" "${SB}/usr4/inc5.3.002" "$(readlink "${SB}/usr/cnc")"
+assert_eq    "reset refuses non-link: state" ispostinstall "$(state)"
+
+# --- reset refuses when done -------------------------------------------------
+setup
+mkdir -p "${SB}/usr4/inc5.3.002"
+print isdone > "${SB}/logs/.h1_INSTALL_STATE"
+print "LOADDIR=${SB}/usr4/inc5.3.002" > "${SB}/logs/.h1_INSTALL_INFO"
+"${NFI}" -c "${SB}/test.cfg" -x; rc=$?
+assert_rc    "reset refuses when done: rc" 1 "$rc"
+assert_match "reset refuses when done: FATAL" ' FATAL ' "$(rtrace)"
+assert_eq    "reset refuses when done: load dir kept" yes "$(exists "${SB}/usr4/inc5.3.002")"
+assert_eq    "reset refuses when done: state" isdone "$(state)"
+
+# --- reset refuses with no state ---------------------------------------------
+setup
+mkdir -p "${SB}/usr4/inc5.3.002"
+print "LOADDIR=${SB}/usr4/inc5.3.002" > "${SB}/logs/.h1_INSTALL_INFO"
+"${NFI}" -c "${SB}/test.cfg" -x; rc=$?
+assert_rc    "reset refuses no state: rc" 1 "$rc"
+assert_eq    "reset refuses no state: load dir kept" yes "$(exists "${SB}/usr4/inc5.3.002")"
+assert_eq    "reset refuses no state: info kept" yes "$(exists "${SB}/logs/.h1_INSTALL_INFO")"
+
+# --- reset refuses a LOADDIR outside ${LOADROOT}/inc* -----------------------
+setup
+mkdir -p "${SB}/keepme"
+print isrpm > "${SB}/logs/.h1_INSTALL_STATE"
+print "LOADDIR=${SB}/keepme" > "${SB}/logs/.h1_INSTALL_INFO"
+"${NFI}" -c "${SB}/test.cfg" -x; rc=$?
+assert_rc    "reset refuses bad LOADDIR: rc" 1 "$rc"
+assert_eq    "reset refuses bad LOADDIR: dir kept" yes "$(exists "${SB}/keepme")"
+assert_eq    "reset refuses bad LOADDIR: state" isrpm "$(state)"
+
+# --- reset refuses a LOADDIR that escapes via .. ----------------------------
+setup
+mkdir -p "${SB}/usr4/inc5" "${SB}/keepme"
+print isrpm > "${SB}/logs/.h1_INSTALL_STATE"
+print "LOADDIR=${SB}/usr4/inc5/../../keepme" > "${SB}/logs/.h1_INSTALL_INFO"
+"${NFI}" -c "${SB}/test.cfg" -x; rc=$?
+assert_rc    "reset refuses .. LOADDIR: rc" 1 "$rc"
+assert_eq    "reset refuses .. LOADDIR: dir kept" yes "$(exists "${SB}/keepme")"
+assert_eq    "reset refuses .. LOADDIR: state" isrpm "$(state)"
+
+# --- reset stops when rpm -e fails -------------------------------------------
+setup
+FAIL_POSTINSTALL=1 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+mkstub rpm '
+case "$1" in
+-q) [ -f "${NFT_SB}/rpmdb" ] || exit 1; exit 0;;
+esac
+exit 1'
+"${NFI}" -c "${SB}/test.cfg" -x; rc=$?
+assert_rc    "reset rpm -e fails: rc" 1 "$rc"
+assert_match "reset rpm -e fails: FATAL" ' FATAL ' "$(rtrace)"
+assert_eq    "reset rpm -e fails: /usr/cnc kept" "${SB}/usr4/inc5.3.002" "$(readlink "${SB}/usr/cnc")"
+assert_eq    "reset rpm -e fails: load dir kept" yes "$(exists "${SB}/usr4/inc5.3.002")"
+assert_eq    "reset rpm -e fails: state" ispostinstall "$(state)"
+
 # --- backgrounding: without NFI_FOREGROUND it returns 0 at once --------------
 setup
 unset NFI_FOREGROUND
 mkstub mountpoint 'exit 1'
 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
 assert_rc    "background: parent rc" 0 "$rc"
+# Wait for the child to FINISH (its last line is "Aborting install"), not just
+# its first FATAL, so the next setup does not rm -rf the sandbox under it (R4).
 i=0
-while [ $i -lt 50 ] && [ -z "$(trace | grep FATAL)" ]; do sleep 0.1; i=$((i+1)); done
+while [ $i -lt 100 ] && [ -z "$(trace | grep 'Aborting install')" ]; do sleep 0.1; i=$((i+1)); done
 assert_match "background: child ran" ' FATAL ' "$(trace)"
+assert_match "background: child finished" 'Aborting install' "$(trace)"
 
 # --- usage -------------------------------------------------------------------
 setup

@@ -9,7 +9,8 @@
 #     -i: fresh install (refused if an install is unfinished or netFLEX is
 #         already present)
 #     -r: resume an unfinished install from its recorded step
-#     -x: reset a failed install (not implemented yet)
+#     -x: reset a failed install: remove only what it provably created
+#         (RPM, the two links, the load dir), archive state/info
 #     -h: show this help
 #
 # Runs as root. Re-runs itself in the background (like nf_upgrade launching
@@ -390,9 +391,89 @@ function start_resume
 	loginfo "Resuming install of ${VERSION} into ${LOADDIR} at step ${cur}"
 }
 
+# reset_link_ok <link> — succeed if <link> is absent, or is a symlink whose
+# readlink equals LOADDIR. Anything else (a real file/dir, or a link elsewhere)
+# is not provably ours.
+function reset_link_ok
+{
+	typeset link="$1"
+	typeset target
+	if [ -L "${link}" ]
+	then
+		target=$(readlink "${link}")
+		if [ "${target}" = "${LOADDIR}" ]
+		then
+			return 0
+		fi
+		logerror "${link} is a link to ${target}, not ${LOADDIR}"
+		return 1
+	fi
+	if [ -e "${link}" ]
+	then
+		logerror "${link} exists and is not a link to ${LOADDIR}"
+		return 1
+	fi
+	return 0
+}
+
+# Reset (-x): undo a failed install, removing ONLY what it provably created.
+# Every refusal check runs before anything is removed; a refusal is FATAL and
+# leaves the RPM, links, load dir, state and info untouched. Traces are kept.
 function do_reset
 {
-	die "reset (-x) is not implemented yet"
+	typeset cur infoload rest ts
+	cur=$(read_state)
+	if [ -z "${cur}" -o "${cur}" = "isdone" ]
+	then
+		die "no unfinished install to reset on ${HOSTNAME} (state ${cur:-none})"
+	fi
+	is_valid_state "${cur}" || die "Unsupported install state (${cur}) in ${STATEFILE}"
+	infoload=$(info_value LOADDIR)
+	[ -n "${infoload}" ] || die "no LOADDIR in ${INFOFILE} - refusing reset"
+	# LOADDIR must be ${LOADROOT}/inc<something>, one path component, so a
+	# tampered info file (other dir, "..", nested path) cannot widen the rm -rf.
+	case "${infoload}" in
+	"${LOADROOT}"/inc*) rest="${infoload#${LOADROOT}/inc}" ;;
+	*) die "LOADDIR ${infoload} is not under ${LOADROOT}/inc - refusing reset" ;;
+	esac
+	case "${rest}" in
+	""|*/*|*..*) die "LOADDIR ${infoload} is not a ${LOADROOT}/inc load dir - refusing reset" ;;
+	esac
+	LOADDIR="${infoload}"
+	reset_link_ok "${INCROOT}" || die "${INCROOT} is not ours - refusing reset, nothing removed"
+	reset_link_ok "${STAGEROOT}" || die "${STAGEROOT} is not ours - refusing reset, nothing removed"
+	loginfo "Resetting failed install (state ${cur}) of ${LOADDIR} on ${HOSTNAME}"
+
+	if netflex_rpm_installed
+	then
+		run_logged rpm rpm -e netFLEX-CORE || die "rpm -e netFLEX-CORE failed"
+		loginfo "Removed netFLEX-CORE RPM"
+	else
+		loginfo "netFLEX-CORE RPM not installed"
+	fi
+	if [ -L "${INCROOT}" ]
+	then
+		run_logged unlink rm -f "${INCROOT}" || die "cannot remove ${INCROOT}"
+		loginfo "Removed ${INCROOT} link"
+	fi
+	if [ -L "${STAGEROOT}" ]
+	then
+		run_logged unlink rm -f "${STAGEROOT}" || die "cannot remove ${STAGEROOT}"
+		loginfo "Removed ${STAGEROOT} link"
+	fi
+	if [ -e "${LOADDIR}" -o -L "${LOADDIR}" ]
+	then
+		run_logged loaddir rm -rf "${LOADDIR}" || die "cannot remove ${LOADDIR}"
+		loginfo "Removed ${LOADDIR}"
+	fi
+	ts=$(date '+%Y%m%d%H%M%S')
+	run_logged archive mv "${STATEFILE}" "${STATEFILE}.${ts}" || die "cannot archive ${STATEFILE}"
+	if [ -f "${INFOFILE}" ]
+	then
+		run_logged archive mv "${INFOFILE}" "${INFOFILE}.${ts}" || die "cannot archive ${INFOFILE}"
+	fi
+	loginfo "Archived install state as ${STATEFILE}.${ts}"
+	loginfo "reset complete"
 }
 
 # --- main -----------------------------------------------------------------------
