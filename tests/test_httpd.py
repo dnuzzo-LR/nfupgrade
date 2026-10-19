@@ -326,6 +326,67 @@ class TestLaunchSideEffect(unittest.TestCase):
         self.assertEqual(status, 202)
 
 
+class TestInstallSideEffect(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def events(self):
+        return [json.loads(l)["event"] for l in open(os.path.join(self.tmp, "audit.jsonl"))]
+
+    def test_install_launch_skips_snapshot(self):
+        def begin(*a, **kw):
+            raise AssertionError("install must not take a snapshot")
+        seen = []
+
+        def perform_inst(ctx, action):
+            seen.append(action)
+        ctx = launch_ctx(self.tmp, runner=FakeRunner())
+        status, body = httpd.launch_side_effect(ctx, "install", "ip", begin=begin,
+                                                action="install", perform_inst=perform_inst)
+        self.assertEqual(status, 202)
+        self.assertEqual(body, {"accepted": True, "mode": "install", "action": "install"})
+        self.assertEqual(seen, ["install"])
+
+    def test_resume_action_passed_through(self):
+        def disp(method, path, query, body, cookies, ip, ctx):
+            return 202, [("Content-Type", "application/json")], json.dumps(
+                {"accepted": True, "mode": "install", "action": "resume"}).encode("utf-8")
+        seen = []
+
+        def perform_inst(ctx, action):
+            seen.append(action)
+
+        def launch(ctx, mode, ip, action=None):
+            return httpd.launch_side_effect(ctx, mode, ip, action=action,
+                                            perform_inst=perform_inst)
+        ctx = launch_ctx(self.tmp, runner=FakeRunner())
+        httpd.safe_dispatch("POST", "/api/launch", {}, b'{"mode": "install"}', {}, "ip", ctx,
+                           dispatch=disp, launch=launch)
+        self.assertEqual(seen, ["resume"])
+
+    def test_reset_side_effect(self):
+        seen = []
+
+        def perform_inst(ctx, action):
+            seen.append(action)
+        ctx = launch_ctx(self.tmp)._replace(state={})
+        status, body = httpd.reset_side_effect(ctx, "ip", perform_inst=perform_inst)
+        self.assertEqual(status, 202)
+        self.assertEqual(body, {"accepted": True, "mode": "install", "action": "reset"})
+        self.assertEqual(seen, ["reset"])
+        self.assertEqual(ctx.state["phase"], "install")
+
+    def test_install_spawn_failure_is_500(self):
+        def boom(ctx, action):
+            raise OSError('bad "path"')
+        ctx = launch_ctx(self.tmp, runner=FakeRunner())
+        status, body = httpd.launch_side_effect(ctx, "install", "ip", action="install",
+                                                perform_inst=boom)
+        self.assertEqual(status, 500)
+        self.assertEqual(body["error"], 'launch failed: bad "path"')
+        self.assertIn("launch_error", self.events())
+
+
 class TestLoadInterruptedFix(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -388,7 +449,7 @@ class TestSafeDispatch(unittest.TestCase):
             return 202, [("Content-Type", "application/json")], b'{"accepted": true}'
         seen = []
 
-        def side(ctx, mode, ip):
+        def side(ctx, mode, ip, action=None):
             seen.append((mode, ip))
             return 202, {"accepted": True, "mode": mode}
         ctx = launch_ctx(self.tmp)

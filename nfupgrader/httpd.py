@@ -101,6 +101,16 @@ def perform_launch(ctx, mode):
     launcher.launch(ctx.nf_upgrade_path, ctx.effective_config, mode, cwd=ctx.launch_cwd)
 
 
+def perform_install(ctx, action):
+    """Spawn nf_install for the given action (install/resume/reset). The active
+    config is written exactly as perform_launch's, since nf_install sources the
+    same effective config nf_upgrade does."""
+    resolved = (ctx.state or {}).get("user_config") or ctx.user_config
+    if resolved:
+        launcher.write_effective_config(resolved, ctx.effective_config)
+    launcher.launch_install(ctx.nf_install_path, ctx.effective_config, action, cwd=ctx.launch_cwd)
+
+
 def load_interrupted_fix(audit, path):
     """Detect a check fix left unfinished by a service restart mid-fix (see
     audit.last_unfinished_fix), audit it once as "check_fix_interrupted", and
@@ -118,11 +128,13 @@ def upgrade_status(ctx):
                                   running)["status"]
 
 
-def launch_side_effect(ctx, mode, ip, perform=None, begin=None):
+def launch_side_effect(ctx, mode, ip, perform=None, begin=None, action=None, perform_inst=None):
     """Carry out an accepted launch; returns (status, body dict). Upgrades run a
     before snapshot first (in the background) and then launch; stage launches, or
     any launch without a snapshot runner, spawn nf_upgrade directly — a spawn
     failure (missing/non-executable script, missing config) becomes a clean 500.
+    Install (mode "install", any action — install/resume/reset) spawns nf_install
+    directly and never takes a report snapshot.
 
     Any stale ctx.state["launch_error"] from a previous launch is cleared up
     front on every accepted launch (whatever the mode/path). For the
@@ -130,8 +142,9 @@ def launch_side_effect(ctx, mode, ip, perform=None, begin=None):
     `then` (audited by begin_upgrade as "launch_error") also lands in
     ctx.state for /api/reports/job to surface to the UI. Losing the race with
     a snapshot already in progress (Busy) is audited as "launch_rejected".
-    An accepted launch records its mode as ctx.state["phase"], so the progress
-    strip and log follow the phase that was actually launched.
+    An accepted launch records its mode as ctx.state["phase"] ("install" for
+    install/resume/reset), so the progress strip and log follow the phase that
+    was actually launched.
 
     A launch is refused (409, audited "launch_rejected") while a check fix is
     running. The fix lock is held while spawning / starting the before snapshot,
@@ -144,6 +157,7 @@ def launch_side_effect(ctx, mode, ip, perform=None, begin=None):
     where a fix could otherwise race the launch it just accepted."""
     perform = perform or perform_launch
     begin = begin or snapjobs.begin_upgrade
+    perform_inst = perform_inst or perform_install
     has_state = isinstance(ctx.state, dict)
     if has_state:
         ctx.state.pop("launch_error", None)
@@ -151,12 +165,35 @@ def launch_side_effect(ctx, mode, ip, perform=None, begin=None):
         ctx.audit.record("launch_rejected", mode=mode, client=ip, reason="check fix in progress")
         return 409, {"error": "check fix in progress"}
     try:
-        status, body = _launch_locked(ctx, mode, ip, perform, begin, has_state)
+        if mode == "install":
+            status, body = _install_locked(ctx, action, ip, perform_inst, has_state)
+        else:
+            status, body = _launch_locked(ctx, mode, ip, perform, begin, has_state)
         if has_state and status == 202:
             ctx.state["launched_at"] = time.time()
         return status, body
     finally:
         api._FIX_LOCK.release()
+
+
+def _install_locked(ctx, action, ip, perform_inst, has_state):
+    """launch_side_effect's install-mode body (install/resume/reset), run while
+    holding api._FIX_LOCK. No report snapshot is ever taken for these."""
+    try:
+        perform_inst(ctx, action)
+    except Exception as e:
+        ctx.audit.record("launch_error", error=str(e), client=ip)
+        return 500, {"error": "launch failed: {}".format(e)}
+    if has_state:
+        ctx.state["phase"] = "install"
+    return 202, {"accepted": True, "mode": "install", "action": action}
+
+
+def reset_side_effect(ctx, ip, perform_inst=None):
+    """Carry out an accepted /api/install/reset: identical locking, spawn and
+    phase-stamping to the install path of launch_side_effect, with action fixed
+    to "reset"."""
+    return launch_side_effect(ctx, "install", ip, action="reset", perform_inst=perform_inst)
 
 
 def _launch_locked(ctx, mode, ip, perform, begin, has_state):
@@ -189,17 +226,25 @@ def _json_response(status, obj):
     return status, [("Content-Type", "application/json")], json.dumps(obj).encode("utf-8")
 
 
-def safe_dispatch(method, path, query, body, cookies, ip, ctx, dispatch=None, launch=None):
-    """api.dispatch plus the launch side effect after an accepted (202) launch.
-    Any exception becomes a 500 JSON error (traceback to stderr) so the client
-    gets an answer instead of a dropped connection."""
+def safe_dispatch(method, path, query, body, cookies, ip, ctx, dispatch=None, launch=None,
+                  reset=None):
+    """api.dispatch plus the launch/reset side effect after an accepted (202)
+    launch or install reset. Any exception becomes a 500 JSON error (traceback
+    to stderr) so the client gets an answer instead of a dropped connection."""
     dispatch = dispatch or api.dispatch
     launch = launch or launch_side_effect
+    reset = reset or reset_side_effect
     try:
         status, headers, out = dispatch(method, path, query, body, cookies, ip, ctx)
         if path == "/api/launch" and status == 202:
             mode = json.loads(body.decode("utf-8") or "{}").get("mode")
-            status, obj = launch(ctx, mode, ip)
+            # action (install vs resume) is the dispatcher's decision, carried in
+            # its response, not in the request the UI sent.
+            action = json.loads(out.decode("utf-8")).get("action")
+            status, obj = launch(ctx, mode, ip, action=action)
+            status, headers, out = _json_response(status, obj)
+        elif path == "/api/install/reset" and status == 202:
+            status, obj = reset(ctx, ip)
             status, headers, out = _json_response(status, obj)
         return status, headers, out
     except Exception as e:
@@ -284,6 +329,9 @@ def main(argv=None):
     tracefile = os.environ.get("NFU_TRACEFILE") or None
     nf_upgrade_path = os.environ.get(
         "NFU_UPGRADE_PATH", os.path.join(here, "..", "nf_upgrade"))
+    nf_install_path = os.environ.get(
+        "NFU_INSTALL_PATH", os.path.join(here, "..", "nf_install"))
+    hosts_path = "/etc/hosts"
     effective_config = os.environ.get(
         "NFU_EFFECTIVE_CONFIG", os.path.join(inclogdir, "nfupgrader_effective.cfg"))
     user_config = os.environ.get("NFU_USER_CONFIG")
@@ -315,6 +363,7 @@ def main(argv=None):
         peer_host_factory=lambda name: SshHost(name),
         checks_path=checks_path, state=state, depot_dirs=depot_dirs,
         reports_path=reports_path, reports_root=reports_root, runner=runner,
+        nf_install_path=nf_install_path, hosts_path=hosts_path,
     )
 
     port = int(os.environ.get("NFU_PORT", "0"))
