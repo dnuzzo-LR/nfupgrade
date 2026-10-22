@@ -126,6 +126,15 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn("<th>Category</th>", fn)
         self.assertIn("esc(r.category", fn)
 
+    def test_preview_banner_and_picker(self):
+        self.assertIn('id="preview-banner"', self.html)
+        for v in ("before", "running", "failed", "done"):
+            self.assertIn('<option value="%s">' % v, self.html)
+        fn = self.js.split("function renderPreview(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("s.preview", fn)
+        self.assertIn('"/api/preview"', self.js)
+        self.assertIn("renderPreview(s);", self.js.split("function refreshInstall(", 1)[1])
+
     def test_all_required_ids_present(self):
         missing = [i for i in REQUIRED_IDS if ('id="%s"' % i) not in self.html]
         self.assertEqual(missing, [], "index.html missing IDs: %s" % missing)

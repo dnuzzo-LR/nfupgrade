@@ -52,6 +52,7 @@ the host being upgraded.
 | `NFU_EFFECTIVE_CONFIG` | `${INCLOGDIR}/nfupgrader_effective.cfg` | Where the generated effective config is written and read. |
 | `NFU_LAUNCH_CWD` | dir of `NFU_USER_CONFIG` | Directory `nf_upgrade` runs from (for relative `DEPOTFILE`/`linux_packages` lookup). |
 | `NFU_DEPOT_DIRS` | directory `run.sh` was started from, then `/opt/apt/upgrade` | Colon-separated directories scanned (top level only) for `netFLEX-CORE*.rpm`. The Config tab lists them automatically on page load; **Refresh depots** re-scans. Picking one fills `DEPOTFILE`, `NEW_GENERIC` and `NEW_LOAD` from the filename. Missing directories are skipped. |
+| `NFU_PREVIEW_INSTALL` | (unset: off) | Preview the install screens on any box, even one already running netFLEX. Set to `1` (or `before`, `running`, `failed`, `done`). The UI shows install mode with sample data and a yellow PREVIEW banner whose picker switches between those scenarios. Pre-flight checks run for real (read-only). **Launch, Resume, Reset and Fix are refused**; Save writes `nfupgrader_preview.cfg` / `nfupgrader_preview_cnc.cnfg` beside — never over — the real saved config. |
 | `NFU_REPORTS` | `nfupgrader/reports.default.json` | Report list for the Reports tab. Snapshots go to `${INCLOGDIR}/nfupgrader_reports/` (newest 20 kept); an Upgrade launch takes a *before* snapshot first and an *after* snapshot when the upgrade ends. |
 
 **Loopback (default):** print shows an `ssh -L` tunnel hint. **Non-loopback:** the
@@ -130,6 +131,18 @@ trace path to send to support, with two actions:
   or the recorded load dir is not a `/usr4/inc*` directory, nothing is removed. The
   state/info files are archived with a timestamp and the traces are kept. Reset is
   refused while anything is running.
+
+### Previewing the install screens
+
+To see the install UI on a box that already has netFLEX (e.g. a lab box):
+
+```sh
+NFU_PREVIEW_INSTALL=1 ./run.sh      # plus your usual NFU_BIND/NFU_PORT
+```
+
+Use the picker in the yellow banner to switch between *Before install*, *Install
+running*, *Install failed* (failure panel, Resume/Reset) and *Install complete*
+(done banner). Nothing is installed, reset or fixed in preview mode.
 
 ## Testing
 

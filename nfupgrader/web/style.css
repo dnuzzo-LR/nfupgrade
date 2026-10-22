@@ -151,3 +151,8 @@ table.checks a.out-toggle { font-size: .82rem; margin-left: .4rem; }
 #install-reset-msg { margin-left: .5rem; }
 span.hard { color: var(--err); font-size: 12px; font-weight: 600; white-space: nowrap; }
 #modal-body input { margin-top: .3rem; width: 100%; }
+
+/* NFU_PREVIEW_INSTALL banner */
+.preview-banner { background: #fff3cd; color: #664d03; border-bottom: 2px solid #ffc107;
+  padding: .4rem 1rem; font-size: 14px; }
+.preview-banner label { margin-left: 1rem; }

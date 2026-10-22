@@ -10,6 +10,7 @@ import os
 
 from nfupgrader import progress, logtail, launcher, localinfo, siteview, site, checks, cfg
 from nfupgrader import reports, snapjobs, installstate, steps, cnccnfg
+from nfupgrader import preview as previewdata
 
 Context = collections.namedtuple("Context", [
     "host", "hostname", "inclogdir", "phase", "tracefile",
@@ -147,9 +148,21 @@ def install_config_error(ctx):
     return None
 
 
+PREVIEW_REFUSED = "preview mode \u2014 nothing will be installed or changed"
+
+
+def preview_scenario(ctx):
+    """The NFU_PREVIEW_INSTALL scenario (see preview.py), or None when preview
+    is off."""
+    st = ctx.state if isinstance(ctx.state, dict) else {}
+    return st.get("preview")
+
+
 def host_mode(ctx):
-    """'install' while this host is mid-install or not yet installed, else
-    'upgrade'. See installstate.host_mode."""
+    """'install' while this host is mid-install or not yet installed (or in
+    preview), else 'upgrade'. See installstate.host_mode."""
+    if preview_scenario(ctx):
+        return "install"
     return installstate.host_mode(ctx.host, ctx.hostname, upgrade_logdir(ctx))
 
 
@@ -158,6 +171,8 @@ def _active_phase(ctx):
     accepted launch, else install (if the host is mid-install or not yet
     installed), else NFU_PHASE, else inferred from the state file."""
     st = ctx.state if isinstance(ctx.state, dict) else {}
+    if st.get("preview"):
+        return "install"
     if st.get("phase") in ("stage", "upgrade", "install"):
         return st["phase"]
     if host_mode(ctx) == "install":
@@ -225,6 +240,40 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
     # --- everything else requires a valid session ---
     if not _needs_session(cookies, client_ip, ctx):
         return _json(401, {"error": "authentication required"})
+
+    if path == "/api/progress" and method == "GET" and preview_scenario(ctx):
+        rec = previewdata.progress_record(preview_scenario(ctx))
+        rec["logdir"] = upgrade_logdir(ctx)
+        return _json(200, rec)
+
+    if path == "/api/log" and method == "GET" and preview_scenario(ctx):
+        # The canned trace is delivered whole on the first read (offset 0).
+        offset = int((query.get("offset") or ["0"])[0])
+        name = "preview-" + preview_scenario(ctx)
+        seen = _q(query, "file")
+        reset = bool(seen) and seen != name
+        entries = previewdata.log_entries(preview_scenario(ctx), _q(query, "min") or None)
+        return _json(200, {"entries": entries if (reset or not offset) else [],
+                           "next_offset": 1, "file": name, "path": previewdata.TRACE,
+                           "exists": True, "reset": reset})
+
+    if path == "/api/install/status" and method == "GET" and preview_scenario(ctx):
+        return _json(200, previewdata.status(preview_scenario(ctx), ctx.hostname))
+
+    if path == "/api/preview" and method == "POST":
+        if not preview_scenario(ctx):
+            return _json(404, {"error": "not found"})
+        payload = _json_object(body)
+        scenario = (payload or {}).get("scenario")
+        if scenario not in previewdata.SCENARIOS:
+            return _json(400, {"error": "scenario must be one of {}".format(
+                "/".join(previewdata.SCENARIOS))})
+        ctx.state["preview"] = scenario
+        return _json(200, {"preview": scenario})
+
+    if method == "POST" and preview_scenario(ctx) and path in (
+            "/api/launch", "/api/install/reset", "/api/checks/fix"):
+        return _json(409, {"error": PREVIEW_REFUSED})
 
     if path == "/api/progress" and method == "GET":
         # Either engine can be live (nf_upgrader for stage/upgrade, nf_install
@@ -437,7 +486,8 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         cnc_path = None
         cnc_text = None
         if mode == "install":
-            cnc_path = os.path.join(ctx.inclogdir, "nfupgrader_cnc.cnfg")
+            cnc_path = os.path.join(ctx.inclogdir, "nfupgrader_preview_cnc.cnfg"
+                                    if preview_scenario(ctx) else "nfupgrader_cnc.cnfg")
             # Render into a local first: cfg.validate does not check thishost
             # (ctx.hostname) itself, only MATEHOST/MASTERHOST, so an invalid
             # hostname is only caught here. Nothing is written to disk until
@@ -455,10 +505,13 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         if mode == "install":
             with open(cnc_path, "w") as fh:
                 fh.write(cnc_text)
-        saved = os.path.join(ctx.inclogdir, "nfupgrader_user.cfg")
+        # Preview saves beside, never over, the real saved config, and never
+        # becomes the config Launch would use.
+        saved = os.path.join(ctx.inclogdir, "nfupgrader_preview.cfg"
+                             if preview_scenario(ctx) else "nfupgrader_user.cfg")
         with open(saved, "w") as fh:
             fh.write(rendered)
-        if ctx.state is not None:
+        if ctx.state is not None and not preview_scenario(ctx):
             ctx.state["user_config"] = saved
         ctx.audit.record("config_saved", path=saved, mode=mode, client=client_ip)
         return _json(200, {"saved": saved})

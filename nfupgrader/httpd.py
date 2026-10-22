@@ -17,7 +17,7 @@ class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
     http.server.ThreadingHTTPServer only in 3.7.)"""
     daemon_threads = True
 
-from nfupgrader import api, launcher, progress, snapjobs
+from nfupgrader import api, launcher, preview, progress, snapjobs
 from nfupgrader.auth import TokenAuth
 from nfupgrader.audit import AuditLog, last_unfinished_fix
 from nfupgrader.host import Host, SshHost
@@ -340,6 +340,11 @@ def main(argv=None):
     checks_path = os.environ.get("NFU_CHECKS", os.path.join(here, "checks.default.json"))
     depot_dirs = resolve_depot_dirs(os.environ.get("NFU_DEPOT_DIRS"), start_dir)
     state = {}
+    # NFU_PREVIEW_INSTALL shows the install UI on any box (even one running
+    # netFLEX) with canned data, and refuses every action that changes the box.
+    preview_scenario = preview.scenario_from_env(os.environ.get("NFU_PREVIEW_INSTALL"))
+    if preview_scenario:
+        state["preview"] = preview_scenario
     if user_config:
         state["user_config"] = user_config
 
@@ -374,6 +379,9 @@ def main(argv=None):
     real_port = server.server_address[1]
     url = "http://{}:{}/auth?token={}".format(url_host, real_port, ctx.auth.token)
     print("nfupgrader listening on {}:{}".format(bind, real_port))
+    if preview_scenario:
+        print("PREVIEW MODE (NFU_PREVIEW_INSTALL={}): install UI with canned data; "
+              "launch, reset and fixes are refused.".format(preview_scenario))
     if bind in ("127.0.0.1", "localhost"):
         print("Loopback only. From your workstation, tunnel first, e.g.:")
         print("    ssh -L {p}:127.0.0.1:{p} <this-host>   then browse:".format(p=real_port))

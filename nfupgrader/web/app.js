@@ -899,9 +899,29 @@ function loadInstallWarnings() {
   }, function () { installWarnLoaded = false; });
 }
 
+// Preview mode (NFU_PREVIEW_INSTALL): a banner with a scenario picker. The
+// server serves canned install data and refuses anything that changes the box.
+function renderPreview(s) {
+  var banner = document.getElementById("preview-banner");
+  banner.style.display = s.preview ? "" : "none";
+  var sel = document.getElementById("preview-scenario");
+  if (s.preview && document.activeElement !== sel) sel.value = s.preview;
+}
+
+function choosePreview() {
+  var scenario = document.getElementById("preview-scenario").value;
+  postJSON("/api/preview", { scenario: scenario }, function () {
+    logOffset = 0;
+    refreshInstall();
+    refreshProgress();
+    refreshLog();
+  });
+}
+
 function refreshInstall() {
   getJSON("/api/install/status", function (s) {
     installStatus = s;
+    renderPreview(s);
     // A just-finished install reads as upgrade mode; hold the install view (done
     // banner) until the operator continues.
     var hold = hostMode === "install" && installSeen && installDone(s);
@@ -1013,6 +1033,7 @@ function loadDepots() {
 // Tabs first, so a failure in a later binding can't leave the user stuck on one tab.
 initTabs();
 
+document.getElementById("preview-scenario").onchange = choosePreview;
 document.getElementById("cfg-load-depots").onclick = loadDepots;
 
 document.getElementById("cfg-depot").onchange = function () {

@@ -14,6 +14,18 @@
     <span id="app-badge" class="badge unknown">APP ?</span>
   </header>
 
+  <div id="preview-banner" class="preview-banner" style="display:none">
+    <b>PREVIEW</b> &mdash; install screens with sample data; nothing will be installed or changed.
+    <label>Show:
+      <select id="preview-scenario">
+        <option value="before">Before install</option>
+        <option value="running">Install running</option>
+        <option value="failed">Install failed</option>
+        <option value="done">Install complete</option>
+      </select>
+    </label>
+  </div>
+
   <div class="progress-strip">
     <span>Phase: <b id="phase">-</b></span>
     <span>Status: <b id="status">-</b></span>
