@@ -664,6 +664,20 @@
     }
   },
   {
+    "name": "inc_queue_size",
+    "category": "NETFLEX",
+    "description": "INC_QUEUE_SIZE at least kernel msgmnb (boot refuses otherwise)",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": ["stage", "upgrade"],
+    "kind": "system_define_min",
+    "params": {
+      "variable": "INC_QUEUE_SIZE",
+      "min_from": "/proc/sys/kernel/msgmnb",
+      "default_min": 4194304
+    }
+  },
+  {
     "name": "msditestmode",
     "category": "NETFLEX",
     "description": "M_SDI_TEST_MODE",
@@ -701,6 +715,20 @@
     "params": {
       "param": "kernel.pid_max",
       "expected_value": "65000"
+    }
+  },
+  {
+    "name": "kernel_msgmnb",
+    "category": "SYSTEM",
+    "description": "kernel.msgmnb at least 4194304 (boot refuses otherwise)",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "kernel_param",
+    "params": {
+      "param": "kernel.msgmnb",
+      "expected_value": "4194304",
+      "compare": "min"
     }
   },
   {

@@ -766,3 +766,114 @@ class TestDefaultChecksInstall(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSystemDefineMin(unittest.TestCase):
+    """boot_nms refuses to boot unless system_defines' INC_QUEUE_SIZE is at least
+    the kernel's msgmnb (3b2/shell/boot_nms test_unix_parms)."""
+
+    CHECK = {"name": "inc_queue_size", "kind": "system_define_min",
+             "params": {"variable": "INC_QUEUE_SIZE", "min_from": "/proc/sys/kernel/msgmnb",
+                        "default_min": 4194304}}
+
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        self.sd = os.path.join(d, "system_defines")
+        with open(self.sd, "w") as fh:
+            fh.write("# INC_QUEUE_SIZE is used in Solaris as the default size\n"
+                     "OTHER=1\nINC_QUEUE_SIZE=1048576\nLAST=2\n")
+        self.orig = checks.SYSTEM_DEFINES
+        checks.SYSTEM_DEFINES = self.sd
+
+    def tearDown(self):
+        checks.SYSTEM_DEFINES = self.orig
+
+    def host(self, value_line, msgmnb):
+        grep = "grep -E '^INC_QUEUE_SIZE=' {} 2>/dev/null | tail -1".format(self.sd)
+        resp = {("sh", "-c", grep): RunResult(0, value_line, "")}
+        if msgmnb is not None:
+            resp[("cat", "/proc/sys/kernel/msgmnb")] = RunResult(0, msgmnb, "")
+        return FakeHost(resp)
+
+    def test_low_value_fails_with_fix(self):
+        r = checks.evaluate(self.host("INC_QUEUE_SIZE=1048576\n", "4194304\n"), self.CHECK, "preflight")
+        self.assertFalse(r["passed"])
+        self.assertIn("1048576", r["detail"])
+        self.assertIn("4194304", r["detail"])
+        self.assertTrue(r["blocking"])
+        self.assertIn("INC_QUEUE_SIZE=4194304", r["fix"])
+
+    def test_equal_or_higher_passes(self):
+        for v in ("4194304", "8388608"):
+            r = checks.evaluate(self.host("INC_QUEUE_SIZE={}\n".format(v), "4194304\n"), self.CHECK, "preflight")
+            self.assertTrue(r["passed"], v)
+
+    def test_unset_or_garbage_fails(self):
+        for line in ("", "INC_QUEUE_SIZE=\n", "INC_QUEUE_SIZE=lots\n"):
+            r = checks.evaluate(self.host(line, "4194304\n"), self.CHECK, "preflight")
+            self.assertFalse(r["passed"], repr(line))
+
+    def test_default_min_when_kernel_value_unreadable(self):
+        r = checks.evaluate(self.host("INC_QUEUE_SIZE=2097152\n", None), self.CHECK, "preflight")
+        self.assertFalse(r["passed"])
+        self.assertIn("4194304", r["detail"])
+
+    def test_kernel_value_above_default_wins(self):
+        r = checks.evaluate(self.host("INC_QUEUE_SIZE=4194304\n", "8388608\n"), self.CHECK, "preflight")
+        self.assertFalse(r["passed"])
+
+    def test_fix_rewrites_only_that_line(self):
+        st = os.stat(self.sd)
+        ok, detail = checks.apply_fix(FakeHost({("cat", "/proc/sys/kernel/msgmnb"): RunResult(0, "4194304\n", "")}),
+                                      self.CHECK)
+        self.assertTrue(ok, detail)
+        text = open(self.sd).read()
+        self.assertEqual([l for l in text.splitlines() if l.startswith("INC_QUEUE_SIZE=")],
+                         ["INC_QUEUE_SIZE=4194304"])
+        self.assertIn("# INC_QUEUE_SIZE is used in Solaris", text)   # comment kept
+        self.assertIn("OTHER=1\n", text)
+        self.assertIn("LAST=2\n", text)
+        self.assertEqual(stat.S_IMODE(os.stat(self.sd).st_mode), stat.S_IMODE(st.st_mode))
+
+    def test_fix_rejects_bad_variable_name(self):
+        bad = {"kind": "system_define_min", "params": {"variable": "X; rm", "default_min": 1}}
+        self.assertIsNone(checks.describe_fix(bad))
+
+    def test_shipped_check(self):
+        lst = checks.load_checks(os.path.join(os.path.dirname(checks.__file__), "checks.default.json"))
+        c = [c for c in lst if c["name"] == "inc_queue_size"][0]
+        self.assertEqual((c["kind"], c["fail_text"], c["when"]), ("system_define_min", "ERROR", "preflight"))
+        self.assertEqual(c["params"], self.CHECK["params"])
+        self.assertTrue(checks._applies(c, "preflight", "upgrade", None))
+        self.assertTrue(checks._applies(c, "preflight", "stage", None))
+        self.assertFalse(checks._applies(c, "preflight", "install", None))
+
+
+class TestKernelParamMin(unittest.TestCase):
+    """boot_nms also refuses to boot when kernel.msgmnb is below 4194304."""
+
+    def host(self, value):
+        return FakeHost({("sysctl", "kernel.msgmnb"): RunResult(0, "kernel.msgmnb = {}\n".format(value), "")})
+
+    def test_min_compare(self):
+        c = {"name": "kernel_msgmnb", "kind": "kernel_param",
+             "params": {"param": "kernel.msgmnb", "expected_value": "4194304", "compare": "min"}}
+        self.assertFalse(checks.evaluate(self.host("16384"), c, "preflight")["passed"])
+        self.assertTrue(checks.evaluate(self.host("4194304"), c, "preflight")["passed"])
+        self.assertTrue(checks.evaluate(self.host("8388608"), c, "preflight")["passed"])
+        self.assertFalse(checks.evaluate(self.host("junk"), c, "preflight")["passed"])
+
+    def test_exact_compare_unchanged(self):
+        c = {"name": "x", "kind": "kernel_param",
+             "params": {"param": "kernel.msgmnb", "expected_value": "4194304"}}
+        self.assertFalse(checks.evaluate(self.host("8388608"), c, "preflight")["passed"])
+
+    def test_shipped_check(self):
+        lst = checks.load_checks(os.path.join(os.path.dirname(checks.__file__), "checks.default.json"))
+        c = [c for c in lst if c["name"] == "kernel_msgmnb"][0]
+        self.assertEqual((c["category"], c["kind"], c["fail_text"], c["phase"]),
+                         ("SYSTEM", "kernel_param", "ERROR", "any"))
+        self.assertEqual(c["params"], {"param": "kernel.msgmnb", "expected_value": "4194304",
+                                       "compare": "min"})
+        self.assertEqual(checks.describe_fix(c),
+                         "sysctl -w kernel.msgmnb=4194304 (persisted in {})".format(checks.SYSCTL_CONF))

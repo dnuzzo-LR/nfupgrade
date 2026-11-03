@@ -86,28 +86,79 @@ def _touchfile(host, p):
     return host.run(["test", "-f", path]).rc == 0, path
 
 
+# netFLEX's feature settings file; module-level so tests can point it elsewhere.
+SYSTEM_DEFINES = "/usr/cnc/features/system_defines"
+_VAR_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+
+
+def _system_define_value(host, var):
+    """The value of the last `VAR=` line in system_defines ('' if absent)."""
+    r = host.run(["sh", "-c",
+                  "grep -E '^%s=' %s 2>/dev/null | tail -1" % (var, SYSTEM_DEFINES)])
+    line = r.out.strip()
+    return line.split("=", 1)[1].strip() if "=" in line else ""
+
+
+def _required_min(host, p):
+    """The minimum a system_define_min check needs: the integer in params
+    min_from (e.g. /proc/sys/kernel/msgmnb) if readable and larger, else
+    default_min."""
+    need = int(p.get("default_min", 0))
+    src = p.get("min_from")
+    if src:
+        r = host.run(["cat", src])
+        try:
+            need = max(need, int(r.out.strip()))
+        except ValueError:
+            pass
+    return need
+
+
+def _system_define_min(host, p):
+    """An integer variable in system_defines that must be at least a minimum.
+    For INC_QUEUE_SIZE the minimum is the kernel's msgmnb: boot_nms
+    (test_unix_parms) refuses to boot when INC_QUEUE_SIZE is lower."""
+    var = p["variable"]
+    need = _required_min(host, p)
+    val = _system_define_value(host, var)
+    try:
+        ok = int(val) >= need
+    except ValueError:
+        ok = False
+    return ok, "{}={} (need at least {})".format(var, val or "(unset)", need)
+
+
 def _system_define(host, p):
     """A variable in /usr/cnc/features/system_defines whose value must be one of
     expected_values (an absent variable reads as '')."""
     var = p["variable"]
     expected = p.get("expected_values", [])
-    r = host.run(["sh", "-c",
-                  "grep -E '^%s=' /usr/cnc/features/system_defines 2>/dev/null | tail -1" % var])
-    line = r.out.strip()
-    val = line.split("=", 1)[1].strip() if "=" in line else ""
+    val = _system_define_value(host, var)
     return val in expected, "{}={}".format(var, val or "(unset)")
 
 
+def _sysctl_ok(cur, p):
+    """cur meets the check: equal to expected_value, or with compare "min" an
+    integer at least expected_value."""
+    if p.get("compare") == "min":
+        try:
+            return int(cur.strip()) >= int(p["expected_value"])
+        except ValueError:
+            return False
+    # Multi-value params (e.g. net.ipv4.tcp_rmem) print tab-separated.
+    return " ".join(cur.split()) == " ".join(p["expected_value"].split())
+
+
 def _kernel_param(host, p):
-    """A sysctl parameter that must equal expected_value."""
+    """A sysctl parameter that must equal expected_value (or, with compare
+    "min", be at least it)."""
     r = host.run(["sysctl", p["param"]])
     if r.rc != 0:
         return False, "cannot read {}".format(p["param"])
     out = r.out.strip()
     cur = out.split(" = ", 1)[1] if " = " in out else out
-    # Multi-value params (e.g. net.ipv4.tcp_rmem) print tab-separated.
-    return " ".join(cur.split()) == " ".join(p["expected_value"].split()), \
-        "{} = {}".format(p["param"], cur)
+    want = " (want at least {})".format(p["expected_value"]) if p.get("compare") == "min" else ""
+    return _sysctl_ok(cur, p), "{} = {}{}".format(p["param"], cur, want)
 
 
 # pam_limits reads limits.conf, then limits.d/*.conf in sorted order; a later
@@ -267,6 +318,7 @@ KINDS = {
     "touchfile": _touchfile,
     "system_define": _system_define,
     "kernel_param": _kernel_param,
+    "system_define_min": _system_define_min,
     "ulimit": _ulimit,
     "netflex_absent": _netflex_absent,
     "mountpoint": _mountpoint,
@@ -422,8 +474,7 @@ def _fix_kernel_param(host, p):
     if win is None:
         return True, "WARNING: set live and persisted in {}, but {} is not read at boot".format(
             SYSCTL_CONF, SYSCTL_CONF)
-    if not _same_file(win[0], SYSCTL_CONF) and \
-            " ".join(win[1].split()) != " ".join(p["expected_value"].split()):
+    if not _same_file(win[0], SYSCTL_CONF) and not _sysctl_ok(win[1], p):
         return True, "WARNING: set live and persisted in {}, but {} sets {}={} at boot".format(
             SYSCTL_CONF, win[0], p["param"], win[1])
     return True, "{} set and persisted in {}".format(setting, SYSCTL_CONF)
@@ -486,6 +537,19 @@ def _fix_touchfile(host, p):
     return True, "{} created".format(path)
 
 
+def _fix_system_define_min(host, p):
+    """Set VAR=<minimum> in system_defines, replacing any existing VAR= lines and
+    keeping everything else (comments, order, owner, mode)."""
+    var = p["variable"]
+    need = _required_min(host, p)
+    prefix = var + "="
+    try:
+        _replace_lines(SYSTEM_DEFINES, lambda ln: not ln.startswith(prefix), "{}{}".format(prefix, need))
+    except (IOError, OSError, ValueError) as e:
+        return False, "could not update {}: {}".format(SYSTEM_DEFINES, e)
+    return True, "{}{} set in {}".format(prefix, need, SYSTEM_DEFINES)
+
+
 # kind -> (describe(params) -> str, apply(host, params) -> (ok, detail))
 FIXES = {
     "rpm_installed": (lambda p: "{} install -y {}".format(_pkg_tool(), p["pkg"]), _fix_rpm),
@@ -497,6 +561,10 @@ FIXES = {
     "touchfile": (lambda p: "{} touch /usr/cnc/features/{}".format(SCMD, p["file"]),
                   _fix_touchfile),
     "path_mode": (lambda p: "chmod {} {}".format(p["mode"], p["path"]), _fix_path_mode),
+    "system_define_min": (lambda p: "set {}={}{} in {}".format(
+        p["variable"], p.get("default_min", 0),
+        " (or {} if larger)".format(p["min_from"]) if p.get("min_from") else "",
+        SYSTEM_DEFINES), _fix_system_define_min),
 }
 
 # kind -> params -> bool: names that must never reach a root command line.
@@ -505,6 +573,7 @@ _FIX_ARGS_OK = {
     "service_active": lambda p: _arg_ok(p["name"]),
     "touchfile": lambda p: _touchfile_name_ok(p["file"]),
     "path_mode": lambda p: p["path"].startswith("/") and re.match(r"^[0-7]{3,4}$", p["mode"]) is not None,
+    "system_define_min": lambda p: _VAR_RE.match(p["variable"]) is not None,
 }
 
 
