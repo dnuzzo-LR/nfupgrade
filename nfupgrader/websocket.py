@@ -66,15 +66,16 @@ def upgrade_error(headers):
 
 
 def origin_ok(headers):
-    """True if Origin is present and its host[:port] equals the Host header
-    exactly; False otherwise (including when Origin is absent)."""
+    """True if Origin is present and its host[:port] equals the Host header,
+    ignoring case (host names are case-insensitive); False otherwise
+    (including when Origin is absent)."""
     origin = headers.get("Origin")
     host = headers.get("Host")
     if not origin or not host:
         return False
     # Strip the scheme ("http://" / "https://") to get host[:port].
     origin_host = origin.split("://", 1)[-1]
-    return origin_host == host
+    return origin_host.lower() == host.strip().lower()
 
 
 def encode_frame(opcode, payload):

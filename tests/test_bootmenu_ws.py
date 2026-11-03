@@ -417,6 +417,66 @@ class TestStartGuards(WsServerCase):
         self.assertLess(events.index("bootmenu_attach"), events.index("bootmenu_detach"))
 
 
+class TestPostOrigin(WsServerCase):
+    """M4: a POST carrying an Origin that doesn't match Host is refused (403)
+    before dispatch; one without Origin (curl, tests) is not."""
+
+    def _post(self, origin=None, path="/api/bootmenu/end"):
+        import http.client
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=DEADLINE)
+        self.addCleanup(conn.close)
+        headers = {"Cookie": "nfu_sid=" + self.sid, "Content-Type": "application/json"}
+        if origin is not None:
+            headers["Origin"] = origin
+        conn.request("POST", path, body=b"{}", headers=headers)
+        resp = conn.getresponse()
+        return resp.status, json.loads(resp.read().decode("utf-8"))
+
+    def test_post_origin(self):
+        host = "127.0.0.1:{}".format(self.port)
+        # no session running: dispatch answers 409 -- i.e. it was not refused
+        self.assertEqual(self._post()[0], 409)
+        self.assertEqual(self._post("http://" + host)[0], 409)
+        for bad in ("http://evil.example", "null", "http://127.0.0.1:1"):
+            status, body = self._post(bad)
+            self.assertEqual(status, 403, bad)
+            self.assertEqual(body, {"error": "cross-site request refused"})
+        self.session.start()
+        self.assertEqual(self._post("http://evil.example")[0], 403)
+        self.assertTrue(self.session.running())
+
+    def test_post_origin_refused_function(self):
+        self.assertFalse(httpd.post_origin_refused({"Host": "h:1"}))
+        self.assertFalse(httpd.post_origin_refused({"Host": "h:1", "Origin": "http://H:1"}))
+        self.assertTrue(httpd.post_origin_refused({"Host": "h:1", "Origin": "http://e:1"}))
+        self.assertTrue(httpd.post_origin_refused({"Origin": "http://h:1"}))
+
+
+class TestReplayChunks(WsServerCase):
+    """M3: a big scrollback is replayed in frames of at most 64 KiB, the
+    first marked replay_start."""
+
+    def test_large_replay_is_chunked(self):
+        self.session.argv = ["/bin/sh", "-c",
+                             "i=0; while [ $i -lt 2000 ]; do printf '%0100d\\n' $i; "
+                             "i=$((i+1)); done; echo DONE; read a"]
+        self.session.start()
+        self.assertTrue(_wait_until(lambda: "DONE" in self.session.scrollback()))
+        c = self.connect()
+        frames = []
+        while True:
+            f = c.recv_json()
+            if f["type"] == "status":
+                break
+            frames.append(f)
+        self.assertGreater(len(frames), 2)
+        self.assertTrue(all(f["type"] == "output" and f["replay"] for f in frames))
+        self.assertTrue(frames[0].get("replay_start"))
+        self.assertFalse(any(f.get("replay_start") for f in frames[1:]))
+        self.assertTrue(all(len(f["data"].encode("utf-8")) <= 65536 for f in frames))
+        self.assertEqual("".join(f["data"] for f in frames), self.session.scrollback())
+
+
 class TestUnavailable(WsServerCase):
     def make_ctx(self):
         return install_ctx(self.tmp, installed=False)

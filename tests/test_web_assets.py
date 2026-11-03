@@ -366,6 +366,20 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn("Showing the tab again reconnects", readme)
         self.assertIn("output of an ended session, which stays viewable", readme)
 
+    def test_bootmenu_replay_chunks_and_drop_limit(self):
+        # M3: the replay comes in several frames; only the first resets the
+        # terminal. A socket that keeps dropping mid-replay stops reattaching
+        # by itself after the third drop in a row (a click is required).
+        frame = self._fn("bootMenuFrame")
+        self.assertIn("if (m.replay_start)", frame)
+        self.assertNotIn("if (m.replay) bm.term.reset()", frame)
+        self.assertIn("bm.replayDrops = 0", frame)
+        connect = self._fn("connectBootMenu")
+        self.assertIn("bm.inReplay", connect)
+        self.assertIn("bm.replayDrops > 2", connect)
+        self.assertIn("bm.autoFailed = true", connect)
+        self.assertIn("bm.replayDrops = 0", self._fn("openBootMenu"))
+
     def test_bootmenu_detached_cleared_when_not_running(self):
         self.assertIn('bm.detached && bm.state !== "running"', self._fn("refreshBootMenu"))
 

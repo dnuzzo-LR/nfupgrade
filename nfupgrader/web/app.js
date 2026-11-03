@@ -1065,6 +1065,8 @@ var bm = {
   wantStart: false,  // the user clicked Open: send start once the server says none/ended
   detached: false,   // another tab took the session over: do not reconnect by ourselves
   autoFailed: false, // an automatic reattach was refused: wait for a click
+  inReplay: false,   // the scrollback replay has begun on bm.ws and its status not yet come
+  replayDrops: 0,    // sockets in a row that opened and then dropped during the replay
   showAttach: false, // the tab was just shown: the next poll may attach to an ended session
   loadFailed: false, // the terminal could not be created in this browser
   msg: "",           // error from the server (or a dropped connection) for the status line
@@ -1168,6 +1170,7 @@ function connectBootMenu() {
   }
   bm.ws = ws;
   bm.wsOpened = false;
+  bm.inReplay = false;
   ws.onopen = function () {
     if (bm.ws !== ws) return;
     bm.wsOpened = true;
@@ -1186,9 +1189,21 @@ function connectBootMenu() {
     if (!bm.wsOpened) {
       bm.autoFailed = true;
       if (!bm.detached) setBootMenuMsg("Could not connect to the boot menu (reload the page if this persists).");
+    } else if (bm.inReplay) {
+      // Dropped while replaying the scrollback (a slow link can't keep up). Retry
+      // by itself twice; after that, wait for a click instead of looping.
+      bm.replayDrops++;
+      if (bm.replayDrops > 2) {
+        bm.autoFailed = true;
+        setBootMenuMsg("The connection keeps dropping while the boot menu output is " +
+          "replayed (slow link?). Click Reconnect to try again.");
+      } else if (!bm.detached && bm.state === "running") {
+        setBootMenuMsg("Disconnected from the boot menu.");
+      }
     } else if (!bm.detached && bm.state === "running") {
       setBootMenuMsg("Disconnected from the boot menu.");
     }
+    bm.inReplay = false;
     renderBootMenu();
   };
   renderBootMenu();
@@ -1203,10 +1218,16 @@ function bootMenuStart() {
 
 function bootMenuFrame(m) {
   if (m.type === "output") {
-    if (m.replay) bm.term.reset();   // the replay is the whole scrollback
+    // The replay is the whole scrollback, in one or more frames: start clean.
+    if (m.replay_start) {
+      bm.term.reset();
+      bm.inReplay = true;
+    }
     bm.term.write(String(m.data == null ? "" : m.data));
   } else if (m.type === "status") {
     bm.state = m.state;
+    bm.inReplay = false;   // the status follows the replay: it arrived whole
+    bm.replayDrops = 0;
     if (m.state === "running") {
       setBootMenuMsg("");
       // Size the PTY to this browser (another tab may have had another size).
@@ -1242,6 +1263,7 @@ function openBootMenu() {
   setBootMenuMsg("");
   bm.detached = false;
   bm.autoFailed = false;
+  bm.replayDrops = 0;
   if (!ensureBootMenuTerm()) return;
   var running = bm.state === "running";
   if (bootMenuConnected()) {

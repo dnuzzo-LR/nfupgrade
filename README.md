@@ -165,8 +165,11 @@ There is never a shell prompt: when the menu exits, the session ends.
 - **Availability.** The tab is greyed out when netFLEX is not installed on this
   host, and in preview mode. It opens but shows why the menu can't start while an
   install or upgrade is running, or while someone else (e.g. a console login) is
-  running the boot menu. Install/upgrade launches are refused while the boot menu
-  is open.
+  running the boot menu, and refuses to start it while a check fix or report
+  snapshot is running or just after an install/upgrade was launched.
+  Install/upgrade launches and check fixes are refused while the boot menu is open.
+- **Keys.** As on the console (cmm's profile ignores them), Ctrl-C, Ctrl-\ and
+  Ctrl-Z go to the menu as ordinary keys; they never interrupt it or end the session.
 - **One session, one browser.** The tool runs at most one boot menu session. Opening
   it in a second tab takes it over; the first tab says *Opened in another tab* and
   offers **Reconnect** (it never takes the session back by itself).
@@ -175,8 +178,8 @@ There is never a shell prompt: when the menu exits, the session ends.
   scrollback) — of a running session, and also the output of an ended session,
   which stays viewable (with its exit code) until **Open boot menu** starts a new
   one.
-- **End session** kills only the menu's own processes (`su`, `new_boot_nms`,
-  `boot_nms`). Anything the menu already started, such as boot or shutdown
+- **End session** kills only the menu's own processes (the `su` the tool
+  started, `new_boot_nms`, `boot_nms`). Anything the menu already started, such as boot or shutdown
   scripts, is not killed and may keep running. If a boot or shutdown appears to be
   in progress, the confirmation says so — ending it then can leave netFLEX half up
   or half down.

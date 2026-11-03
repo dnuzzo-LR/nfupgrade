@@ -19,7 +19,7 @@ class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
 from nfupgrader import api, bootmenu, bootmenu_ws, launcher, preview, progress, snapjobs
-from nfupgrader.websocket import WebSocket, accept_key
+from nfupgrader.websocket import WebSocket, accept_key, origin_ok
 from nfupgrader.auth import TokenAuth
 from nfupgrader.audit import AuditLog, last_unfinished_fix
 from nfupgrader.host import Host, SshHost
@@ -265,6 +265,15 @@ def safe_dispatch(method, path, query, body, cookies, ip, ctx, dispatch=None, la
             type(e).__name__, e)})
 
 
+def post_origin_refused(headers):
+    """True iff a POST must be refused as cross-site: it carries an Origin
+    header that does not match Host (websocket.origin_ok). Browsers send
+    Origin on every POST; one without it (curl, scripts) is not refused."""
+    if headers.get("Origin") is None:
+        return False
+    return not origin_ok(headers)
+
+
 def static_headers(ext, length):
     """Headers for a static web file. no-cache makes the browser revalidate
     every load, so index.html, app.js and style.css always come from the same
@@ -338,7 +347,13 @@ def make_handler(ctx):
             body = self.rfile.read(length) if length else b""
             cookies = parse_cookies(self.headers.get("Cookie", ""))
             ip = client_ip_from(self.client_address)
-            status, headers, out = safe_dispatch(method, path, query, body, cookies, ip, ctx)
+            if method == "POST" and post_origin_refused(self.headers):
+                # Same-site CSRF: the session cookie alone is not enough.
+                status, headers, out = _json_response(
+                    403, {"error": "cross-site request refused"})
+            else:
+                status, headers, out = safe_dispatch(method, path, query, body, cookies,
+                                                     ip, ctx)
             self.send_response(status)
             for k, v in headers:
                 self.send_header(k, v)

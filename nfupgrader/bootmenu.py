@@ -275,6 +275,10 @@ _POLL = 0.1
 _WRITE_TIMEOUT = 5.0
 #: Max seconds end() waits for the child to be reaped after killing it.
 _END_TIMEOUT = 5.0
+#: Max bytes of scrollback per replay frame: each frame's send is bounded by
+#: the WebSocket send timeout, so one huge frame over a slow link would time
+#: out (and the browser reconnect, and time out again) every time.
+REPLAY_CHUNK = 65536
 
 
 class BootMenuSession(object):
@@ -495,8 +499,10 @@ class BootMenuSession(object):
 
     def attach(self, send):
         """Make send(dict) the attached client, replacing (and telling) any
-        previous one. send first gets the scrollback replay (if any), then
-        the status. Returns a token for detach()."""
+        previous one. send first gets the scrollback replay (if any, in
+        output frames of at most REPLAY_CHUNK bytes, all "replay": true, the
+        first also "replay_start": true), then the status. Returns a token
+        for detach()."""
         with self._lock:
             if self._client is not None:
                 old = self._client[1]
@@ -508,9 +514,13 @@ class BootMenuSession(object):
             self._next_token += 1
             token = self._next_token
             self._client = (token, send)
-            replay = self.scrollback()
-            if replay:
-                self._send_locked({"type": "output", "data": replay, "replay": True})
+            for i, chunk in enumerate(self._replay_chunks()):
+                frame = {"type": "output", "data": chunk, "replay": True}
+                if i == 0:
+                    frame["replay_start"] = True   # the client resets its terminal
+                self._send_locked(frame)
+                if self._client is None or self._client[0] != token:
+                    break   # that send failed: the client is gone
             self._send_locked(self._status_frame())
             return token
 
@@ -575,15 +585,39 @@ class BootMenuSession(object):
             fcntl.ioctl(fd, termios.TIOCSWINSZ,
                         struct.pack("HHHH", int(rows), int(cols), 0, 0))
 
-    def scrollback(self):
-        """The last `scrollback` bytes of output, decoded (errors replaced).
-        Leading UTF-8 continuation bytes cut by the trim are skipped."""
+    def _scrollback_bytes(self):
+        """The scrollback bytes, minus leading UTF-8 continuation bytes cut by
+        the trim."""
         with self._lock:
             buf = bytes(self._buf)
         i = 0
         while i < len(buf) and i < 3 and 0x80 <= buf[i] <= 0xBF:
             i += 1
-        return buf[i:].decode("utf-8", "replace")
+        return buf[i:]
+
+    def scrollback(self):
+        """The last `scrollback` bytes of output, decoded (errors replaced).
+        Leading UTF-8 continuation bytes cut by the trim are skipped."""
+        return self._scrollback_bytes().decode("utf-8", "replace")
+
+    def _replay_chunks(self):
+        """The scrollback as decoded pieces of at most REPLAY_CHUNK bytes,
+        each split before a UTF-8 continuation byte, never inside a
+        character."""
+        buf = self._scrollback_bytes()
+        chunks = []
+        start = 0
+        while start < len(buf):
+            end = start + REPLAY_CHUNK
+            if end < len(buf):
+                cut = end
+                while cut > start + REPLAY_CHUNK - 4 and 0x80 <= buf[cut] <= 0xBF:
+                    cut -= 1
+                if not 0x80 <= buf[cut] <= 0xBF:
+                    end = cut
+            chunks.append(buf[start:end].decode("utf-8", "replace"))
+            start = end
+        return chunks
 
     # -- reader thread -------------------------------------------------
 

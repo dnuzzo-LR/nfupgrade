@@ -402,6 +402,19 @@ class TestSession(unittest.TestCase):
         self.assertIn("bye", f[0]["data"])
         self.assertEqual(f[1], {"type": "status", "state": "ended", "exit_code": 3})
 
+    def test_replay_chunks_split_on_utf8_boundaries(self):
+        s = self.session(["/bin/sh", "-c", "exit 0"])
+        s._buf = bytearray(("\u20ac" * 30000 + "end").encode("utf-8"))
+        c = Collector()
+        s.attach(c)
+        out = [f for f in c.snapshot() if f["type"] == "output"]
+        self.assertEqual(len(out), 2)
+        self.assertEqual([bool(f.get("replay_start")) for f in out], [True, False])
+        self.assertTrue(all(len(f["data"].encode("utf-8")) <= bootmenu.REPLAY_CHUNK
+                            for f in out))
+        self.assertEqual("".join(f["data"] for f in out), "\u20ac" * 30000 + "end")
+        self.assertNotIn("\ufffd", "".join(f["data"] for f in out))
+
     def test_second_attach_takes_over(self):
         s = self.session(["cat"], kill_names={"cat"})
         s.start()

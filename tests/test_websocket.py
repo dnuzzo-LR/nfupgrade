@@ -31,6 +31,11 @@ class TestHandshake(unittest.TestCase):
         self.assertTrue(ws.origin_ok({"Origin": "http://h1:8099", "Host": "h1:8099"}))
         self.assertFalse(ws.origin_ok({"Origin": "http://evil:8099", "Host": "h1:8099"}))
         self.assertFalse(ws.origin_ok({"Host": "h1:8099"}))
+    def test_origin_case_insensitive(self):
+        # M6: host names (and the scheme) are case-insensitive.
+        self.assertTrue(ws.origin_ok({"Origin": "http://H1.Example:8099", "Host": "h1.example:8099"}))
+        self.assertTrue(ws.origin_ok({"Origin": "HTTP://h1:8099", "Host": "H1:8099"}))
+        self.assertFalse(ws.origin_ok({"Origin": "http://H2:8099", "Host": "h1:8099"}))
 
 class TestFrames(unittest.TestCase):
     def sock(self, data):
