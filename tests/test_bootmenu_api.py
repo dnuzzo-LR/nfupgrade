@@ -115,7 +115,8 @@ class TestBootmenuStatus(unittest.TestCase):
             status, data = _get(ctx, sid, "/api/bootmenu/status")
         self.assertEqual(status, 200)
         self.assertEqual(data["available"], False)
-        self.assertEqual(data["greyed"], True)
+        # R5: not greyed -- the tab opens and shows the reason, not hidden.
+        self.assertEqual(data["greyed"], False)
         self.assertEqual(data["reason"], "someone else is running the boot menu")
         self.assertEqual(data["other"], "foreign")
         self.assertEqual(data["other_pids"], [111])
@@ -124,6 +125,9 @@ class TestBootmenuStatus(unittest.TestCase):
                         return_value=("leftover", [222, 333])):
             status, data = _get(ctx, sid, "/api/bootmenu/status")
         self.assertEqual(status, 200)
+        self.assertEqual(data["available"], False)
+        # R5: not greyed -- the tab opens with an End it button.
+        self.assertEqual(data["greyed"], False)
         self.assertEqual(data["reason"], "a boot menu from an earlier run is still on this box")
         self.assertEqual(data["other"], "leftover")
         self.assertEqual(data["other_pids"], [222, 333])
@@ -134,7 +138,8 @@ class TestBootmenuStatus(unittest.TestCase):
         status, data = _get(ctx, sid, "/api/bootmenu/status")
         self.assertEqual(status, 200)
         self.assertEqual(data["available"], False)
-        self.assertEqual(data["greyed"], True)
+        # R5: not greyed -- only "netFLEX is not installed" and "preview mode" grey the tab.
+        self.assertEqual(data["greyed"], False)
         self.assertEqual(data["reason"], "an install or upgrade is running")
 
     def test_status_own_session_running_is_available(self):

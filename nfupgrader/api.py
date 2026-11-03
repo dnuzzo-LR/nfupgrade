@@ -186,7 +186,14 @@ def bootmenu_availability(ctx):
     unfinished install); an install/upgrade running; our own session already
     running (reattach); some other new_boot_nms/boot_nms on the box, which is
     either a leftover from an earlier run of this tool (pidfile says so, and
-    its tool process is dead) or someone else's (a live console login, etc)."""
+    its tool process is dead) or someone else's (a live console login, etc).
+
+    greyed (controller ruling R5) is True only for "netFLEX is not installed"
+    and "preview mode" -- the tab itself is hidden/disabled for those. For
+    every other unavailable reason (an install/upgrade running, foreign,
+    leftover) the tab opens and shows the reason (and, for leftover, an End
+    it button) in place of the terminal, so greyed is False even though
+    available is False."""
     no_other = {"other": "none", "other_pids": []}
     if preview_scenario(ctx):
         return dict(no_other, available=False, greyed=True, reason="preview mode")
@@ -194,7 +201,7 @@ def bootmenu_availability(ctx):
         return dict(no_other, available=False, greyed=True,
                     reason="netFLEX is not installed")
     if launcher.anything_running(ctx.host):
-        return dict(no_other, available=False, greyed=True,
+        return dict(no_other, available=False, greyed=False,
                     reason="an install or upgrade is running")
     session = _bootmenu_session(ctx)
     if session is not None and session.running():
@@ -203,11 +210,11 @@ def bootmenu_availability(ctx):
     pidfile_path = os.path.join(ctx.inclogdir, bootmenu.PIDFILE_NAME)
     kind, pids = bootmenu.classify_others(bootmenu.list_processes(), own_pids, pidfile_path)
     if kind == "foreign":
-        return {"available": False, "greyed": True,
+        return {"available": False, "greyed": False,
                 "reason": "someone else is running the boot menu",
                 "other": "foreign", "other_pids": pids}
     if kind == "leftover":
-        return {"available": False, "greyed": True,
+        return {"available": False, "greyed": False,
                 "reason": "a boot menu from an earlier run is still on this box",
                 "other": "leftover", "other_pids": pids}
     return dict(no_other, available=True, greyed=False, reason="")
