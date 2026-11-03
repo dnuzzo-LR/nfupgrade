@@ -3,6 +3,7 @@ import os
 import shutil
 import signal
 import tempfile
+import termios
 import threading
 import time
 import unittest
@@ -223,6 +224,14 @@ def _read(path):
             return fh.read()
     except (IOError, OSError):
         return ""
+
+
+def _gone(pid):
+    """True iff pid no longer exists or is a zombie."""
+    stat = _read("/proc/{}/stat".format(pid))
+    if not stat:
+        return True
+    return stat.rpartition(")")[2].split()[0] == "Z"
 
 
 def _kill_quietly(pid):
@@ -541,8 +550,118 @@ class TestSession(unittest.TestCase):
     def test_defaults(self):
         s = bootmenu.BootMenuSession()
         self.assertEqual(s.argv, bootmenu.default_argv())
-        self.assertEqual(s.kill_names, {"su", "new_boot_nms", "boot_nms"})
+        # su only as the session child itself; the menu scripts anywhere in it.
+        self.assertEqual(s.kill_names, {"new_boot_nms", "boot_nms"})
+        self.assertEqual(s.child_kill_names, {"su"})
         self.assertEqual(s.env["TERM"], "xterm-256color")
+
+    # -- C1: Ctrl-C / Ctrl-\ / Ctrl-Z reach the menu as bytes ------------
+
+    def test_pty_has_no_isig(self):
+        s = self.session(["cat"], kill_names={"cat"})
+        s.start()
+        # On Linux the master reports the slave's termios.
+        lflag = termios.tcgetattr(s._fd)[3]
+        self.assertFalse(lflag & termios.ISIG)
+
+    def test_ctrl_c_is_a_byte_not_a_signal(self):
+        s = self.session(["/bin/sh", "-c",
+                          "read a; printf 'got:%s\\n' \"$(printf %s \"$a\" | od -An -tx1)\"; "
+                          "read b"])
+        s.start()
+        s.write("\x03\x1c\x1a")   # ^C ^\ ^Z: would be SIGINT/SIGQUIT/SIGTSTP with ISIG
+        time.sleep(0.3)
+        self.assertTrue(s.running(), s.scrollback())
+        s.write("x\r")
+        self.assertTrue(wait_for(lambda: "got:" in s.scrollback()), s.scrollback())
+        self.assertIn("03 1c 1a 78", s.scrollback())
+        self.assertTrue(s.running())
+        s.write("\r")
+        self.assertTrue(wait_for(lambda: not s.running()))
+        self.assertEqual(s.state()["exit_code"], 0)
+
+    # -- M2: session script and environment -----------------------------
+
+    def test_session_script_traps_like_cmm_profile(self):
+        self.assertTrue(bootmenu.SESSION_SCRIPT.startswith("trap '' 1 2 3 15; "),
+                        bootmenu.SESSION_SCRIPT)
+        self.assertTrue(bootmenu.SESSION_SCRIPT.endswith("exec /usr/cnc/bin/new_boot_nms"))
+
+    def _session_script_running(self, target):
+        """SESSION_SCRIPT with its exec target swapped for a stand-in (never
+        the real menu), run by /bin/sh with the default session env."""
+        script = bootmenu.SESSION_SCRIPT.replace("exec /usr/cnc/bin/new_boot_nms",
+                                                 "exec " + target)
+        self.assertNotEqual(script, bootmenu.SESSION_SCRIPT)
+        return self.session(["/bin/sh", "-c", script])
+
+    def test_session_env_is_minimal_and_cmm_profile_vars(self):
+        with mock.patch.dict(os.environ, {"NFU_LEAK_TEST": "leaked", "LANG": "en_US.UTF-8"}):
+            s = self._session_script_running("env")
+        s.start()
+        self.assertTrue(wait_for(lambda: not s.running()))
+        env = dict(line.split("=", 1) for line in s.scrollback().replace("\r", "").split("\n")
+                   if "=" in line)
+        self.assertNotIn("NFU_LEAK_TEST", env)
+        self.assertEqual(env["LANG"], "en_US.UTF-8")
+        self.assertEqual(env["TERM"], "xterm-256color")
+        self.assertEqual(env["PATH"], "/usr/cnc/scmds-bin:/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin")
+        expected = {"SHELL": "/usr/bin/ksh", "EDITOR": "vi", "PROD_NAME": "DBA",
+                    "PROD_FULLNAME": "DACS DATABASE ADMINISTRATION SYSTEM",
+                    "IN_SCRIPT": "0", "GRAPHICS_MODE": "0", "OLOGNAME": ""}
+        for k, v in expected.items():
+            self.assertEqual(env.get(k), v, k)
+
+    def test_default_env(self):
+        with mock.patch.dict(os.environ, {"LANG": "C.UTF-8", "HOME": "/root", "X": "y"}):
+            env = bootmenu.default_env()
+        self.assertEqual(env, {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                               "TERM": "xterm-256color", "LANG": "C.UTF-8"})
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(bootmenu.default_env(),
+                             {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TERM": "xterm-256color"})
+
+    def test_session_script_ignores_hup_int_quit_term(self):
+        # Ignored dispositions survive exec, so the menu inherits them.
+        s = self._session_script_running(
+            "/bin/sh -c 'kill -HUP $$; kill -INT $$; kill -QUIT $$; kill -TERM $$; "
+            "echo still-alive'")
+        s.start()
+        self.assertTrue(wait_for(lambda: not s.running()))
+        self.assertIn("still-alive", s.scrollback())
+        self.assertEqual(s.state()["exit_code"], 0)
+
+    # -- M1: su is killed only as the session child itself ---------------
+
+    def test_end_kills_su_only_as_the_child(self):
+        top, sub = os.path.join(self.dir, "top"), os.path.join(self.dir, "sub")
+        os.makedirs(top)
+        os.makedirs(sub)
+        child_su = os.path.join(top, "su")            # stands in for the real su
+        desc_su = os.path.join(sub, "su")             # some other "su" in the tree
+        menu = os.path.join(top, "new_boot_nms")
+        pids = os.path.join(self.dir, "pids")
+        with open(desc_su, "w") as fh:
+            fh.write("#!/bin/sh\nwhile :; do sleep 1; done\n")
+        with open(menu, "w") as fh:
+            fh.write("#!/bin/sh\nwhile :; do sleep 1; done\n")
+        with open(child_su, "w") as fh:
+            fh.write("#!/bin/sh\nnohup \"$2\" >/dev/null 2>&1 &\nd=$!\n"
+                     "nohup \"$3\" >/dev/null 2>&1 &\necho $d $! > \"$1\"\n"
+                     "while :; do sleep 1; done\n")
+        for f in (desc_su, menu, child_su):
+            os.chmod(f, 0o755)
+        s = self.session(["/bin/sh", child_su, pids, desc_su, menu])
+        s.start()
+        self.assertTrue(wait_for(lambda: len(_read(pids).split()) == 2))
+        d_pid, m_pid = [int(x) for x in _read(pids).split()]
+        self.addCleanup(_kill_quietly, d_pid)
+        self.addCleanup(_kill_quietly, m_pid)
+        self.assertTrue(wait_for(lambda: {d_pid, m_pid} <= s.own_pids()))
+        self.assertTrue(s.end())
+        self.assertEqual(s.state()["exit_code"], 128 + signal.SIGKILL)
+        self.assertTrue(wait_for(lambda: _gone(m_pid)), "new_boot_nms not killed")
+        self.assertFalse(_gone(d_pid), "a descendant named su was killed")
 
 
 if __name__ == "__main__":

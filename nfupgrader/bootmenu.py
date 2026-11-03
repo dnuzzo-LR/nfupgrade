@@ -24,13 +24,21 @@ from nfupgrader.launcher import _SHELLS, is_script_argv
 #: Script basenames that count as "the boot menu" for classification.
 MENU_SCRIPTS = ("new_boot_nms", "boot_nms")
 
-#: Mirrors cmm_.profile. `exec` replaces the shell with the menu so that when
-#: the menu exits, the session ends -- the browser must never land on a shell
-#: prompt.
+#: Mirrors cmm_.profile (netflex 3b2/shell/cmm_.profile): its signal trap --
+#: ignored dispositions survive exec, so the menu cannot be interrupted, as on
+#: the console -- its variables, umask and stty settings. `exec` replaces the
+#: shell with the menu so that when the menu exits, the session ends -- the
+#: browser must never land on a shell prompt.
 SESSION_SCRIPT = (
-    "export SHELL=/usr/bin/ksh EDITOR=vi PATH=/usr/cnc/scmds-bin:/usr/bin:$PATH; "
+    "trap '' 1 2 3 15; "
+    "export SHELL=/usr/bin/ksh EDITOR=vi PATH=/usr/cnc/scmds-bin:/usr/bin:$PATH "
+    "OLOGNAME=$LOGNAME PROD_NAME=DBA "
+    "PROD_FULLNAME=\"DACS DATABASE ADMINISTRATION SYSTEM\" IN_SCRIPT=0 GRAPHICS_MODE=0; "
     "umask 000; stty erase '^?' echoe 2>/dev/null; exec /usr/cnc/bin/new_boot_nms"
 )
+
+#: PATH of the session's environment (before SESSION_SCRIPT prepends netFLEX's).
+SESSION_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 
 #: Name of the pidfile nfupgrader writes (under its INCLOGDIR) while a boot
 #: menu session is running. Content: "<tool_pid> <session_pid> <session_starttime>\n"
@@ -47,6 +55,18 @@ def default_argv():
     shell then `exec`s into the menu so it is never left on the process tree.
     """
     return ["su", "cmm", "-s", "/bin/sh", "-c", SESSION_SCRIPT]
+
+
+def default_env(environ=None):
+    """The environment the session is started with: a minimal one, not the
+    tool's (root's) own -- PATH, TERM and, if the tool has it, LANG. su sets
+    HOME/USER/LOGNAME/SHELL; SESSION_SCRIPT adds cmm_.profile's variables."""
+    if environ is None:
+        environ = os.environ
+    env = {"PATH": SESSION_PATH, "TERM": "xterm-256color"}
+    if environ.get("LANG"):
+        env["LANG"] = environ["LANG"]
+    return env
 
 
 def _parse_stat(text):
@@ -271,16 +291,18 @@ class BootMenuSession(object):
     """
 
     def __init__(self, argv=None, env=None, scrollback=262144, pidfile=None,
-                 kill_names=None, on_exit=None):
+                 kill_names=None, on_exit=None, child_kill_names=None):
         self.argv = list(argv) if argv is not None else default_argv()
-        if env is None:
-            env = dict(os.environ)
-            env["TERM"] = "xterm-256color"
-        self.env = env
+        self.env = env if env is not None else default_env()
         self.scrollback_limit = scrollback
         self.pidfile = pidfile
+        #: Names end() kills anywhere in the session (child or descendant).
         self.kill_names = (set(kill_names) if kill_names is not None
-                           else {"su"} | set(MENU_SCRIPTS))
+                           else set(MENU_SCRIPTS))
+        #: Names end() kills only as the session child itself: the su it
+        #: spawned, not some other su the menu may have run.
+        self.child_kill_names = (set(child_kill_names) if child_kill_names is not None
+                                 else {"su"})
         self._lock = threading.RLock()
         self._cond = threading.Condition(self._lock)
         self._fd_lock = threading.Lock()
@@ -317,6 +339,13 @@ class BootMenuSession(object):
             try:
                 fcntl.ioctl(slave, termios.TIOCSWINSZ,
                             struct.pack("HHHH", rows, cols, 0, 0))
+                # No terminal signals: ^C, ^\ and ^Z reach the menu as plain
+                # bytes. With ISIG, ^C would SIGINT su (the PTY's foreground
+                # process group), which kills its child and exits, orphaning
+                # boot_nms mid-whatever.
+                attrs = termios.tcgetattr(slave)
+                attrs[3] &= ~termios.ISIG
+                termios.tcsetattr(slave, termios.TCSANOW, attrs)
                 pid = os.fork()
             except BaseException:
                 os.close(fd)
@@ -421,9 +450,10 @@ class BootMenuSession(object):
         return False
 
     def end(self, reason=None):
-        """SIGKILL each session process (child or descendant, read fresh
-        from /proc) whose proc_name is in kill_names -- individually, never
-        the process group, never anything else -- then wait for the child
+        """SIGKILL each session process (read fresh from /proc) whose
+        proc_name is in kill_names, plus the child itself if its name is in
+        child_kill_names -- individually, never the process group, never
+        anything else -- then wait for the child
         to be reaped (and on_exit to have run). Returns True iff something
         was killed. The end is reported to on_exit as forced, with reason
         (e.g. "tool_stop"; None for the End session button)."""
@@ -437,7 +467,10 @@ class BootMenuSession(object):
         targets = {pid} | descendants(procs, pid)
         killed = False
         for p in procs:
-            if p["pid"] in targets and proc_name(p["argv"]) in self.kill_names:
+            if p["pid"] not in targets:
+                continue
+            name = proc_name(p["argv"])
+            if name in self.kill_names or (p["pid"] == pid and name in self.child_kill_names):
                 try:
                     os.kill(p["pid"], signal.SIGKILL)
                     killed = True
