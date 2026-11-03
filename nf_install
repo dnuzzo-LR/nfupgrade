@@ -42,6 +42,7 @@ PROG=${0##*/}
 INCROOT=${NFI_INCROOT:-/usr/cnc}
 STAGEROOT=${NFI_STAGEROOT:-/usr/cnc_stage}
 LOADROOT=${NFI_LOADROOT:-/usr4}
+MSGMNB_FILE=${NFI_MSGMNB_FILE:-/proc/sys/kernel/msgmnb}
 
 # All valid states, in order. The state file holds the step to run next.
 INSTALL_STATES="isstart isprepare isrpm isunstage iscnfg ispackages iscmmperm islicmigrate ispostinstall isdatabase iswebgui islicense isdone"
@@ -285,10 +286,57 @@ function do_islicmigrate
 	fi
 }
 
+# set_inc_queue_size — boot_nms (test_unix_parms) refuses to boot unless
+# system_defines' INC_QUEUE_SIZE is at least kernel.msgmnb, and the shipped
+# value (1048576) is below the 4194304 linux_packages sets. Raise it to the
+# larger of 4194304 and the running msgmnb; never lower it. A failure only
+# warns: the pre-flight check inc_queue_size (with its Fix) still catches it.
+function set_inc_queue_size
+{
+	typeset sd need cur
+	sd="${INCROOT}/features/system_defines"
+	need=4194304
+	cur=$(cat "${MSGMNB_FILE}" 2>/dev/null)
+	case "${cur}" in
+	""|*[!0-9]*) ;;
+	*) [ "${cur}" -gt "${need}" ] && need=${cur} ;;
+	esac
+	if [ ! -f "${sd}" ]
+	then
+		logwarn "No ${sd} - INC_QUEUE_SIZE not set"
+		return 0
+	fi
+	cur=$(sed -n 's/^INC_QUEUE_SIZE=//p' "${sd}" | tail -1)
+	case "${cur}" in
+	""|*[!0-9]*) ;;
+	*)
+		if [ "${cur}" -ge "${need}" ]
+		then
+			loginfo "INC_QUEUE_SIZE=${cur} already at least ${need}"
+			return 0
+		fi
+		;;
+	esac
+	if grep '^INC_QUEUE_SIZE=' "${sd}" >/dev/null 2>&1
+	then
+		run_logged incqueue sed -i "s/^INC_QUEUE_SIZE=.*/INC_QUEUE_SIZE=${need}/" "${sd}"
+	else
+		run_logged incqueue sh -c "echo INC_QUEUE_SIZE=${need} >> '${sd}'"
+	fi
+	if [ $? -eq 0 ]
+	then
+		loginfo "INC_QUEUE_SIZE set to ${need} (was ${cur:-unset})"
+	else
+		logwarn "Could not set INC_QUEUE_SIZE=${need} in ${sd} - continuing"
+	fi
+	return 0
+}
+
 function do_ispostinstall
 {
 	run_logged post-install "${INCROOT}/bin/post-install.sh" || die "post-install.sh failed"
 	loginfo "post-install complete"
+	set_inc_queue_size
 }
 
 function do_isdatabase

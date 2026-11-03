@@ -59,6 +59,7 @@ mk "$R/bin/cmmperm" "exit 0"
 mk "$R/bin/post-install.sh" "exit \${FAIL_POSTINSTALL:-0}"
 mk "$R/bin/nf_upgrade_pg.sh" "exit 0"
 mk "$R/mbin/license-migrate" "exit \${FAIL_LICMIG:-0}"
+printf "# INC_QUEUE_SIZE is used in Solaris\nOTHER=1\nINC_QUEUE_SIZE=%s\nLAST=2\n" "${STUB_IQS:-1048576}" > "$R/features/system_defines"
 W="${NFI_INCROOT}/web"
 mk "${NFT_SB}/tarsrc/lwebsetup" "read a; read b; mkdir -p $W/data $W/maps $W/maps.default $W/bin; echo m > $W/maps.default/m1; echo s > $W/data/def.sys_config.flx; echo d > $W/data/def.system_defines.flx; [ -n \"\${NO_CPJSMAP}\" ] || { printf \"#!/bin/sh\\nexit 0\\n\" > $W/bin/cpjsmap.osm; chmod +x $W/bin/cpjsmap.osm; }"
 tar cf "$R/GUI_REL/LINUXWEB64.rhel8.tar" -C "${NFT_SB}/tarsrc" lwebsetup
@@ -74,7 +75,9 @@ exit 0'
 	export NFI_STAGEROOT="${SB}/usr/cnc_stage"
 	export NFI_LOADROOT="${SB}/usr4"
 	export NFI_PKGTOOL="${SB}/bin/dnf"
-	unset NFI_CHILD FAIL_POSTINSTALL FAIL_LICMIG STAGE_REAL STAGE_FOREIGN NO_CPJSMAP
+	print 4194304 > "${SB}/msgmnb"
+	export NFI_MSGMNB_FILE="${SB}/msgmnb"
+	unset NFI_CHILD FAIL_POSTINSTALL FAIL_LICMIG STAGE_REAL STAGE_FOREIGN NO_CPJSMAP STUB_IQS
 }
 
 cleanup() {
@@ -168,6 +171,30 @@ assert_eq    "no cpjsmap: web GUI not failed" "" "$(trace | grep 'Web GUI instal
 assert_eq    "no cpjsmap: sys_config" s "$(cat "${SB}/usr/cnc/web/data/sys_config" 2>/dev/null)"
 assert_eq    "no cpjsmap: system_defines" d "$(cat "${SB}/usr/cnc/web/data/system_defines" 2>/dev/null)"
 assert_match "no cpjsmap: Interfaces" '^\[h1_i\]$' "$(cat "${SB}/usr/cnc/web/data/Interfaces" 2>/dev/null)"
+
+# --- INC_QUEUE_SIZE raised to kernel.msgmnb (boot_nms refuses to boot below it) ---
+iqs() { sed -n 's/^INC_QUEUE_SIZE=//p' "${SB}/usr/cnc/features/system_defines"; }
+setup
+"${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+assert_rc    "inc queue: rc" 0 "$rc"
+assert_eq    "inc queue: raised to msgmnb" 4194304 "$(iqs)"
+assert_match "inc queue: other lines kept" '^OTHER=1$' "$(cat "${SB}/usr/cnc/features/system_defines")"
+assert_match "inc queue: comment kept" 'INC_QUEUE_SIZE is used in Solaris' "$(cat "${SB}/usr/cnc/features/system_defines")"
+assert_match "inc queue: logged" 'INC_QUEUE_SIZE.*4194304' "$(trace)"
+
+setup
+print 8388608 > "${SB}/msgmnb"
+"${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+assert_eq    "inc queue: follows a larger msgmnb" 8388608 "$(iqs)"
+
+setup
+STUB_IQS=9000000 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+assert_eq    "inc queue: higher value left alone" 9000000 "$(iqs)"
+
+setup
+print junk > "${SB}/msgmnb"
+"${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+assert_eq    "inc queue: unreadable msgmnb uses 4194304" 4194304 "$(iqs)"
 
 # --- webgui off --------------------------------------------------------------
 setup NO
