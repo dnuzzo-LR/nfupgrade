@@ -108,3 +108,30 @@ class TestLatestOf(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLiveStep(unittest.TestCase):
+    """run_logged buffers a step's output in ${INCLOGDIR}/.nfrun.<pid> until the
+    step ends; live_step shows that buffer while the step runs."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+
+    def put(self, name, text, mtime):
+        p = os.path.join(self.d, name)
+        open(p, "w").write(text)
+        os.utime(p, (mtime, mtime))
+        return p
+
+    def test_none(self):
+        self.assertEqual(logtail.live_step(self.d), (None, []))
+        self.assertEqual(logtail.live_step("/nonexistent"), (None, []))
+
+    def test_newest_and_tail(self):
+        self.put(".nfrun.100", "old\n", 1000)
+        body = "".join("line {}\n".format(i) for i in range(100))
+        p = self.put(".nfrun.200", body, 2000)
+        self.put("install_inc_h1.200", "not a buffer\n", 3000)
+        path, lines = logtail.live_step(self.d, max_lines=5)
+        self.assertEqual(path, p)
+        self.assertEqual(lines, ["line 95", "line 96", "line 97", "line 98", "line 99"])

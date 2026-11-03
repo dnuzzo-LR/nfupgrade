@@ -60,7 +60,7 @@ mk "$R/bin/post-install.sh" "exit \${FAIL_POSTINSTALL:-0}"
 mk "$R/bin/nf_upgrade_pg.sh" "exit 0"
 mk "$R/mbin/license-migrate" "exit \${FAIL_LICMIG:-0}"
 W="${NFI_INCROOT}/web"
-mk "${NFT_SB}/tarsrc/lwebsetup" "read a; read b; mkdir -p $W/data $W/maps $W/maps.default $W/bin; echo m > $W/maps.default/m1; echo s > $W/data/def.sys_config.flx; echo d > $W/data/def.system_defines.flx; printf \"#!/bin/sh\\nexit 0\\n\" > $W/bin/cpjsmap.osm; chmod +x $W/bin/cpjsmap.osm"
+mk "${NFT_SB}/tarsrc/lwebsetup" "read a; read b; mkdir -p $W/data $W/maps $W/maps.default $W/bin; echo m > $W/maps.default/m1; echo s > $W/data/def.sys_config.flx; echo d > $W/data/def.system_defines.flx; [ -n \"\${NO_CPJSMAP}\" ] || { printf \"#!/bin/sh\\nexit 0\\n\" > $W/bin/cpjsmap.osm; chmod +x $W/bin/cpjsmap.osm; }"
 tar cf "$R/GUI_REL/LINUXWEB64.rhel8.tar" -C "${NFT_SB}/tarsrc" lwebsetup
 # Simulate something replacing the stage link after the RPM went in.
 if [ -n "${STAGE_REAL}" ]; then rm -f "$R"; mkdir -p "$R/keep"; fi
@@ -74,7 +74,7 @@ exit 0'
 	export NFI_STAGEROOT="${SB}/usr/cnc_stage"
 	export NFI_LOADROOT="${SB}/usr4"
 	export NFI_PKGTOOL="${SB}/bin/dnf"
-	unset NFI_CHILD FAIL_POSTINSTALL FAIL_LICMIG STAGE_REAL STAGE_FOREIGN
+	unset NFI_CHILD FAIL_POSTINSTALL FAIL_LICMIG STAGE_REAL STAGE_FOREIGN NO_CPJSMAP
 }
 
 cleanup() {
@@ -104,7 +104,7 @@ assert_eq    "fresh install: /usr/cnc link" "${SB}/usr4/inc5.3.002" "$(readlink 
 assert_eq    "fresh install: cnc_stage removed" no "$(exists "${SB}/usr/cnc_stage")"
 assert_eq    "fresh install: cnc.cnfg copied" "SITE=test" "$(cat "${SB}/usr/cnc/features/cnc.cnfg" 2>/dev/null)"
 assert_eq    "fresh install: call order" \
-	"dnf linux_packages cmmperm license-migrate post-install.sh nf_upgrade_pg.sh lwebsetup " "$(seq_of)"
+	"dnf linux_packages cmmperm license-migrate post-install.sh nf_upgrade_pg.sh cmmperm lwebsetup " "$(seq_of)"
 assert_match "fresh install: Interfaces" '^\[h1_i\]$' "$(cat "${SB}/usr/cnc/web/data/Interfaces" 2>/dev/null)"
 assert_eq    "fresh install: no upgrade state" no "$(exists "${SB}/logs/.h1_STATE")"
 assert_match "fresh install: trace has INFO" ' INFO  ' "$(trace)"
@@ -157,6 +157,17 @@ FAIL_LICMIG=1 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
 assert_rc    "licmig warn: rc" 0 "$rc"
 assert_match "licmig warn: WARN" ' WARN  .*license' "$(trace)"
 assert_eq    "licmig warn: state" isdone "$(state)"
+
+# --- web GUI without cpjsmap.osm (not shipped in netFLEX 5.5): warn, finish ---
+setup
+NO_CPJSMAP=1 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+assert_rc    "no cpjsmap: rc" 0 "$rc"
+assert_eq    "no cpjsmap: state" isdone "$(state)"
+assert_match "no cpjsmap: WARN" ' WARN  .*cpjsmap\.osm not found' "$(trace)"
+assert_eq    "no cpjsmap: web GUI not failed" "" "$(trace | grep 'Web GUI install failed')"
+assert_eq    "no cpjsmap: sys_config" s "$(cat "${SB}/usr/cnc/web/data/sys_config" 2>/dev/null)"
+assert_eq    "no cpjsmap: system_defines" d "$(cat "${SB}/usr/cnc/web/data/system_defines" 2>/dev/null)"
+assert_match "no cpjsmap: Interfaces" '^\[h1_i\]$' "$(cat "${SB}/usr/cnc/web/data/Interfaces" 2>/dev/null)"
 
 # --- webgui off --------------------------------------------------------------
 setup NO

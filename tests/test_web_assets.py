@@ -126,6 +126,22 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn("<th>Category</th>", fn)
         self.assertIn("esc(r.category", fn)
 
+    def test_launch_label_while_install_runs(self):
+        # A running install is "unfinished" too: it must read as running (and
+        # Launch stay disabled), not offer "Resume install".
+        fn = self.js.split("function renderInstall(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn('"Install running\\u2026"', fn)   # the JS \u2026 escape
+        self.assertIn("s.running", fn.split('"Install running', 1)[0].rsplit("setTextIfChanged", 1)[1])
+        upd = self.js.split("function updateLaunchState(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("installRunning()", upd)
+
+    def test_log_tab_shows_live_step_output(self):
+        self.assertIn('id="log-live"', self.html)
+        self.assertIn('"/api/log/live"', self.js)
+        fn = self.js.split("function refreshLive(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("log-live", fn)
+        self.assertIn("setInterval(refreshLive", self.js)
+
     def test_preview_banner_and_picker(self):
         self.assertIn('id="preview-banner"', self.html)
         for v in ("before", "running", "failed", "done"):

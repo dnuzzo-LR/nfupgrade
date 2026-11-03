@@ -344,7 +344,7 @@ function updateLaunchState() {
   else if (missing > 0) msg = missing + " of " + total + " blocking checks not overridden";
   else if (total > 0 && !reason) msg = "reason required to override";
   why.textContent = msg;
-  btn.disabled = fixing || msg !== "";
+  btn.disabled = fixing || installRunning() || msg !== "";
 }
 
 // after (optional) runs once the new results are rendered (not on an error).
@@ -881,7 +881,27 @@ function renderInstall(s) {
   }
   document.getElementById("install-done").style.display = done ? "block" : "none";
   if (done && !installWarnLoaded) loadInstallWarnings();
-  setTextIfChanged("btn-launch", install && s.unfinished ? "Resume install" : "Launch");
+  setTextIfChanged("btn-launch", !install ? "Launch"
+    : s.running ? "Install running\u2026"
+    : s.unfinished ? "Resume install" : "Launch");
+  updateLaunchState();
+}
+
+// An install is running right now (a running install is also "unfinished", so
+// this is what keeps it from being offered as a Resume).
+function installRunning() {
+  return hostMode === "install" && !!(installStatus && installStatus.running);
+}
+
+// The step in progress, live: run_logged only copies a step's output into the
+// trace when the step ends, so a long one (linux_packages) would otherwise look
+// stalled in the Log tab.
+function refreshLive() {
+  getJSON("/api/log/live", function (d) {
+    var show = !!(d.running && d.lines && d.lines.length);
+    document.getElementById("log-live-box").style.display = show ? "" : "none";
+    if (show) setTextIfChanged("log-live", d.lines.join("\n"));
+  });
 }
 
 // WARN-and-worse lines from the finished install's trace (web GUI, license
@@ -1166,6 +1186,7 @@ refreshReports();
 refreshReportsJob();
 setInterval(refreshProgress, 2000);
 setInterval(refreshInstall, 2000);
+setInterval(refreshLive, 2000);
 setInterval(refreshLog, 2000);
 setInterval(refreshInfo, 15000);
 setInterval(refreshSite, 15000);

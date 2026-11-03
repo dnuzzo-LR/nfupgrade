@@ -1245,3 +1245,25 @@ class TestInstallApi(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLiveLogApi(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        open(os.path.join(self.tmp, ".nfrun.4242"), "w").write("Installing nodejs\nComplete!\n")
+
+    def get(self, ctx):
+        sid = ctx.auth.redeem("TOK", "127.0.0.1")
+        status, _, body = api.dispatch("GET", "/api/log/live", {}, b"", {"nfu_sid": sid},
+                                       "127.0.0.1", ctx)
+        return status, json.loads(body.decode())
+
+    def test_running_shows_buffer(self):
+        st, d = self.get(make_ctx(self.tmp, running=True))
+        self.assertEqual((st, d["running"]), (200, True))
+        self.assertEqual(d["lines"], ["Installing nodejs", "Complete!"])
+        self.assertTrue(d["file"].endswith(".nfrun.4242"))
+
+    def test_idle_shows_nothing(self):
+        st, d = self.get(make_ctx(self.tmp, running=False))
+        self.assertEqual((st, d["running"], d["lines"], d["file"]), (200, False, [], None))

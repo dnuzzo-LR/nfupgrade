@@ -156,6 +156,18 @@
     }
   },
   {
+    "name": "tar",
+    "category": "NETFLEX",
+    "description": "tar (unpacks the web GUI during install)",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "any",
+    "kind": "rpm_installed",
+    "params": {
+      "pkg": "tar"
+    }
+  },
+  {
     "name": "ksh",
     "category": "NETFLEX",
     "description": "The Original ATT Korn Shell2",

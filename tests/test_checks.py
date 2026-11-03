@@ -728,6 +728,16 @@ class TestDefaultChecksInstall(unittest.TestCase):
     def names(self, phase):
         return {c["name"] for c in self.lst if checks._applies(c, "preflight", phase, None)}
 
+    def test_tar_check(self):
+        # nf_install unpacks the web GUI (LINUXWEB64*.tar) with tar; a minimal
+        # Rocky install has none, so it is a blocking package check with a Fix.
+        c = [c for c in self.lst if c["name"] == "tar"][0]
+        self.assertEqual((c["kind"], c["params"]["pkg"], c["fail_text"], c["phase"]),
+                         ("rpm_installed", "tar", "ERROR", "any"))
+        for phase in ("install", "stage", "upgrade"):
+            self.assertIn("tar", self.names(phase))
+        self.assertIn("install -y tar", checks.describe_fix(c))
+
     def test_install_preflight_set(self):
         n = self.names("install")
         for want in ("netflex-absent", "usr4-mounted", "usr4-mode", "disk-usr4", "ksh", "apache",

@@ -108,3 +108,37 @@ def tail_since(path, offset, min_severity=None):
     entries = [parse_line(ln) for ln in data.splitlines()]
     entries = [e for e in entries if _passes(e, min_severity)]
     return {"entries": entries, "next_offset": new_offset}
+
+
+def live_step(logdir, max_lines=40):
+    """(path, last lines) of the step output run_logged is buffering right now.
+
+    run_logged (nf_log.ksh) captures each sub-command in ${INCLOGDIR}/.nfrun.<pid>
+    and only copies it into the trace when the command ends, so a long step
+    (linux_packages, the database setup) is silent in the trace until then. The
+    newest such buffer is the step in progress. (None, []) if there is none."""
+    best, best_key = None, None
+    try:
+        names = os.listdir(logdir)
+    except OSError:
+        return None, []
+    for name in names:
+        if not name.startswith(".nfrun."):
+            continue
+        path = os.path.join(logdir, name)
+        try:
+            key = (os.path.getmtime(path), name)
+        except OSError:
+            continue
+        if best_key is None or key > best_key:
+            best, best_key = path, key
+    if best is None:
+        return None, []
+    try:
+        with open(best, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - 65536))
+            data = fh.read().decode("utf-8", "replace")
+    except (IOError, OSError):
+        return None, []
+    return best, data.splitlines()[-max_lines:]

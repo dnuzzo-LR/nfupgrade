@@ -284,6 +284,14 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         rec["logdir"] = logdir
         return _json(200, rec)
 
+    if path == "/api/log/live" and method == "GET":
+        # The step in progress (see logtail.live_step); only while an engine runs,
+        # since a buffer left by a killed run would otherwise look live forever.
+        if preview_scenario(ctx) or not launcher.anything_running(ctx.host):
+            return _json(200, {"running": False, "file": None, "lines": []})
+        live, lines = logtail.live_step(upgrade_logdir(ctx))
+        return _json(200, {"running": True, "file": live, "lines": lines})
+
     if path == "/api/log" and method == "GET":
         offset = int((query.get("offset") or ["0"])[0])
         min_sev = (query.get("min") or [None])[0]

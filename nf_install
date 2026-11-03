@@ -295,6 +295,14 @@ function do_isdatabase
 {
 	run_logged database "${INCROOT}/bin/nf_upgrade_pg.sh" || die "nf_upgrade_pg.sh failed"
 	loginfo "database setup complete"
+	# cmmperm's first run (iscmmperm) predates the postgres/pgbouncer users the
+	# database step creates, so their chowns fail there; run it again now.
+	if run_logged cmmperm su cmm -c "${INCROOT}/bin/cmmperm"
+	then
+		loginfo "cmmperm re-run after database setup complete"
+	else
+		logwarn "cmmperm re-run after database setup failed - continuing"
+	fi
 }
 
 # webgui_setup — the nf-install 530gui.sh sequence. Runs in a subshell (it
@@ -326,7 +334,14 @@ n
 EOF
 	cd "${INCROOT}/web/data" || return 1
 	run_logged maps cp "${INCROOT}"/web/maps.default/* "${INCROOT}/web/maps" || return 1
-	run_logged cpjsmap cpjsmap.osm jsmap || return 1
+	# cpjsmap.osm (from nf-install's 530gui.sh) is not shipped by every netFLEX
+	# release (absent in 5.5); without it only the jsmap step is skipped.
+	if whence cpjsmap.osm >/dev/null 2>&1
+	then
+		run_logged cpjsmap cpjsmap.osm jsmap || logwarn "cpjsmap.osm failed - jsmap not generated"
+	else
+		logwarn "cpjsmap.osm not found - jsmap not generated"
+	fi
 	run_logged sysconfig cp -p def.sys_config.flx sys_config || return 1
 	run_logged sysdefines cp -p def.system_defines.flx system_defines || return 1
 	printf '[%s_i]\n   host=%s\n   protocol=ssh\n' "${HOSTNAME}" "${HOSTNAME}" > ./Interfaces || return 1
