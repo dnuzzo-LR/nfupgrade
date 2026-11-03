@@ -132,6 +132,16 @@ trace path to send to support, with two actions:
   state/info files are archived with a timestamp and the traces are kept. Reset is
   refused while anything is running.
 
+### Removing netFLEX to re-test a fresh install (lab boxes only)
+
+`tools/nf_uninstall.sh` removes an installed netFLEX from the box it runs on: the
+`netFLEX*` RPMs, the `/usr/cnc*` links, the `/usr4/inc*` load directories, the
+netFLEX systemd units and the users/group the CORE RPM creates (and, with
+`--purge-db`, the postgres data in `/var/lib/pgsql/data`). Run `--dry-run` first to
+see the list. A real run must be root, refuses while the app is up or an
+install/upgrade is running, shows a warning banner, and asks you to type the host
+name and then `YES`. It logs to `/root/nf_uninstall.<timestamp>.log`.
+
 ### Previewing the install screens
 
 To see the install UI on a box that already has netFLEX (e.g. a lab box):
