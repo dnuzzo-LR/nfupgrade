@@ -3,13 +3,14 @@ shaping so the HTTP layer (httpd.py) stays a thin adapter and the API is
 unit-testable without sockets."""
 import collections
 import json
+import signal
 import threading
 import time
 
 import os
 
 from nfupgrader import progress, logtail, launcher, localinfo, siteview, site, checks, cfg
-from nfupgrader import reports, snapjobs, installstate, steps, cnccnfg
+from nfupgrader import reports, snapjobs, installstate, steps, cnccnfg, bootmenu
 from nfupgrader import preview as previewdata
 
 Context = collections.namedtuple("Context", [
@@ -164,6 +165,52 @@ def host_mode(ctx):
     if preview_scenario(ctx):
         return "install"
     return installstate.host_mode(ctx.host, ctx.hostname, upgrade_logdir(ctx))
+
+
+def _bootmenu_session(ctx):
+    """The BootMenuSession object in ctx.state["bootmenu"], created by httpd
+    (Task 5) when the tab is first opened; None if there is none (treated as
+    state "none" -- not running -- per the controller's ruling)."""
+    st = ctx.state if isinstance(ctx.state, dict) else {}
+    return st.get("bootmenu")
+
+
+#: session() shape reported when there is no BootMenuSession object at all.
+_BOOTMENU_NO_SESSION = {"state": "none", "pid": None, "started_at": None, "exit_code": None}
+
+
+def bootmenu_availability(ctx):
+    """Whether the Boot menu tab can be opened right now: {"available": bool,
+    "greyed": bool, "reason": str, "other": "none"|"foreign"|"leftover",
+    "other_pids": [int]}. Checked in order: preview mode; not installed (or an
+    unfinished install); an install/upgrade running; our own session already
+    running (reattach); some other new_boot_nms/boot_nms on the box, which is
+    either a leftover from an earlier run of this tool (pidfile says so, and
+    its tool process is dead) or someone else's (a live console login, etc)."""
+    no_other = {"other": "none", "other_pids": []}
+    if preview_scenario(ctx):
+        return dict(no_other, available=False, greyed=True, reason="preview mode")
+    if host_mode(ctx) == "install":
+        return dict(no_other, available=False, greyed=True,
+                    reason="netFLEX is not installed")
+    if launcher.anything_running(ctx.host):
+        return dict(no_other, available=False, greyed=True,
+                    reason="an install or upgrade is running")
+    session = _bootmenu_session(ctx)
+    if session is not None and session.running():
+        return dict(no_other, available=True, greyed=False, reason="")
+    own_pids = session.own_pids() if session is not None else set()
+    pidfile_path = os.path.join(ctx.inclogdir, bootmenu.PIDFILE_NAME)
+    kind, pids = bootmenu.classify_others(bootmenu.list_processes(), own_pids, pidfile_path)
+    if kind == "foreign":
+        return {"available": False, "greyed": True,
+                "reason": "someone else is running the boot menu",
+                "other": "foreign", "other_pids": pids}
+    if kind == "leftover":
+        return {"available": False, "greyed": True,
+                "reason": "a boot menu from an earlier run is still on this box",
+                "other": "leftover", "other_pids": pids}
+    return dict(no_other, available=True, greyed=False, reason="")
 
 
 def _active_phase(ctx):
@@ -348,6 +395,9 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         payload = _json_object(body)
         if payload is None:
             return _json(400, {"error": "bad json"})
+        session = _bootmenu_session(ctx)
+        if session is not None and session.running():
+            return _json(409, {"error": "the boot menu is open"})
         logdir = upgrade_logdir(ctx)
         if not installstate.unfinished(ctx.hostname, logdir):
             return _json(409, {"error": "no unfinished install to reset"})
@@ -370,6 +420,9 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         payload = _json_object(body)
         if payload is None:
             return _json(400, {"error": "bad json"})
+        session = _bootmenu_session(ctx)
+        if session is not None and session.running():
+            return _json(409, {"error": "the boot menu is open"})
         # Take the lock before looking at system state, so no launch or snapshot
         # can slip in between these checks and the fix itself.
         if not _FIX_LOCK.acquire(False):
@@ -585,10 +638,54 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
                   ("X-Content-Type-Options", "nosniff")]
         return 200, headers, text.encode("utf-8")
 
+    if path == "/api/bootmenu/status" and method == "GET":
+        result = bootmenu_availability(ctx)
+        session = _bootmenu_session(ctx)
+        result["session"] = session.state() if session is not None else dict(_BOOTMENU_NO_SESSION)
+        result["busy"] = session.busy() if session is not None else False
+        return _json(200, result)
+
+    if path == "/api/bootmenu/end" and method == "POST":
+        session = _bootmenu_session(ctx)
+        if session is None or not session.running():
+            return _json(409, {"error": "no boot menu session is running"})
+        session.end()
+        ctx.audit.record("bootmenu_end", forced=True, client=client_ip)
+        return _json(200, {"ended": True})
+
+    if path == "/api/bootmenu/end-leftover" and method == "POST":
+        if bootmenu_availability(ctx)["other"] != "leftover":
+            return _json(409, {"error": "no leftover boot menu to end"})
+        # Re-read /proc and re-classify right before killing anything: the
+        # availability check above may be stale (processes come and go), and
+        # only pids classify_others still calls "leftover" -- the recorded
+        # session pid and its descendants, with the tool pid still dead --
+        # are ever targeted.
+        session = _bootmenu_session(ctx)
+        own_pids = session.own_pids() if session is not None else set()
+        pidfile_path = os.path.join(ctx.inclogdir, bootmenu.PIDFILE_NAME)
+        kind, pids = bootmenu.classify_others(bootmenu.list_processes(), own_pids, pidfile_path)
+        if kind != "leftover":
+            return _json(409, {"error": "no leftover boot menu to end"})
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+        try:
+            os.unlink(pidfile_path)
+        except OSError:
+            pass
+        ctx.audit.record("bootmenu_end_leftover", pids=pids)
+        return _json(200, {"ended": True})
+
     if path == "/api/launch" and method == "POST":
         payload = _json_object(body)
         if payload is None:
             return _json(400, {"error": "bad json"})
+        session = _bootmenu_session(ctx)
+        if session is not None and session.running():
+            return _json(409, {"error": "the boot menu is open"})
         mode = payload.get("mode")
         if mode not in ("stage", "upgrade", "install"):
             return _json(400, {"error": "mode must be stage, upgrade, or install"})
