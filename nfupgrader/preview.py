@@ -4,6 +4,8 @@ Preview lets the install UI be looked at on a box that already runs netFLEX:
 the API reports install mode with one of these canned scenarios, and refuses
 every action that would change the box (launch, resume, reset, fixes). Nothing
 here touches the system."""
+import time
+
 from nfupgrader import logtail, progress, steps
 
 SCENARIOS = ("before", "running", "failed", "done")
@@ -44,6 +46,17 @@ _LOG = {
 
 TRACE = "(preview - no trace file)"
 
+# A linux_packages-style step in progress, for the Log tab's live box in the
+# "running" scenario. live_lines() shows a window that moves on every 2 s poll.
+_LIVE = ["Installing package {} ({} of 24)...".format(p, i + 1) for i, p in enumerate((
+    "ksh", "xerces-c", "httpd", "mod_ssl", "zeromq", "libsodium", "jq", "net-tools",
+    "bc", "traceroute", "zlib", "libpng", "ncurses-libs", "dialog", "telnet", "gpm",
+    "sysstat", "curl", "wget", "nodejs", "git", "xinetd", "tftp-server", "rsync"))]
+_LIVE = [ln for p in _LIVE for ln in (
+    p, "  Dependencies resolved.", "  Running transaction",
+    "  Installed: {} (preview sample)".format(p.split()[2]), "Complete!")]
+
+
 
 def scenario_from_env(value):
     """The scenario named by NFU_PREVIEW_INSTALL: None when unset/empty (preview
@@ -59,6 +72,15 @@ def log_entries(scenario, min_severity=None):
     if not min_severity:
         return entries
     return [e for e in entries if logtail._passes(e, min_severity)]
+
+
+def live_lines(scenario, now=None, window=12):
+    """Sample live step output for the scenario: a window of _LIVE that advances
+    one line per second of `now` (wrapping), or [] unless an install is running."""
+    if scenario != "running":
+        return []
+    end = int(time.time() if now is None else now) % len(_LIVE) + 1
+    return _LIVE[max(0, end - window):end]
 
 
 def status(scenario, hostname):

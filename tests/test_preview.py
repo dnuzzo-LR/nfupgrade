@@ -73,6 +73,24 @@ class TestPreviewApi(unittest.TestCase):
         st, d = self.call("GET", "/api/log", min="FATAL")
         self.assertTrue(all(e["severity"] == "FATAL" for e in d["entries"]))
 
+    def test_live_output_only_while_running(self):
+        self.ctx.state["preview"] = "running"
+        st, d = self.call("GET", "/api/log/live")
+        self.assertEqual((st, d["running"], d["file"]), (200, True, preview.TRACE))
+        self.assertTrue(d["lines"])
+        for scenario in ("before", "failed", "done"):
+            self.ctx.state["preview"] = scenario
+            st, d = self.call("GET", "/api/log/live")
+            self.assertEqual((d["running"], d["lines"]), (False, []), scenario)
+
+    def test_live_lines_advance(self):
+        a = preview.live_lines("running", now=0)
+        b = preview.live_lines("running", now=6)
+        self.assertTrue(a and b)
+        self.assertNotEqual(a, b)          # the box visibly scrolls between polls
+        self.assertLessEqual(len(a), 40)
+        self.assertEqual(preview.live_lines("failed", now=0), [])
+
     def test_launch_reset_fix_refused(self):
         for scenario in preview.SCENARIOS:
             self.ctx.state["preview"] = scenario

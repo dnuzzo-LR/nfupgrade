@@ -287,7 +287,11 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
     if path == "/api/log/live" and method == "GET":
         # The step in progress (see logtail.live_step); only while an engine runs,
         # since a buffer left by a killed run would otherwise look live forever.
-        if preview_scenario(ctx) or not launcher.anything_running(ctx.host):
+        if preview_scenario(ctx):
+            lines = previewdata.live_lines(preview_scenario(ctx))
+            return _json(200, {"running": bool(lines),
+                               "file": previewdata.TRACE if lines else None, "lines": lines})
+        if not launcher.anything_running(ctx.host):
             return _json(200, {"running": False, "file": None, "lines": []})
         live, lines = logtail.live_step(upgrade_logdir(ctx))
         return _json(200, {"running": True, "file": live, "lines": lines})
