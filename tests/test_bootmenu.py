@@ -1,7 +1,10 @@
 import errno
 import os
 import shutil
+import signal
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 from nfupgrader import bootmenu
@@ -183,6 +186,320 @@ class TestDiscovery(unittest.TestCase):
     def test_pid_alive_default_true_when_kill_succeeds(self):
         with mock.patch("os.kill", return_value=None):
             self.assertTrue(bootmenu._pid_alive_default(1))
+
+
+    def test_write_pidfile_is_atomic_leaves_no_tmp(self):
+        pf = os.path.join(self.root, "pidfile")
+        bootmenu.write_pidfile(pf, 42, 12, proc_root=self.root)
+        self.assertFalse(os.path.exists(pf + ".tmp"))
+        self.assertEqual(bootmenu.read_pidfile(pf), (42, 12, self.SESSION_STARTTIME))
+
+    def test_proc_name(self):
+        n = bootmenu.proc_name
+        self.assertEqual(n(["su", "cmm", "-s", "/bin/sh", "-c", "x"]), "su")
+        self.assertEqual(n(["/usr/bin/ksh", "/usr/cnc/bin/boot_nms"]), "boot_nms")
+        self.assertEqual(n(["/bin/sh", "-x", "/usr/cnc/bin/new_boot_nms"]), "new_boot_nms")
+        self.assertEqual(n(["sh", "-c", "/usr/cnc/bin/boot_nms"]), "sh")
+        self.assertEqual(n(["/bin/bash"]), "bash")
+        self.assertEqual(n(["/usr/bin/sleep", "30"]), "sleep")
+        self.assertEqual(n([]), "")
+
+
+def wait_for(cond, timeout=5.0):
+    """Poll cond() until it is truthy or timeout seconds pass; return its
+    last value."""
+    deadline = time.time() + timeout
+    while True:
+        v = cond()
+        if v or time.time() >= deadline:
+            return v
+        time.sleep(0.02)
+
+
+def _read(path):
+    """Contents of path, or "" if it can't be read (yet)."""
+    try:
+        with open(path) as fh:
+            return fh.read()
+    except (IOError, OSError):
+        return ""
+
+
+def _kill_quietly(pid):
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
+class Collector(object):
+    """A send() callable that records frames."""
+
+    def __init__(self):
+        self.frames = []
+        self.lock = threading.Lock()
+
+    def __call__(self, frame):
+        with self.lock:
+            self.frames.append(frame)
+
+    def snapshot(self):
+        with self.lock:
+            return list(self.frames)
+
+    def output(self, include_replay=True):
+        return "".join(f["data"] for f in self.snapshot()
+                       if f["type"] == "output" and (include_replay or not f.get("replay")))
+
+    def types(self):
+        return [f["type"] for f in self.snapshot()]
+
+
+class TestSession(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.pidfile = os.path.join(self.dir, "bootmenu.pid")
+
+    def session(self, argv, **kw):
+        kw.setdefault("pidfile", self.pidfile)
+        s = bootmenu.BootMenuSession(argv=argv, **kw)
+        self.addCleanup(self._reap, s)
+        return s
+
+    def _reap(self, s):
+        """Kill everything the session still owns and wait for it to end."""
+        if s.running():
+            for pid in s.own_pids():
+                _kill_quietly(pid)
+            wait_for(lambda: not s.running())
+        self.assertFalse(s.running(), "session did not end in cleanup")
+
+    def test_state_none_before_start(self):
+        s = self.session(["/bin/sh", "-c", "exit 0"])
+        self.assertEqual(s.state(), {"state": "none", "pid": None,
+                                     "started_at": None, "exit_code": None})
+        self.assertFalse(s.running())
+        self.assertEqual(s.own_pids(), set())
+        self.assertFalse(s.busy())
+        self.assertFalse(s.end())
+
+    def test_runs_on_a_tty(self):
+        s = self.session(["/bin/sh", "-c", "tty; read a; echo got:$a"])
+        c = Collector()
+        s.attach(c)
+        pid = s.start()
+        self.assertGreater(pid, 0)
+        st = s.state()
+        self.assertEqual(st["state"], "running")
+        self.assertEqual(st["pid"], pid)
+        self.assertIsNotNone(st["started_at"])
+        self.assertTrue(wait_for(lambda: "/dev/pts/" in c.output()), c.output())
+        s.write("hello\r")
+        self.assertTrue(wait_for(lambda: "got:hello" in c.output()), c.output())
+        self.assertTrue(wait_for(lambda: s.state()["state"] == "ended"))
+        self.assertEqual(s.state()["exit_code"], 0)
+        self.assertTrue(wait_for(lambda: "exit" in c.types()))
+        self.assertIn({"type": "exit", "code": 0}, c.snapshot())
+
+    def test_start_twice_raises(self):
+        s = self.session(["cat"], kill_names={"cat"})
+        s.start()
+        with self.assertRaises(RuntimeError):
+            s.start()
+
+    def test_env_has_term(self):
+        s = self.session(["/bin/sh", "-c", "echo T=$TERM"])
+        s.start()
+        self.assertTrue(wait_for(lambda: not s.running()))
+        self.assertIn("T=xterm-256color", s.scrollback())
+
+    def test_size_is_set(self):
+        s = self.session(["/bin/sh", "-c", "stty size"])
+        s.start(cols=100, rows=30)
+        self.assertTrue(wait_for(lambda: not s.running()))
+        self.assertIn("30 100", s.scrollback())
+
+    def test_resize(self):
+        s = self.session(["/bin/sh", "-c", "read a; stty size; read b"])
+        s.start()
+        s.resize(120, 40)
+        s.write("x\r")
+        self.assertTrue(wait_for(lambda: "40 120" in s.scrollback()), s.scrollback())
+        s.write("y\r")
+        self.assertTrue(wait_for(lambda: not s.running()))
+
+    def test_menu_exits_immediately(self):
+        s = self.session(["/bin/sh", "-c", "echo ERROR: PLEASE CHECK; exit 1"])
+        s.start()
+        self.assertTrue(wait_for(lambda: s.state()["state"] == "ended"))
+        self.assertEqual(s.state()["exit_code"], 1)
+        self.assertIn("ERROR: PLEASE CHECK", s.scrollback())
+        self.assertFalse(s.running())
+        self.assertFalse(os.path.exists(self.pidfile))
+
+    def test_attach_after_end_gets_replay_and_status(self):
+        s = self.session(["/bin/sh", "-c", "echo bye; exit 3"])
+        s.start()
+        self.assertTrue(wait_for(lambda: not s.running()))
+        c = Collector()
+        s.attach(c)
+        f = c.snapshot()
+        self.assertEqual(f[0]["type"], "output")
+        self.assertTrue(f[0]["replay"])
+        self.assertIn("bye", f[0]["data"])
+        self.assertEqual(f[1], {"type": "status", "state": "ended", "exit_code": 3})
+
+    def test_second_attach_takes_over(self):
+        s = self.session(["cat"], kill_names={"cat"})
+        s.start()
+        s.write("first\r")
+        self.assertTrue(wait_for(lambda: "first" in s.scrollback()))
+        a, b = Collector(), Collector()
+        s.attach(a)
+        self.assertEqual(a.snapshot()[-1], {"type": "status", "state": "running"})
+        s.attach(b)
+        self.assertEqual(a.snapshot()[-1], {"type": "detached", "reason": "opened elsewhere"})
+        bf = b.snapshot()
+        self.assertEqual(bf[0]["type"], "output")
+        self.assertTrue(bf[0]["replay"])
+        self.assertIn("first", bf[0]["data"])
+        self.assertEqual(bf[1], {"type": "status", "state": "running"})
+        a_count = len(a.snapshot())
+        s.write("x\r")
+        self.assertTrue(wait_for(lambda: "x" in b.output(include_replay=False)))
+        self.assertEqual(len(a.snapshot()), a_count)
+        self.assertTrue(s.end())
+        self.assertTrue(wait_for(lambda: "exit" in b.types()))
+        self.assertNotIn("exit", a.types())
+
+    def test_detach_stops_output_and_stale_detach_is_noop(self):
+        s = self.session(["cat"], kill_names={"cat"})
+        s.start()
+        a, b = Collector(), Collector()
+        ta = s.attach(a)
+        tb = s.attach(b)
+        s.detach(ta)  # stale token: must not detach b
+        s.write("one\r")
+        self.assertTrue(wait_for(lambda: "one" in b.output()))
+        s.detach(tb)
+        n = len(b.snapshot())
+        s.write("two\r")
+        self.assertTrue(wait_for(lambda: "two" in s.scrollback()))
+        self.assertEqual(len(b.snapshot()), n)
+
+    def test_send_error_detaches(self):
+        s = self.session(["cat"], kill_names={"cat"})
+        s.start()
+        calls = []
+
+        def bad(frame):
+            calls.append(frame)
+            if frame["type"] == "output":
+                raise IOError("socket gone")
+
+        s.attach(bad)
+        s.write("boom\r")
+        self.assertTrue(wait_for(lambda: "boom" in s.scrollback()))
+        self.assertTrue(wait_for(lambda: any(f["type"] == "output" for f in calls)))
+        n = len(calls)
+        s.write("more\r")
+        self.assertTrue(wait_for(lambda: "more" in s.scrollback()))
+        self.assertEqual(len(calls), n)
+        self.assertTrue(s.running())
+
+    def test_scrollback_capped(self):
+        s = self.session(["/bin/sh", "-c",
+                          "i=0; while [ $i -lt 100 ]; do printf '%049d\\n' $i; i=$((i+1)); done; echo END"],
+                         scrollback=1000)
+        s.start()
+        self.assertTrue(wait_for(lambda: not s.running()))
+        sb = s.scrollback()
+        self.assertLessEqual(len(sb), 1000)
+        self.assertTrue(sb.rstrip().endswith("END"), sb[-80:])
+        self.assertIn("0000099", sb)
+
+    def test_end_kills_only_menu_processes(self):
+        menu_sh = os.path.join(self.dir, "menu.sh")
+        pidf = os.path.join(self.dir, "bg.pid")
+        with open(menu_sh, "w") as fh:
+            # nohup: a process the menu started must outlive the session; a
+            # plain `&` child is SIGHUPed by the kernel when the session
+            # leader dies, whatever we do.
+            fh.write("#!/bin/sh\nnohup sleep 300 >/dev/null 2>&1 &\necho $! > \"$1\"\n"
+                     "while :; do sleep 1; done\n")
+        s = self.session(["/bin/sh", menu_sh, pidf], kill_names={"menu.sh"})
+        s.start()
+        self.assertTrue(wait_for(lambda: _read(pidf).strip()))
+        bg = int(_read(pidf))
+        self.addCleanup(_kill_quietly, bg)
+        self.assertTrue(wait_for(lambda: bg in s.own_pids()))
+        self.assertTrue(wait_for(s.busy))
+        self.assertTrue(s.end())
+        self.assertEqual(s.state()["state"], "ended")
+        self.assertEqual(s.state()["exit_code"], 128 + signal.SIGKILL)
+        os.kill(bg, 0)  # still alive: raises if end() killed it
+        with open("/proc/{}/cmdline".format(bg), "rb") as fh:
+            self.assertIn(b"sleep", fh.read())
+        self.assertFalse(os.path.exists(self.pidfile))
+
+    def test_idle_menu_not_busy(self):
+        menu_sh = os.path.join(self.dir, "menu.sh")
+        with open(menu_sh, "w") as fh:
+            fh.write("#!/bin/sh\nread a\n")
+        s = self.session(["/bin/sh", menu_sh], kill_names={"menu.sh"})
+        s.start()
+        self.assertTrue(wait_for(lambda: s.own_pids()))
+        self.assertFalse(s.busy())
+        self.assertTrue(s.end())
+        self.assertFalse(s.running())
+
+    def test_end_ignores_names_not_listed(self):
+        s = self.session(["cat"], kill_names={"menu.sh"})
+        s.start()
+        self.assertFalse(s.end())
+        self.assertTrue(s.running())
+
+    def test_pidfile(self):
+        s = self.session(["cat"], kill_names={"cat"})
+        pid = s.start()
+        tool_pid, session_pid, starttime = bootmenu.read_pidfile(self.pidfile)
+        self.assertEqual((tool_pid, session_pid), (os.getpid(), pid))
+        self.assertGreater(starttime, 0)
+        with open(self.pidfile) as fh:
+            self.assertEqual(fh.read().split()[:2], [str(os.getpid()), str(pid)])
+        self.assertTrue(s.end())
+        self.assertTrue(wait_for(lambda: not os.path.exists(self.pidfile)))
+
+    def test_write_when_not_running_raises(self):
+        s = self.session(["/bin/sh", "-c", "exit 0"])
+        with self.assertRaises(RuntimeError):
+            s.write("x")
+        s.start()
+        self.assertTrue(wait_for(lambda: not s.running()))
+        with self.assertRaises(RuntimeError):
+            s.write("x")
+
+    def test_exec_failure_ends_with_127(self):
+        s = self.session(["/nonexistent/menu"])
+        s.start()
+        self.assertTrue(wait_for(lambda: not s.running()))
+        self.assertEqual(s.state()["exit_code"], 127)
+        self.assertIn("exec /nonexistent/menu failed", s.scrollback())
+
+    def test_restart_after_end(self):
+        s = self.session(["/bin/sh", "-c", "echo run"])
+        s.start()
+        self.assertTrue(wait_for(lambda: not s.running()))
+        s.start()
+        self.assertTrue(wait_for(lambda: not s.running()))
+        self.assertEqual(s.state()["exit_code"], 0)
+
+    def test_defaults(self):
+        s = bootmenu.BootMenuSession()
+        self.assertEqual(s.argv, bootmenu.default_argv())
+        self.assertEqual(s.kill_names, {"su", "new_boot_nms", "boot_nms"})
+        self.assertEqual(s.env["TERM"], "xterm-256color")
 
 
 if __name__ == "__main__":
