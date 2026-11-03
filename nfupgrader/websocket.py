@@ -197,19 +197,13 @@ class WebSocket(object):
             if opcode == OP_CLOSE:
                 # RFC 6455 5.5.1: echo a Close frame if we haven't already
                 # sent one, using the received status code when present.
-                # The peer may have already torn down the socket (e.g. it
-                # closed right after sending its Close frame); a failed
-                # echo must not raise out of recv() -- the session is
-                # ending either way.
+                # close() itself never raises and always leaves
+                # closed=True, even if the peer's socket is already gone.
                 if len(payload) >= 2:
                     (code,) = struct.unpack("!H", payload[:2])
                 else:
                     code = 1000
-                try:
-                    self.close(code)
-                except OSError:
-                    pass
-                self.closed = True
+                self.close(code)
                 return None
             elif opcode == OP_PING:
                 self._send_frame(OP_PONG, payload)
@@ -243,17 +237,29 @@ class WebSocket(object):
             self.wfile.flush()
 
     def send_text(self, text):
-        """Send a text message as a single unfragmented text frame."""
-        self._send_frame(OP_TEXT, text.encode("utf-8"))
+        """Send a text message as a single unfragmented text frame.
+
+        If the write fails (e.g. the peer's socket is already gone), marks
+        the connection closed and re-raises, so the caller knows to detach
+        -- unlike close()'s echo path, a failed application-data send is
+        not something recv() is already unwinding from."""
+        try:
+            self._send_frame(OP_TEXT, text.encode("utf-8"))
+        except OSError:
+            self.closed = True
+            raise
 
     def send_json(self, obj):
         """Send a Python object as a JSON-encoded text message."""
         self.send_text(json.dumps(obj))
 
     def close(self, code=1000):
-        """Send a close frame (default: 1000, normal closure) and mark the
-        connection closed. A no-op if a close frame was already sent (either
-        by an earlier call, or as the echo of a received close frame).
+        """Send a close frame (default: 1000, normal closure). Never raises
+        and always leaves `closed` True once sent (or attempted) -- a close
+        frame that can't be written to a dead socket still means the
+        socket is closed. A no-op if a close frame was already sent
+        (either by an earlier call, or as the echo of a received close
+        frame).
 
         The check-and-set of "already sent" and the write it guards happen
         under the same lock as all other sends, so two threads racing to
@@ -263,5 +269,9 @@ class WebSocket(object):
             if self._close_sent:
                 return
             self._close_sent = True
-            self._send_frame(OP_CLOSE, struct.pack("!H", code))
-        self.closed = True
+            try:
+                self._send_frame(OP_CLOSE, struct.pack("!H", code))
+            except OSError:
+                pass
+            finally:
+                self.closed = True

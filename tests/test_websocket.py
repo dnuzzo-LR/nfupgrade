@@ -9,6 +9,14 @@ def client_frame(opcode, payload, fin=True, mask=b"\x01\x02\x03\x04"):
     else: hdr = struct.pack("!BBQ", b0, 0x80 | 127, n)
     return hdr + mask + bytes(c ^ mask[i % 4] for i, c in enumerate(payload))
 
+class BrokenWfile(object):
+    """A wfile stand-in whose write() always fails, as if the peer's
+    socket were already gone."""
+    def write(self, data):
+        raise BrokenPipeError("peer gone")
+    def flush(self):
+        pass
+
 class TestHandshake(unittest.TestCase):
     def test_rfc_example(self):
         self.assertEqual(ws.accept_key("dGhlIHNhbXBsZSBub25jZQ=="), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
@@ -66,13 +74,19 @@ class TestFrames(unittest.TestCase):
         s, _ = self.sock(frame)
         with self.assertRaises(ws.ProtocolError): s.recv()
     def test_close_echo_broken_pipe_swallowed(self):
-        class BrokenWfile(object):
-            def write(self, data):
-                raise BrokenPipeError("peer gone")
-            def flush(self):
-                pass
         s = ws.WebSocket(io.BytesIO(client_frame(ws.OP_CLOSE, struct.pack("!H", 1000))), BrokenWfile())
         self.assertIsNone(s.recv())  # must not raise
+        self.assertTrue(s.closed)
+    def test_close_on_broken_wfile_no_raise(self):
+        s = ws.WebSocket(io.BytesIO(b""), BrokenWfile())
+        s.close()  # must not raise
+        self.assertTrue(s.closed)
+        s.close()  # still a no-op, still no exception
+        self.assertTrue(s.closed)
+    def test_send_text_broken_wfile_raises_and_closes(self):
+        s = ws.WebSocket(io.BytesIO(b""), BrokenWfile())
+        with self.assertRaises(OSError):
+            s.send_text("hi")
         self.assertTrue(s.closed)
     def test_concurrent_close_sends_once(self):
         class SlowWfile(object):
