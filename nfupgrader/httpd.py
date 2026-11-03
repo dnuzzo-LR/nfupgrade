@@ -3,6 +3,7 @@ loopback and prints the one-time access URL. Serves static files from web/."""
 import json
 import os
 import posixpath
+import signal
 import socketserver
 import sys
 import time
@@ -17,7 +18,8 @@ class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
     http.server.ThreadingHTTPServer only in 3.7.)"""
     daemon_threads = True
 
-from nfupgrader import api, launcher, preview, progress, snapjobs
+from nfupgrader import api, bootmenu, bootmenu_ws, launcher, preview, progress, snapjobs
+from nfupgrader.websocket import WebSocket, accept_key
 from nfupgrader.auth import TokenAuth
 from nfupgrader.audit import AuditLog, last_unfinished_fix
 from nfupgrader.host import Host, SshHost
@@ -285,9 +287,41 @@ def make_handler(ctx):
             self.end_headers()
             self.wfile.write(data)
 
+        def _serve_ws_bootmenu(self):
+            """Upgrade GET /ws/bootmenu to a WebSocket and run it on this
+            request thread until the browser goes away. A refusal is a plain
+            HTTP status with no upgrade."""
+            cookies = parse_cookies(self.headers.get("Cookie", ""))
+            ip = client_ip_from(self.client_address)
+            self.close_connection = True
+            code = bootmenu_ws.refusal(self.headers, cookies, ip, ctx)
+            if code is not None:
+                self.send_error(code)
+                return
+            # Written literally: the handler speaks HTTP/1.0, and browsers
+            # reject a 101 on an HTTP/1.0 status line.
+            key = self.headers.get("Sec-WebSocket-Key").strip()
+            self.wfile.write((
+                "HTTP/1.1 101 Switching Protocols\r\n"
+                "Upgrade: websocket\r\n"
+                "Connection: Upgrade\r\n"
+                "Sec-WebSocket-Accept: {}\r\n\r\n").format(accept_key(key)).encode("ascii"))
+            self.wfile.flush()
+            writer = bootmenu_ws.TimedWriter(self.connection)
+            sock = WebSocket(self.rfile, writer)
+            try:
+                bootmenu_ws.serve(sock, ctx, ip, writer=writer)
+            except Exception:
+                sys.stderr.write("nfupgrader: error on /ws/bootmenu:\n{}".format(
+                    traceback.format_exc()))
+                sys.stderr.flush()
+
         def _handle(self, method):
             parsed = urlparse(self.path)
             path = parsed.path
+            if method == "GET" and path == "/ws/bootmenu":
+                self._serve_ws_bootmenu()
+                return
             if method == "GET" and (path == "/" or path.endswith((".js", ".css", ".html"))):
                 self._serve_static(path if path != "/" else "/index.html")
                 return
@@ -314,6 +348,32 @@ def make_handler(ctx):
             pass  # silence default stderr logging; we have the audit log
 
     return Handler
+
+
+def shutdown_bootmenu(ctx):
+    """On a deliberate stop of the tool: end the boot menu session (menu
+    processes only) if one is running, audited as bootmenu_end
+    reason="tool_stop"."""
+    session = api._bootmenu_session(ctx)
+    if session is None or not session.running():
+        return
+    session.end()
+    state = session.state()
+    ctx.audit.record("bootmenu_end", reason="tool_stop", exit_code=state["exit_code"])
+
+
+def _on_sigterm(signum, frame):
+    """SIGTERM handler: unwind serve_forever like Ctrl-C does. (Python runs
+    signal handlers in the main thread only, which is the one in
+    serve_forever.)"""
+    raise KeyboardInterrupt()
+
+
+def install_signals():
+    """Ignore SIGHUP (a dropped ssh session must not kill the tool or the
+    boot menu it owns); SIGTERM stops the tool like SIGINT."""
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, _on_sigterm)
 
 
 def main(argv=None):
@@ -371,6 +431,9 @@ def main(argv=None):
         nf_install_path=nf_install_path, hosts_path=hosts_path,
     )
 
+    state["bootmenu"] = bootmenu.BootMenuSession(
+        pidfile=os.path.join(inclogdir, bootmenu.PIDFILE_NAME))
+
     port = int(os.environ.get("NFU_PORT", "0"))
     bind = os.environ.get("NFU_BIND", "127.0.0.1")
     url_host = resolve_url_host(bind, os.environ.get("NFU_URL_HOST"), hostname)
@@ -390,10 +453,18 @@ def main(argv=None):
         print("WARNING: bound to {} — the URL/token cross the network in plaintext HTTP.".format(bind))
         print("Open (single-use):\n    {}".format(url))
     sys.stdout.flush()
+    install_signals()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        server.shutdown()
+        # A second SIGTERM/SIGINT must not interrupt ending the menu.
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            shutdown_bootmenu(ctx)
+        finally:
+            server.shutdown()
+            server.server_close()
 
 
 if __name__ == "__main__":
