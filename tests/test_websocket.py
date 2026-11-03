@@ -44,6 +44,27 @@ class TestFrames(unittest.TestCase):
         self.assertIsNone(s.recv())
         s, _ = self.sock(b"")
         self.assertIsNone(s.recv())
+    def test_close_echoed_once(self):
+        s, out = self.sock(client_frame(ws.OP_CLOSE, struct.pack("!H", 1000)))
+        self.assertIsNone(s.recv())
+        expected = ws.encode_frame(ws.OP_CLOSE, struct.pack("!H", 1000))
+        self.assertEqual(out.getvalue(), expected)
+        s.close()  # already sent a close frame: no-op
+        self.assertEqual(out.getvalue(), expected)
+    def test_oversized_control_frame_rejected(self):
+        s, _ = self.sock(client_frame(ws.OP_PING, b"p" * 126))
+        with self.assertRaises(ws.ProtocolError): s.recv()
+    def test_fragmented_control_frame_rejected(self):
+        s, _ = self.sock(client_frame(ws.OP_PING, b"p", fin=False))
+        with self.assertRaises(ws.ProtocolError): s.recv()
+    def test_rsv_bit_rejected(self):
+        payload = b"hi"
+        mask = b"\x01\x02\x03\x04"
+        b0 = 0x80 | 0x40 | ws.OP_TEXT  # FIN + RSV1 + opcode
+        hdr = struct.pack("!BB", b0, 0x80 | len(payload))
+        frame = hdr + mask + bytes(c ^ mask[i % 4] for i, c in enumerate(payload))
+        s, _ = self.sock(frame)
+        with self.assertRaises(ws.ProtocolError): s.recv()
     def test_unmasked_and_oversize_rejected(self):
         s, _ = self.sock(ws.encode_frame(ws.OP_TEXT, b"x"))
         with self.assertRaises(ws.ProtocolError): s.recv()

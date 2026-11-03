@@ -27,7 +27,8 @@ MAX_MESSAGE = 1048576
 
 
 class ProtocolError(Exception):
-    """An unmasked client frame, an oversize message, or a bad opcode."""
+    """An unmasked client frame, a reserved bit set, an over-length or
+    fragmented control frame, an oversize message, or a bad opcode."""
     pass
 
 
@@ -99,10 +100,15 @@ class WebSocket(object):
     inside recv(). Sends are serialized by an internal lock for thread
     safety."""
 
+    #: Control frame opcodes (RFC 6455 section 5.5): payload must be <=125
+    #: bytes and must not be fragmented.
+    _CONTROL_OPCODES = (OP_CLOSE, OP_PING, OP_PONG)
+
     def __init__(self, rfile, wfile):
         self.rfile = rfile
         self.wfile = wfile
         self.closed = False
+        self._close_sent = False
         self._lock = threading.Lock()
 
     def _read_exact(self, n):
@@ -123,7 +129,8 @@ class WebSocket(object):
     def _read_frame(self):
         """Read and unmask a single client frame. Returns (fin, opcode,
         payload_bytes), or None on EOF. Raises ProtocolError if the frame is
-        unmasked or its declared length exceeds MAX_MESSAGE."""
+        unmasked, has a reserved bit set, is an over-length or fragmented
+        control frame, or its declared length exceeds MAX_MESSAGE."""
         head = self._read_exact(2)
         if head is None:
             return None
@@ -132,6 +139,9 @@ class WebSocket(object):
         opcode = b0 & 0x0F
         masked = bool(b1 & 0x80)
         length = b1 & 0x7F
+
+        if b0 & 0x70:
+            raise ProtocolError("reserved bit set (no extensions negotiated)")
 
         if not masked:
             raise ProtocolError("client frame must be masked")
@@ -146,6 +156,9 @@ class WebSocket(object):
             if ext is None:
                 return None
             (length,) = struct.unpack("!Q", ext)
+
+        if opcode in self._CONTROL_OPCODES and (length > 125 or not fin):
+            raise ProtocolError("control frame must be <=125 bytes and unfragmented")
 
         if length > MAX_MESSAGE:
             raise ProtocolError("frame payload exceeds MAX_MESSAGE")
@@ -162,9 +175,12 @@ class WebSocket(object):
     def recv(self):
         """Receive the next complete text message, reassembling
         continuation frames. Answers ping frames with pong frames
-        transparently. Returns the decoded text (UTF-8, errors replaced),
-        or None on a close frame or EOF. Raises ProtocolError on an
-        unmasked client frame, an oversize message, or a bad opcode."""
+        transparently; on a received close frame, echoes a close frame
+        back (RFC 6455 5.5.1) before returning. Returns the decoded text
+        (UTF-8, errors replaced), or None on a close frame or EOF. Raises
+        ProtocolError on an unmasked client frame, a reserved bit set, an
+        over-length/fragmented control frame, an oversize message, or a
+        bad opcode."""
         parts = []
         total = 0
         started = False
@@ -176,6 +192,15 @@ class WebSocket(object):
             fin, opcode, payload = frame
 
             if opcode == OP_CLOSE:
+                if not self._close_sent:
+                    # RFC 6455 5.5.1: echo a Close frame if we haven't
+                    # already sent one, using the received status code
+                    # when present.
+                    if len(payload) >= 2:
+                        (code,) = struct.unpack("!H", payload[:2])
+                    else:
+                        code = 1000
+                    self.close(code)
                 self.closed = True
                 return None
             elif opcode == OP_PING:
@@ -219,6 +244,10 @@ class WebSocket(object):
 
     def close(self, code=1000):
         """Send a close frame (default: 1000, normal closure) and mark the
-        connection closed."""
+        connection closed. A no-op if a close frame was already sent (either
+        by an earlier call, or as the echo of a received close frame)."""
+        if self._close_sent:
+            return
         self._send_frame(OP_CLOSE, struct.pack("!H", code))
+        self._close_sent = True
         self.closed = True
