@@ -285,6 +285,23 @@ class TestBootmenuGuards(unittest.TestCase):
         self.assertEqual(status, 409)
         self.assertEqual(data["error"], "the boot menu is open")
 
+    def test_fix_checks_boot_menu_under_the_fix_lock(self):
+        # I1: the boot menu check for /api/checks/fix happens while holding
+        # _FIX_LOCK (a start takes the same lock), so they can't interleave.
+        ctx = make_ctx(self.tmp, running=False)
+        seen = []
+
+        class Probe(StubSession):
+            def running(self):
+                seen.append(api.fix_in_progress())
+                return True
+        ctx.state["bootmenu"] = Probe()
+        sid = _session_fixture(ctx)
+        status, data = _post(ctx, sid, "/api/checks/fix", {"name": "whatever"})
+        self.assertEqual((status, data["error"]), (409, "the boot menu is open"))
+        self.assertIn(True, seen)
+        self.assertFalse(api.fix_in_progress())
+
     def test_guards_do_not_trigger_when_not_running(self):
         ctx = make_ctx(self.tmp, running=False)
         ctx.state["bootmenu"] = StubSession(running=False)

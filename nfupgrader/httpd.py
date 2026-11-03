@@ -149,8 +149,9 @@ def launch_side_effect(ctx, mode, ip, perform=None, begin=None, action=None, per
     was actually launched.
 
     A launch is refused (409, audited "launch_rejected") while a check fix is
-    running. The fix lock is held while spawning / starting the before snapshot,
-    so a fix cannot start in between either.
+    running, or while the boot menu is open (re-checked under the lock). The
+    fix lock is held while spawning / starting the before snapshot, so neither
+    a fix nor a boot menu start can begin in between either.
 
     On every accepted (202) launch, ctx.state["launched_at"] (when ctx.state is
     a dict) is stamped with the current time. api dispatch's /api/checks/fix
@@ -167,6 +168,13 @@ def launch_side_effect(ctx, mode, ip, perform=None, begin=None, action=None, per
         ctx.audit.record("launch_rejected", mode=mode, client=ip, reason="check fix in progress")
         return 409, {"error": "check fix in progress"}
     try:
+        # Re-checked under the lock a boot menu start also holds: one may have
+        # started since the dispatcher checked.
+        session = api._bootmenu_session(ctx)
+        if session is not None and session.running():
+            ctx.audit.record("launch_rejected", mode=mode, client=ip,
+                             reason="the boot menu is open")
+            return 409, {"error": "the boot menu is open"}
         if mode == "install":
             status, body = _install_locked(ctx, action, ip, perform_inst, has_state)
         else:

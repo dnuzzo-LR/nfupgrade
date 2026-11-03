@@ -28,7 +28,8 @@ Context.__new__.__defaults__ = (None,) * 13
 
 # One check fix at a time: fixes change system state as root (dnf, sysctl, limits).
 # Held for the whole fix request, so launches and snapshots are refused meanwhile
-# (and httpd holds it while spawning a launch, so a fix cannot start then).
+# (and httpd holds it while spawning a launch, so a fix cannot start then). A
+# boot menu start holds it too, and fixes/launches check the boot menu under it.
 _FIX_LOCK = threading.Lock()
 
 # Seconds after an accepted launch during which /api/checks/fix is refused, even
@@ -427,14 +428,14 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         payload = _json_object(body)
         if payload is None:
             return _json(400, {"error": "bad json"})
-        session = _bootmenu_session(ctx)
-        if session is not None and session.running():
-            return _json(409, {"error": "the boot menu is open"})
-        # Take the lock before looking at system state, so no launch or snapshot
-        # can slip in between these checks and the fix itself.
+        # Take the lock before looking at system state, so no launch, snapshot
+        # or boot menu start can slip in between these checks and the fix itself.
         if not _FIX_LOCK.acquire(False):
             return _json(409, {"error": "another fix is running"})
         try:
+            session = _bootmenu_session(ctx)
+            if session is not None and session.running():
+                return _json(409, {"error": "the boot menu is open"})
             state = ctx.state if isinstance(ctx.state, dict) else {}
             launched_at = state.get("launched_at")
             if launched_at is not None and _now() - launched_at < FIX_LAUNCH_GRACE:

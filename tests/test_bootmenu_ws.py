@@ -356,6 +356,67 @@ class TestSession(WsServerCase):
                          [])
 
 
+class TestStartGuards(WsServerCase):
+    """I1: a start can't race a launch, a check fix or a report snapshot."""
+
+    def _refused(self, message):
+        c = self.connect()
+        self.assertEqual(c.recv_json(), {"type": "status", "state": "none"})
+        c.send_json({"type": "start"})
+        self.assertEqual(c.recv_json(), {"type": "error", "message": message})
+        self.assertFalse(self.session.running())
+        refused = [e for e in _audit_events(self.ctx) if e["event"] == "bootmenu_refused"]
+        self.assertEqual([e["reason"] for e in refused], [message])
+        self.assertNotIn("bootmenu_start", [e["event"] for e in _audit_events(self.ctx)])
+
+    def test_start_refused_while_fix_lock_held(self):
+        from nfupgrader import api
+        self.assertTrue(api._FIX_LOCK.acquire(False))
+        try:
+            self._refused("a check fix or launch is in progress")
+        finally:
+            api._FIX_LOCK.release()
+
+    def test_start_refused_within_launch_grace(self):
+        from nfupgrader import api
+        self.ctx.state["launched_at"] = api._now() - 5
+        self._refused("an upgrade or install was just launched")
+
+    def test_start_allowed_after_launch_grace(self):
+        from nfupgrader import api
+        self.ctx.state["launched_at"] = api._now() - api.FIX_LAUNCH_GRACE - 1
+        c = self.connect()
+        c.recv_json()
+        c.send_json({"type": "start"})
+        c.wait_for(lambda f: f == {"type": "status", "state": "running"})
+
+    def test_start_refused_while_snapshot_runs(self):
+        with mock.patch("nfupgrader.api._snapshot_busy", return_value=True):
+            self._refused("a report snapshot is in progress")
+
+    def test_start_releases_fix_lock(self):
+        from nfupgrader import api
+        c = self.connect()
+        c.recv_json()
+        c.send_json({"type": "start"})
+        c.wait_for(lambda f: f == {"type": "status", "state": "running"})
+        self.assertFalse(api.fix_in_progress())
+
+    def test_attach_via_start_is_audited(self):
+        # M5: attaching through start writes bootmenu_attach like a reattach.
+        c = self.connect()
+        c.recv_json()
+        c.send_json({"type": "start"})
+        c.wait_for(lambda f: f == {"type": "status", "state": "running"})
+        c.close()
+        self.assertTrue(_wait_until(lambda: "bootmenu_detach" in
+                                    [e["event"] for e in _audit_events(self.ctx)]))
+        events = [e["event"] for e in _audit_events(self.ctx)]
+        self.assertEqual(events.count("bootmenu_attach"), 1, events)
+        self.assertLess(events.index("bootmenu_start"), events.index("bootmenu_attach"))
+        self.assertLess(events.index("bootmenu_attach"), events.index("bootmenu_detach"))
+
+
 class TestUnavailable(WsServerCase):
     def make_ctx(self):
         return install_ctx(self.tmp, installed=False)

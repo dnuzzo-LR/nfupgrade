@@ -115,6 +115,44 @@ class _Conn(object):
         self.sock.send_json({"type": "error", "message": message})
 
 
+def _start(session, msg, ctx):
+    """Start the session for a start message; return None, or the reason it
+    was refused.
+
+    Holds api._FIX_LOCK (non-blocking: a held lock is a refusal) from the
+    checks through session.start(), the same lock a check fix holds and a
+    launch/reset holds while spawning (and under which they re-check that the
+    boot menu is not running), so a start can't interleave with either. A
+    launch accepted in the last FIX_LAUNCH_GRACE seconds counts as running
+    (nf_upgrader shows up in pgrep only after a delay), as does a report
+    snapshot."""
+    if session is None:
+        return "the boot menu is not available"
+    if not api._FIX_LOCK.acquire(False):
+        return "a check fix or launch is in progress"
+    try:
+        if session.running():
+            return "a boot menu session is already running"
+        state = ctx.state if isinstance(ctx.state, dict) else {}
+        launched_at = state.get("launched_at")
+        if launched_at is not None and api._now() - launched_at < api.FIX_LAUNCH_GRACE:
+            return "an upgrade or install was just launched"
+        if api._snapshot_busy(ctx):
+            return "a report snapshot is in progress"
+        avail = api.bootmenu_availability(ctx)
+        if not avail["available"]:
+            return avail["reason"]
+        cols = _dim(msg.get("cols")) or 80
+        rows = _dim(msg.get("rows")) or 24
+        try:
+            session.start(cols, rows)
+        except RuntimeError as exc:
+            return str(exc)
+        return None
+    finally:
+        api._FIX_LOCK.release()
+
+
 def _handle(conn, msg, session, ctx, client_ip):
     """Act on one decoded client message. Ignored once another browser has
     taken over this connection (it is being closed)."""
@@ -122,30 +160,16 @@ def _handle(conn, msg, session, ctx, client_ip):
         return
     kind = msg.get("type")
     if kind == "start":
-        avail = api.bootmenu_availability(ctx)
-        if session is None:
-            reason = "the boot menu is not available"
-        elif session.running():
-            reason = "a boot menu session is already running"
-        elif not avail["available"]:
-            reason = avail["reason"]
-        else:
-            reason = None
+        reason = _start(session, msg, ctx)
         if reason:
             ctx.audit.record("bootmenu_refused", reason=reason, client=client_ip)
             conn.error(reason)
             return
-        cols = _dim(msg.get("cols")) or 80
-        rows = _dim(msg.get("rows")) or 24
-        try:
-            session.start(cols, rows)
-        except RuntimeError as exc:
-            ctx.audit.record("bootmenu_refused", reason=str(exc), client=client_ip)
-            conn.error(str(exc))
-            return
         ctx.audit.record("bootmenu_start", client=client_ip)
         # start() already sent "running" to us if we are the attached client.
         if not conn.attached():
+            # Audited first, as on connect, so it precedes what the browser sees.
+            ctx.audit.record("bootmenu_attach", client=client_ip)
             conn.token = session.attach(conn.send)
         return
     if kind in ("input", "resize"):

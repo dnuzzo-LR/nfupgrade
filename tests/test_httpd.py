@@ -275,6 +275,32 @@ class TestLaunchSideEffect(unittest.TestCase):
         self.assertEqual(held, [True, True])
         self.assertFalse(api.fix_in_progress())
 
+    def test_refused_while_boot_menu_open(self):
+        # I1: re-checked under the fix lock, so a boot menu started after the
+        # dispatcher's check still stops the spawn.
+        class Running(object):
+            def running(self):
+                return api.fix_in_progress()   # only true when asked under the lock
+
+        def begin(*a, **kw):
+            raise AssertionError("before snapshot must not start with the boot menu open")
+        results = []
+        for runner, mode in ((None, "stage"), (FakeRunner(), "upgrade")):
+            ctx = launch_ctx(self.tmp, runner=runner)._replace(state={"bootmenu": Running()})
+            results.append(httpd.launch_side_effect(ctx, mode, "ip", perform=self.perform,
+                                                    begin=begin))
+            self.assertNotIn("launched_at", ctx.state)
+        inst = []
+        ctx = launch_ctx(self.tmp)._replace(state={"bootmenu": Running()})
+        results.append(httpd.reset_side_effect(ctx, "ip", perform_inst=lambda c, a: inst.append(a)))
+        self.assertEqual(results, [(409, {"error": "the boot menu is open"})] * 3)
+        self.assertEqual(self.performed, [])
+        self.assertEqual(inst, [])
+        self.assertFalse(api.fix_in_progress())
+        rej = [json.loads(l) for l in open(os.path.join(self.tmp, "audit.jsonl"))]
+        self.assertEqual([(e["event"], e["reason"]) for e in rej],
+                         [("launch_rejected", "the boot menu is open")] * 3)
+
     def test_no_state_dict_does_not_pass_on_error_or_raise(self):
         seen = {}
 
