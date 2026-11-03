@@ -172,14 +172,19 @@ There is never a shell prompt: when the menu exits, the session ends.
   offers **Reconnect** (it never takes the session back by itself).
 - **Reattach.** Closing the tab or the browser does not end the session. Showing the
   tab again reconnects and replays the recent screen output (256 KiB of
-  scrollback).
-- **End session** kills the menu and whatever it is running. If a boot or shutdown
-  appears to be in progress, the confirmation says so — ending it then can leave
-  netFLEX half up or half down.
+  scrollback) — of a running session, and also the output of an ended session,
+  which stays viewable (with its exit code) until **Open boot menu** starts a new
+  one.
+- **End session** kills only the menu's own processes (`su`, `new_boot_nms`,
+  `boot_nms`). Anything the menu already started, such as boot or shutdown
+  scripts, is not killed and may keep running. If a boot or shutdown appears to be
+  in progress, the confirmation says so — ending it then can leave netFLEX half up
+  or half down.
 - **Tool stop.** Stopping or restarting the tool (Ctrl-C / SIGTERM) ends the boot
   menu session; a SIGHUP (e.g. the ssh session that started the tool dropping) does
   not. If the tool died without ending it, the next run finds the *leftover* menu
-  and the tab offers **End it**.
+  and the tab offers **End it**, which likewise kills only the leftover
+  `new_boot_nms` / `boot_nms` processes.
 - **Browser.** The terminal needs **Firefox 115** or newer (or a current
   Chromium-based browser); in an older browser the tab says the terminal could not
   load. The rest of the UI is unaffected.

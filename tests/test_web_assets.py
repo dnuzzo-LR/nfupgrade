@@ -3,6 +3,7 @@ import re
 import unittest
 
 WEB = os.path.join(os.path.dirname(os.path.dirname(__file__)), "nfupgrader", "web")
+README = os.path.join(os.path.dirname(os.path.dirname(__file__)), "README.md")
 
 REQUIRED_IDS = [
     "host", "app-badge", "phase", "status", "bar-fill", "counter", "current",
@@ -353,6 +354,42 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn("term.reset()", self.js)
         # detached: no automatic reconnect, say why
         self.assertIn('"Opened in another tab"', self.js)
+
+    def test_bootmenu_ended_scrollback_viewable(self):
+        # Showing the tab attaches to an ended session too (replay + "Session
+        # ended"), without starting a new one; Open then starts it.
+        self.assertIn("bm.showAttach = true", self._fn("bootMenuShown"))
+        refresh = self._fn("refreshBootMenu")
+        self.assertIn('bm.state === "ended" && bm.showAttach', refresh)
+        self.assertIn("bm.wantStart = false", refresh)
+        readme = " ".join(open(README, encoding="utf-8").read().split())
+        self.assertIn("Showing the tab again reconnects", readme)
+        self.assertIn("output of an ended session, which stays viewable", readme)
+
+    def test_bootmenu_detached_cleared_when_not_running(self):
+        self.assertIn('bm.detached && bm.state !== "running"', self._fn("refreshBootMenu"))
+
+    def test_bootmenu_end_wording_is_exact(self):
+        # The server kills only the menu's own processes; what the menu started
+        # is not killed. Nothing may claim otherwise.
+        readme = " ".join(open(README, encoding="utf-8").read().split())
+        for text in (self.js, readme):
+            self.assertNotIn("anything it is running", text)
+            self.assertNotIn("anything the menu is running", text)
+            self.assertNotIn("whatever it is running", text)
+        self.assertIn("is not killed and may keep running", self.js)
+        self.assertIn("is not killed and may keep running", readme)
+
+    def test_bootmenu_end_status_error_shown(self):
+        end = self._fn("endBootMenu")
+        self.assertIn("}, function (status) {", end)
+        self.assertIn("not ended", end)
+
+    def test_bootmenu_loaderr_shown_without_a_click(self):
+        render = self._fn("renderBootMenu")
+        self.assertIn("xtermMissing()", render)
+        self.assertIn('"bootmenu-loaderr"', render)
+        self.assertIn('typeof Terminal === "undefined"', self._fn("xtermMissing"))
 
     def test_es5_only(self):
         # ES5-only per project constraints: no arrow functions, let/const, or

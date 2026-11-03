@@ -1065,6 +1065,8 @@ var bm = {
   wantStart: false,  // the user clicked Open: send start once the server says none/ended
   detached: false,   // another tab took the session over: do not reconnect by ourselves
   autoFailed: false, // an automatic reattach was refused: wait for a click
+  showAttach: false, // the tab was just shown: the next poll may attach to an ended session
+  loadFailed: false, // the terminal could not be created in this browser
   msg: "",           // error from the server (or a dropped connection) for the status line
   msgState: ""       // bm.state when msg was set: a later state change clears msg
 };
@@ -1092,12 +1094,17 @@ function cssVar(name, dflt) {
   return v || dflt;
 }
 
+// xterm.js did not load (or does not parse) in this browser.
+function xtermMissing() {
+  return typeof Terminal === "undefined" || typeof FitAddon === "undefined";
+}
+
 // Create the terminal once. False (and the load-error notice) if xterm.js did not
 // load or does not run in this browser.
 function ensureBootMenuTerm() {
   if (bm.term) return true;
   var err = document.getElementById("bootmenu-loaderr");
-  if (typeof Terminal === "undefined" || typeof FitAddon === "undefined") {
+  if (xtermMissing()) {
     err.style.display = "block";
     return false;
   }
@@ -1121,6 +1128,7 @@ function ensureBootMenuTerm() {
     term.loadAddon(fit);
     term.open(document.getElementById("bootmenu-term"));
   } catch (e) {
+    bm.loadFailed = true;
     wrap.style.display = "none";
     err.style.display = "block";
     return false;
@@ -1274,7 +1282,10 @@ function renderBootMenu() {
   open.style.display = connected && running ? "none" : "";
   setTextIfChanged("btn-bootmenu-open",
     running || bm.detached ? "Reconnect" : "Open boot menu");
-  open.disabled = !running && !(bm.status && d.available);
+  // No terminal in this browser: say so as soon as the tab is shown, not on a click.
+  var noTerm = !bm.term && (bm.loadFailed || xtermMissing());
+  document.getElementById("bootmenu-loaderr").style.display = noTerm ? "block" : "none";
+  open.disabled = noTerm || (!running && !(bm.status && d.available));
   document.getElementById("btn-bootmenu-end").style.display = running ? "" : "none";
   var leftover = !running && d.other === "leftover";
   document.getElementById("bootmenu-other").style.display = leftover ? "block" : "none";
@@ -1304,19 +1315,34 @@ function refreshBootMenu() {
       if (bm.state === "ended") bm.exitCode = session.exit_code;
     }
     if (bm.msg && bm.state !== bm.msgState) bm.msg = "";
-    if (bm.state === "running" && !bm.ws && !bm.detached && !bm.autoFailed &&
+    // The session another tab took over has ended (or gone): nothing to reconnect
+    // to, so Open is plain Open again (it starts a new session).
+    if (bm.detached && bm.state !== "running") bm.detached = false;
+    // Attach without starting: to a running session on any poll, to an ended one
+    // only when the tab has just been shown (so its output stays viewable after a
+    // reload without two tabs taking an ended session from each other forever).
+    var attach = bm.state === "running" || (bm.state === "ended" && bm.showAttach);
+    if (bootMenuActive()) bm.showAttach = false;
+    if (attach && !bm.ws && !bm.detached && !bm.autoFailed &&
         bootMenuActive() && ensureBootMenuTerm()) {
       bm.wantStart = false;
-      connectBootMenu();   // reattach; the replay arrives first
+      connectBootMenu();   // the replay arrives first, then the status
     }
     renderBootMenu();
   });
 }
 
 function bootMenuShown() {
+  bm.showAttach = true;
   fitBootMenu();
   refreshBootMenu();
 }
+
+// What End session really does (bootmenu.BootMenuSession.end): SIGKILL only the
+// menu's own processes, never what the menu started.
+var BOOTMENU_END_SCOPE = "Only the menu's own processes (su, new_boot_nms, boot_nms) are " +
+  "killed. Anything the menu already started, such as boot or shutdown scripts, " +
+  "is not killed and may keep running.";
 
 function endBootMenu() {
   // Fresh status, so the warning reflects what the menu is doing now.
@@ -1326,8 +1352,8 @@ function endBootMenu() {
       title: "End the boot menu session on " + thisHost() + "?",
       body: d.busy
         ? "A boot or shutdown appears to be in progress. Ending it now can leave netFLEX half up or half down." +
-          "\n\nEnd the session anyway?"
-        : "This ends the boot menu and anything it is running on " + thisHost() + ".",
+          "\n\n" + BOOTMENU_END_SCOPE + "\n\nEnd the session anyway?"
+        : "This ends the boot menu on " + thisHost() + ".\n\n" + BOOTMENU_END_SCOPE,
       ok: "End session",
       danger: true
     }, function () {
@@ -1336,6 +1362,9 @@ function endBootMenu() {
         refreshBootMenu();
       });
     });
+  }, function (status) {
+    setBootMenuMsg("Could not check the boot menu (HTTP " + status + "); not ended.");
+    renderBootMenu();
   });
 }
 
@@ -1344,8 +1373,9 @@ function endBootMenuLeftover() {
   showConfirm({
     title: "End the leftover boot menu on " + thisHost() + "?",
     body: "A boot menu started by an earlier run of this tool is still running" +
-      (pids ? " (pid " + pids + ")" : "") + ". Ending it kills those processes and " +
-      "anything the menu is running.",
+      (pids ? " (pid " + pids + ")" : "") + ". Ending it kills only those boot menu " +
+      "processes (new_boot_nms, boot_nms). Anything the menu already started, such as " +
+      "boot or shutdown scripts, is not killed and may keep running.",
     ok: "End it",
     danger: true
   }, function () {
