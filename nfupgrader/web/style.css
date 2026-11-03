@@ -156,3 +156,18 @@ span.hard { color: var(--err); font-size: 12px; font-weight: 600; white-space: n
 .preview-banner { background: #fff3cd; color: #664d03; border-bottom: 2px solid #ffc107;
   padding: .4rem 1rem; font-size: 14px; }
 .preview-banner label { margin-left: 1rem; }
+
+/* Boot menu tab (xterm.js). The terminal colours are read by app.js from these
+   variables; they match the log console. */
+:root { --term-bg: #0f1720; --term-fg: #d7e0ea; --term-cursor: #e9c46a;
+  --term-sel: rgba(185, 196, 207, .35); }
+.tab.greyed { color: #a3adb8; cursor: not-allowed; }
+.tab.greyed:hover { color: #a3adb8; }
+.bootmenu-bar { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+  margin-bottom: .6rem; }
+.bootmenu-status { flex: 1; min-width: 14rem; font-weight: 600; }
+#bootmenu-other button { margin-left: .6rem; }
+.bootmenu-wrap { background: var(--term-bg); padding: .5rem; border-radius: var(--radius); }
+.bootmenu-wrap.inactive { opacity: .55; }
+#bootmenu-term { height: 60vh; min-height: 300px; }
+#bootmenu-note { margin: .6rem 0 0; font-size: 13px; }

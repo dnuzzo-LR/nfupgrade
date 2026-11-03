@@ -154,6 +154,42 @@ Use the picker in the yellow banner to switch between *Before install*, *Install
 running*, *Install failed* (failure panel, Resume/Reset) and *Install complete*
 (done banner). Nothing is installed, reset or fixed in preview mode.
 
+## Boot menu
+
+The **Boot menu** tab runs netFLEX's boot menu (`/usr/cnc/bin/new_boot_nms`, as
+user `cmm`, on a real terminal) in the browser, so the application can be booted
+or shut down without a separate login. The terminal is xterm.js; it talks to the
+tool over the `/ws/bootmenu` WebSocket (same login cookie as the rest of the UI).
+There is never a shell prompt: when the menu exits, the session ends.
+
+- **Availability.** The tab is greyed out when netFLEX is not installed on this
+  host, and in preview mode. It opens but shows why the menu can't start while an
+  install or upgrade is running, or while someone else (e.g. a console login) is
+  running the boot menu. Install/upgrade launches are refused while the boot menu
+  is open.
+- **One session, one browser.** The tool runs at most one boot menu session. Opening
+  it in a second tab takes it over; the first tab says *Opened in another tab* and
+  offers **Reconnect** (it never takes the session back by itself).
+- **Reattach.** Closing the tab or the browser does not end the session. Showing the
+  tab again reconnects and replays the recent screen output (256 KiB of
+  scrollback).
+- **End session** kills the menu and whatever it is running. If a boot or shutdown
+  appears to be in progress, the confirmation says so — ending it then can leave
+  netFLEX half up or half down.
+- **Tool stop.** Stopping or restarting the tool (Ctrl-C / SIGTERM) ends the boot
+  menu session; a SIGHUP (e.g. the ssh session that started the tool dropping) does
+  not. If the tool died without ending it, the next run finds the *leftover* menu
+  and the tab offers **End it**.
+- **Browser.** The terminal needs **Firefox 115** or newer (or a current
+  Chromium-based browser); in an older browser the tab says the terminal could not
+  load. The rest of the UI is unaffected.
+- **Audit.** Start, attach, detach, end (and refused starts) are recorded in
+  `nfupgrader_audit.jsonl`; keystrokes are never recorded.
+
+xterm.js (`xterm.js`, `xterm.css`, `addon-fit.js`) is vendored unmodified under
+`nfupgrader/web/xterm/` (MIT, see `nfupgrader/web/xterm/LICENSE`); no external
+resources are loaded.
+
 ## Testing
 
 ```sh

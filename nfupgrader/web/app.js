@@ -81,6 +81,7 @@ function initTabs() {
     tabs.forEach(function (t) { t.classList.toggle("active", t.getAttribute("data-tab") === name); });
     panels.forEach(function (p) { p.classList.toggle("active", p.id === "tab-" + name); });
     try { localStorage.setItem("nfu_tab", name); } catch (e) {}
+    if (name === "bootmenu") bootMenuShown();
   }
   showTab = show;
   tabs.forEach(function (t) { t.onclick = function () { show(t.getAttribute("data-tab")); }; });
@@ -1050,6 +1051,311 @@ function loadDepots() {
   });
 }
 
+// ---- Boot menu tab: netFLEX's boot menu in an xterm.js terminal over /ws/bootmenu.
+// The server owns the session (one per tool process, one attached browser); this
+// page only attaches to it, starts it on request, and shows what the server says.
+var bm = {
+  term: null,        // xterm.js Terminal, created on first open
+  fit: null,         // its FitAddon
+  ws: null,          // the open WebSocket, or null
+  wsOpened: false,   // bm.ws has connected (a socket that never opens was refused)
+  status: null,      // last /api/bootmenu/status response
+  state: "none",     // session state: from the socket while connected, else the poll
+  exitCode: null,    // exit code of the ended session
+  wantStart: false,  // the user clicked Open: send start once the server says none/ended
+  detached: false,   // another tab took the session over: do not reconnect by ourselves
+  autoFailed: false, // an automatic reattach was refused: wait for a click
+  msg: "",           // error from the server (or a dropped connection) for the status line
+  msgState: ""       // bm.state when msg was set: a later state change clears msg
+};
+
+function setBootMenuMsg(text) {
+  bm.msg = text;
+  bm.msgState = bm.state;
+}
+
+function bootMenuActive() {
+  return document.getElementById("tab-bootmenu").classList.contains("active");
+}
+
+function bootMenuConnected() {
+  return !!(bm.ws && bm.wsOpened && bm.ws.readyState === 1);
+}
+
+function bootMenuSend(frame) {
+  if (bootMenuConnected()) bm.ws.send(JSON.stringify(frame));
+}
+
+function cssVar(name, dflt) {
+  var v = window.getComputedStyle(document.documentElement).getPropertyValue(name);
+  v = v ? v.trim() : "";
+  return v || dflt;
+}
+
+// Create the terminal once. False (and the load-error notice) if xterm.js did not
+// load or does not run in this browser.
+function ensureBootMenuTerm() {
+  if (bm.term) return true;
+  var err = document.getElementById("bootmenu-loaderr");
+  if (typeof Terminal === "undefined" || typeof FitAddon === "undefined") {
+    err.style.display = "block";
+    return false;
+  }
+  var wrap = document.getElementById("bootmenu-wrap");
+  wrap.style.display = "block";   // xterm measures its host: it must be visible
+  try {
+    var term = new Terminal({
+      cursorBlink: true,
+      fontFamily: cssVar("--mono", "monospace"),
+      fontSize: 13,
+      scrollback: 5000,
+      theme: {
+        background: cssVar("--term-bg", "#0f1720"),
+        foreground: cssVar("--term-fg", "#d7e0ea"),
+        cursor: cssVar("--term-cursor", "#e9c46a"),
+        cursorAccent: cssVar("--term-bg", "#0f1720"),
+        selectionBackground: cssVar("--term-sel", "rgba(185, 196, 207, .35)")
+      }
+    });
+    var fit = new FitAddon.FitAddon();
+    term.loadAddon(fit);
+    term.open(document.getElementById("bootmenu-term"));
+  } catch (e) {
+    wrap.style.display = "none";
+    err.style.display = "block";
+    return false;
+  }
+  err.style.display = "none";
+  bm.term = term;
+  bm.fit = fit;
+  // Keystrokes go to the menu only while the session runs (the server refuses
+  // input otherwise); a fit that changes the size tells the PTY.
+  term.onData(function (data) {
+    if (bm.state === "running") bootMenuSend({ type: "input", data: data });
+  });
+  term.onResize(function (size) {
+    if (bm.state === "running") bootMenuSend({ type: "resize", cols: size.cols, rows: size.rows });
+  });
+  window.addEventListener("resize", fitBootMenu);
+  fitBootMenu();
+  return true;
+}
+
+function fitBootMenu() {
+  if (!bm.fit || !bootMenuActive()) return;
+  try { bm.fit.fit(); } catch (e) {}
+}
+
+// Open (or reattach to) the session over a new socket. The server answers with the
+// scrollback replay and the status, or status "none"; start is sent from there.
+function connectBootMenu() {
+  var proto = location.protocol === "https:" ? "wss://" : "ws://";
+  var ws;
+  try {
+    ws = new WebSocket(proto + location.host + "/ws/bootmenu");
+  } catch (e) {
+    setBootMenuMsg("Could not connect: " + e.message);
+    renderBootMenu();
+    return;
+  }
+  bm.ws = ws;
+  bm.wsOpened = false;
+  ws.onopen = function () {
+    if (bm.ws !== ws) return;
+    bm.wsOpened = true;
+    bm.autoFailed = false;
+  };
+  ws.onmessage = function (ev) {
+    if (bm.ws !== ws) return;
+    var m;
+    try { m = JSON.parse(ev.data); } catch (e) { return; }
+    if (m && typeof m === "object") bootMenuFrame(m);
+  };
+  ws.onclose = function () {
+    if (bm.ws !== ws) return;
+    bm.ws = null;
+    bm.wantStart = false;
+    if (!bm.wsOpened) {
+      bm.autoFailed = true;
+      if (!bm.detached) setBootMenuMsg("Could not connect to the boot menu (reload the page if this persists).");
+    } else if (!bm.detached && bm.state === "running") {
+      setBootMenuMsg("Disconnected from the boot menu.");
+    }
+    renderBootMenu();
+  };
+  renderBootMenu();
+}
+
+function bootMenuStart() {
+  bm.wantStart = false;
+  bm.term.reset();
+  fitBootMenu();
+  bootMenuSend({ type: "start", cols: bm.term.cols, rows: bm.term.rows });
+}
+
+function bootMenuFrame(m) {
+  if (m.type === "output") {
+    if (m.replay) bm.term.reset();   // the replay is the whole scrollback
+    bm.term.write(String(m.data == null ? "" : m.data));
+  } else if (m.type === "status") {
+    bm.state = m.state;
+    if (m.state === "running") {
+      setBootMenuMsg("");
+      // Size the PTY to this browser (another tab may have had another size).
+      fitBootMenu();
+      bootMenuSend({ type: "resize", cols: bm.term.cols, rows: bm.term.rows });
+      bm.term.focus();
+    } else {
+      if (m.state === "ended") bm.exitCode = m.exit_code;
+      if (bm.wantStart) bootMenuStart();
+    }
+    renderBootMenu();
+    refreshBootMenu();
+  } else if (m.type === "exit") {
+    bm.state = "ended";
+    bm.exitCode = m.code;
+    renderBootMenu();
+    refreshBootMenu();
+  } else if (m.type === "detached") {
+    // Opened in another tab: the server closes this socket. Stay off until the
+    // user clicks Reconnect, or the two tabs would keep taking it from each other.
+    bm.detached = true;
+    setBootMenuMsg("");
+    renderBootMenu();
+  } else if (m.type === "error") {
+    bm.wantStart = false;
+    setBootMenuMsg("Error: " + m.message);
+    renderBootMenu();
+  }
+}
+
+// Open boot menu / Reconnect.
+function openBootMenu() {
+  setBootMenuMsg("");
+  bm.detached = false;
+  bm.autoFailed = false;
+  if (!ensureBootMenuTerm()) return;
+  var running = bm.state === "running";
+  if (bootMenuConnected()) {
+    if (!running) bootMenuStart();   // the old session ended; start a new one
+    return;
+  }
+  bm.wantStart = !running;
+  if (!bm.ws) connectBootMenu();
+}
+
+function bootMenuStatusText() {
+  var d = bm.status || {};
+  if (bm.detached) return "Opened in another tab";
+  if (bm.msg) return bm.msg;
+  if (bm.state === "running") {
+    return "Boot menu running" + (bootMenuConnected() ? "" : " (not connected)") +
+      (d.busy ? " — a boot or shutdown appears to be in progress" : "");
+  }
+  if (bm.state === "ended") {
+    return "Session ended" + (bm.exitCode === null || bm.exitCode === undefined
+      ? "" : " (exit " + bm.exitCode + ")");
+  }
+  if (!bm.status) return "Checking…";
+  if (!d.available) {
+    return "Not available: " + (d.reason || "unknown") +
+      (d.other === "foreign" && (d.other_pids || []).length
+        ? " (pid " + d.other_pids.join(", ") + ")" : "");
+  }
+  return "Not running. Open boot menu starts netFLEX's boot menu on this host.";
+}
+
+function renderBootMenu() {
+  var d = bm.status || {};
+  var running = bm.state === "running";
+  var connected = bootMenuConnected();
+  setTextIfChanged("bootmenu-status", bootMenuStatusText());
+  var open = document.getElementById("btn-bootmenu-open");
+  open.style.display = connected && running ? "none" : "";
+  setTextIfChanged("btn-bootmenu-open",
+    running || bm.detached ? "Reconnect" : "Open boot menu");
+  open.disabled = !running && !(bm.status && d.available);
+  document.getElementById("btn-bootmenu-end").style.display = running ? "" : "none";
+  var leftover = !running && d.other === "leftover";
+  document.getElementById("bootmenu-other").style.display = leftover ? "block" : "none";
+  if (leftover) {
+    setTextIfChanged("bootmenu-other-text", "A boot menu from an earlier run of this tool " +
+      "is still running on this host" +
+      ((d.other_pids || []).length ? " (pid " + d.other_pids.join(", ") + ")" : "") + ".");
+  }
+  var wrap = document.getElementById("bootmenu-wrap");
+  wrap.style.display = bm.term ? "block" : "none";
+  wrap.classList.toggle("inactive", !(connected && running));
+}
+
+function refreshBootMenu() {
+  getJSON("/api/bootmenu/status", function (d) {
+    bm.status = d;
+    var tab = document.getElementById("tab-btn-bootmenu");
+    // Greyed only when netFLEX is not installed or in preview mode; any other
+    // reason is shown in the panel (the tab stays clickable).
+    tab.disabled = !!d.greyed;
+    tab.classList.toggle("greyed", !!d.greyed);
+    tab.title = d.greyed ? d.reason || "" : "";
+    if (d.greyed && bootMenuActive() && showTab) showTab("overview");
+    var session = d.session || {};
+    if (!bm.ws) {
+      bm.state = session.state || "none";
+      if (bm.state === "ended") bm.exitCode = session.exit_code;
+    }
+    if (bm.msg && bm.state !== bm.msgState) bm.msg = "";
+    if (bm.state === "running" && !bm.ws && !bm.detached && !bm.autoFailed &&
+        bootMenuActive() && ensureBootMenuTerm()) {
+      bm.wantStart = false;
+      connectBootMenu();   // reattach; the replay arrives first
+    }
+    renderBootMenu();
+  });
+}
+
+function bootMenuShown() {
+  fitBootMenu();
+  refreshBootMenu();
+}
+
+function endBootMenu() {
+  // Fresh status, so the warning reflects what the menu is doing now.
+  getJSON("/api/bootmenu/status", function (d) {
+    bm.status = d;
+    showConfirm({
+      title: "End the boot menu session on " + thisHost() + "?",
+      body: d.busy
+        ? "A boot or shutdown appears to be in progress. Ending it now can leave netFLEX half up or half down." +
+          "\n\nEnd the session anyway?"
+        : "This ends the boot menu and anything it is running on " + thisHost() + ".",
+      ok: "End session",
+      danger: true
+    }, function () {
+      postJSON("/api/bootmenu/end", {}, function (status, body) {
+        if (status !== 200) setBootMenuMsg("Not ended: " + (body.error || status));
+        refreshBootMenu();
+      });
+    });
+  });
+}
+
+function endBootMenuLeftover() {
+  var pids = ((bm.status || {}).other_pids || []).join(", ");
+  showConfirm({
+    title: "End the leftover boot menu on " + thisHost() + "?",
+    body: "A boot menu started by an earlier run of this tool is still running" +
+      (pids ? " (pid " + pids + ")" : "") + ". Ending it kills those processes and " +
+      "anything the menu is running.",
+    ok: "End it",
+    danger: true
+  }, function () {
+    postJSON("/api/bootmenu/end-leftover", {}, function (status, body) {
+      setBootMenuMsg(status === 200 ? "" : "Not ended: " + (body.error || status));
+      refreshBootMenu();
+    });
+  });
+}
+
 // Tabs first, so a failure in a later binding can't leave the user stuck on one tab.
 initTabs();
 
@@ -1098,6 +1404,9 @@ document.getElementById("not-installed-cfg").onclick = function (ev) {
   if (showTab) showTab("config");
 };
 document.getElementById("btn-launch").onclick = launch;
+document.getElementById("btn-bootmenu-open").onclick = openBootMenu;
+document.getElementById("btn-bootmenu-end").onclick = endBootMenu;
+document.getElementById("btn-bootmenu-end-leftover").onclick = endBootMenuLeftover;
 document.getElementById("modal-ok").onclick = function () { closeModal(true); };
 document.getElementById("modal-cancel").onclick = function () { closeModal(false); };
 document.getElementById("modal").onclick = function (ev) {
@@ -1184,6 +1493,7 @@ refreshSite();
 refreshPostflight();
 refreshReports();
 refreshReportsJob();
+refreshBootMenu();
 setInterval(refreshProgress, 2000);
 setInterval(refreshInstall, 2000);
 setInterval(refreshLive, 2000);
@@ -1193,3 +1503,4 @@ setInterval(refreshSite, 15000);
 setInterval(refreshPostflight, 15000);
 setInterval(refreshReportsJob, 3000);
 setInterval(refreshReports, 30000);
+setInterval(refreshBootMenu, 3000);

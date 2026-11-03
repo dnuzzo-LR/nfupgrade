@@ -18,6 +18,9 @@ REQUIRED_IDS = [
     "not-installed", "install-failed", "install-fatal", "install-trace",
     "btn-install-resume", "btn-install-reset", "install-done", "btn-install-continue",
     "tab-btn-upgrade",
+    "tab-btn-bootmenu", "tab-bootmenu", "bootmenu-status", "btn-bootmenu-open",
+    "btn-bootmenu-end", "bootmenu-other", "btn-bootmenu-end-leftover", "bootmenu-term",
+    "bootmenu-note", "bootmenu-loaderr",
 ]
 
 
@@ -310,6 +313,46 @@ class TestWebAssets(unittest.TestCase):
         fn = self._fn("renderIssues")
         for part in ("esc(i.level)", "esc(i.field)", "esc(i.message)"):
             self.assertIn(part, fn)
+
+    def test_bootmenu_tab_and_vendored_xterm(self):
+        self.assertIn('<button class="tab" data-tab="bootmenu" id="tab-btn-bootmenu">'
+                      'Boot menu</button>', self.html)
+        # after the Log tab
+        self.assertLess(self.html.index('data-tab="log"'), self.html.index('data-tab="bootmenu"'))
+        for name in ("xterm.js", "xterm.css", "addon-fit.js", "LICENSE"):
+            self.assertTrue(os.path.isfile(os.path.join(WEB, "xterm", name)), name)
+        lic = open(os.path.join(WEB, "xterm", "LICENSE"), encoding="utf-8").read()
+        self.assertTrue("MIT" in lic or "Permission is hereby granted" in lic)
+        self.assertIn('<link rel="stylesheet" href="/xterm/xterm.css">', self.html)
+        app = self.html.index('<script src="/app.js">')
+        self.assertLess(self.html.index('<script src="/xterm/xterm.js"></script>'), app)
+        self.assertLess(self.html.index('<script src="/xterm/addon-fit.js"></script>'), app)
+        panel = self.html.split('id="tab-bootmenu"', 1)[1].split("</section>", 1)[0]
+        self.assertIn(">Open boot menu</button>", panel)
+        self.assertIn(">End session</button>", panel)
+        self.assertIn(">End it</button>", panel)
+        self.assertIn("Restarting this tool ends the boot menu session.", panel)
+        self.assertIn("The terminal could not load in this browser "
+                      "(Firefox 115 or newer is needed).", panel)
+        self.assertNotIn("<iframe", self.html)
+
+    def test_bootmenu_glue(self):
+        for s in ("function openBootMenu(", '"/ws/bootmenu"', '"/api/bootmenu/status"',
+                  'typeof Terminal === "undefined"', '"/api/bootmenu/end"',
+                  '"/api/bootmenu/end-leftover"', "new FitAddon.FitAddon()",
+                  "setInterval(refreshBootMenu"):
+            self.assertIn(s, self.js, "missing %r" % s)
+        refresh = self._fn("refreshBootMenu")
+        self.assertIn("greyed", refresh)
+        self.assertIn('d.other === "leftover"', self._fn("renderBootMenu"))
+        end = self._fn("endBootMenu")
+        self.assertIn("showConfirm(", end)
+        self.assertIn("A boot or shutdown appears to be in progress. Ending it now can leave "
+                      "netFLEX half up or half down.", self.js)
+        # a replayed scrollback starts from a clean terminal
+        self.assertIn("term.reset()", self.js)
+        # detached: no automatic reconnect, say why
+        self.assertIn('"Opened in another tab"', self.js)
 
     def test_es5_only(self):
         # ES5-only per project constraints: no arrow functions, let/const, or
