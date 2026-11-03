@@ -109,7 +109,10 @@ class WebSocket(object):
         self.wfile = wfile
         self.closed = False
         self._close_sent = False
-        self._lock = threading.Lock()
+        # RLock: close() nests a call to _send_frame() under its own
+        # acquisition of this same lock, so the check-and-set of
+        # _close_sent and the write it guards are atomic (see close()).
+        self._lock = threading.RLock()
 
     def _read_exact(self, n):
         """Read exactly n bytes from rfile, looping on short reads. Returns
@@ -192,15 +195,20 @@ class WebSocket(object):
             fin, opcode, payload = frame
 
             if opcode == OP_CLOSE:
-                if not self._close_sent:
-                    # RFC 6455 5.5.1: echo a Close frame if we haven't
-                    # already sent one, using the received status code
-                    # when present.
-                    if len(payload) >= 2:
-                        (code,) = struct.unpack("!H", payload[:2])
-                    else:
-                        code = 1000
+                # RFC 6455 5.5.1: echo a Close frame if we haven't already
+                # sent one, using the received status code when present.
+                # The peer may have already torn down the socket (e.g. it
+                # closed right after sending its Close frame); a failed
+                # echo must not raise out of recv() -- the session is
+                # ending either way.
+                if len(payload) >= 2:
+                    (code,) = struct.unpack("!H", payload[:2])
+                else:
+                    code = 1000
+                try:
                     self.close(code)
+                except OSError:
+                    pass
                 self.closed = True
                 return None
             elif opcode == OP_PING:
@@ -245,9 +253,15 @@ class WebSocket(object):
     def close(self, code=1000):
         """Send a close frame (default: 1000, normal closure) and mark the
         connection closed. A no-op if a close frame was already sent (either
-        by an earlier call, or as the echo of a received close frame)."""
-        if self._close_sent:
-            return
-        self._send_frame(OP_CLOSE, struct.pack("!H", code))
-        self._close_sent = True
+        by an earlier call, or as the echo of a received close frame).
+
+        The check-and-set of "already sent" and the write it guards happen
+        under the same lock as all other sends, so two threads racing to
+        close (e.g. recv()'s echo and an explicit close() call) can never
+        both write a close frame."""
+        with self._lock:
+            if self._close_sent:
+                return
+            self._close_sent = True
+            self._send_frame(OP_CLOSE, struct.pack("!H", code))
         self.closed = True

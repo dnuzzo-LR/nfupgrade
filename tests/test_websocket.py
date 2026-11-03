@@ -1,4 +1,4 @@
-import io, json, struct, unittest
+import io, json, struct, threading, time, unittest
 from nfupgrader import websocket as ws
 
 def client_frame(opcode, payload, fin=True, mask=b"\x01\x02\x03\x04"):
@@ -65,6 +65,30 @@ class TestFrames(unittest.TestCase):
         frame = hdr + mask + bytes(c ^ mask[i % 4] for i, c in enumerate(payload))
         s, _ = self.sock(frame)
         with self.assertRaises(ws.ProtocolError): s.recv()
+    def test_close_echo_broken_pipe_swallowed(self):
+        class BrokenWfile(object):
+            def write(self, data):
+                raise BrokenPipeError("peer gone")
+            def flush(self):
+                pass
+        s = ws.WebSocket(io.BytesIO(client_frame(ws.OP_CLOSE, struct.pack("!H", 1000))), BrokenWfile())
+        self.assertIsNone(s.recv())  # must not raise
+        self.assertTrue(s.closed)
+    def test_concurrent_close_sends_once(self):
+        class SlowWfile(object):
+            def __init__(self):
+                self.buf = io.BytesIO()
+            def write(self, data):
+                time.sleep(0.02)  # widen the race window
+                self.buf.write(data)
+            def flush(self):
+                pass
+        wfile = SlowWfile()
+        s = ws.WebSocket(io.BytesIO(b""), wfile)
+        threads = [threading.Thread(target=s.close) for _ in range(5)]
+        for t in threads: t.start()
+        for t in threads: t.join()
+        self.assertEqual(wfile.buf.getvalue(), ws.encode_frame(ws.OP_CLOSE, struct.pack("!H", 1000)))
     def test_unmasked_and_oversize_rejected(self):
         s, _ = self.sock(ws.encode_frame(ws.OP_TEXT, b"x"))
         with self.assertRaises(ws.ProtocolError): s.recv()
