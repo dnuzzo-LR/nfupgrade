@@ -275,6 +275,49 @@ class TestSession(unittest.TestCase):
             wait_for(lambda: not s.running())
         self.assertFalse(s.running(), "session did not end in cleanup")
 
+    def test_on_exit_natural_exit_called_once(self):
+        calls = []
+        s = self.session(["/bin/sh", "-c", "exit 3"], on_exit=calls.append)
+        s.start()
+        self.assertTrue(wait_for(lambda: len(calls) == 1), calls)
+        self.assertEqual(calls, [{"exit_code": 3, "forced": False, "reason": None}])
+        self.assertEqual(s.state()["state"], "ended")
+
+    def test_on_exit_forced_end_records_reason(self):
+        calls = []
+        s = self.session(["cat"], kill_names={"cat"})
+        s.on_exit = calls.append
+        s.start()
+        self.assertTrue(s.end(reason="tool_stop"))
+        # end() returns only after on_exit has run
+        self.assertEqual(calls, [{"exit_code": 128 + signal.SIGKILL, "forced": True,
+                                  "reason": "tool_stop"}])
+        # the next session starts clean: a natural exit is not "forced"
+        s.argv = ["/bin/sh", "-c", "exit 0"]
+        s.start()
+        self.assertTrue(wait_for(lambda: len(calls) == 2), calls)
+        self.assertEqual(calls[1], {"exit_code": 0, "forced": False, "reason": None})
+
+    def test_on_exit_end_without_reason(self):
+        calls = []
+        s = self.session(["cat"], kill_names={"cat"}, on_exit=calls.append)
+        s.start()
+        self.assertTrue(s.end())
+        self.assertEqual(calls, [{"exit_code": 128 + signal.SIGKILL, "forced": True,
+                                  "reason": None}])
+
+    def test_on_exit_raising_does_not_break_finalisation(self):
+        def boom(info):
+            raise RuntimeError("audit failed")
+        s = self.session(["cat"], kill_names={"cat"}, on_exit=boom)
+        c = Collector()
+        s.attach(c)
+        s.start()
+        self.assertTrue(s.end())
+        self.assertEqual(s.state()["state"], "ended")
+        self.assertFalse(os.path.exists(self.pidfile))
+        self.assertTrue(wait_for(lambda: "exit" in c.types()), c.types())
+
     def test_state_none_before_start(self):
         s = self.session(["/bin/sh", "-c", "exit 0"])
         self.assertEqual(s.state(), {"state": "none", "pid": None,

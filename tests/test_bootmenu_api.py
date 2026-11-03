@@ -32,8 +32,9 @@ class StubSession(object):
     def own_pids(self):
         return self._own
 
-    def end(self):
+    def end(self, reason=None):
         self.end_calls += 1
+        self.end_reason = reason
         return True
 
 
@@ -174,11 +175,11 @@ class TestBootmenuEnd(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(data, {"ended": True})
         self.assertEqual(session.end_calls, 1)
+        self.assertIsNone(session.end_reason)
+        # The end is audited once, by the session's on_exit hook (installed by
+        # httpd), not by the API route.
         events = _audit_events(ctx)
-        ends = [e for e in events if e["event"] == "bootmenu_end"]
-        self.assertEqual(len(ends), 1)
-        self.assertEqual(ends[0]["forced"], True)
-        self.assertEqual(ends[0]["client"], "127.0.0.1")
+        self.assertEqual([e for e in events if e["event"] == "bootmenu_end"], [])
 
     def test_end_session_not_running_409(self):
         ctx = make_ctx(self.tmp, running=False)

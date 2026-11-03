@@ -36,13 +36,13 @@ class WsClient(object):
     """Minimal raw-socket WebSocket client: handshake, masked text frames out,
     unmasked frames in."""
 
-    def __init__(self, port, cookie=None, origin=None, key=None):
+    def __init__(self, port, cookie=None, origin=None, key=None, upgrade="websocket"):
         self.port = port
         self.sock = socket.create_connection(("127.0.0.1", port), timeout=DEADLINE)
         self.key = key or base64.b64encode(os.urandom(16)).decode("ascii")
         host = "127.0.0.1:{}".format(port)
         lines = ["GET /ws/bootmenu HTTP/1.1", "Host: " + host,
-                 "Upgrade: websocket", "Connection: Upgrade",
+                 "Upgrade: " + upgrade, "Connection: Upgrade",
                  "Sec-WebSocket-Version: 13", "Sec-WebSocket-Key: " + self.key]
         lines.append("Origin: " + (origin if origin is not None else "http://" + host))
         if cookie:
@@ -144,7 +144,9 @@ class WsServerCase(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
         self.ctx = self.make_ctx()
-        self.session = bootmenu.BootMenuSession(argv=MENU_ARGV, kill_names={"sh"})
+        self.session = bootmenu.BootMenuSession(
+            argv=MENU_ARGV, kill_names={"sh"},
+            on_exit=httpd.bootmenu_end_auditor(self.ctx.audit))
         self.ctx.state["bootmenu"] = self.session
         self.sid = self.ctx.auth.redeem("TOK", "127.0.0.1")
         self.server = httpd.ThreadingHTTPServer(("127.0.0.1", 0), httpd.make_handler(self.ctx))
@@ -178,6 +180,12 @@ class TestRefusal(WsServerCase):
         c = self.connect(origin="http://evil")
         self.assertTrue(c.status_line.startswith("HTTP/1.0 403"), c.status_line)
         self.assertNotIn("sec-websocket-accept", c.headers)
+
+    def test_ws_bad_upgrade_with_valid_auth_is_400(self):
+        c = self.connect(upgrade="h2c")
+        self.assertTrue(c.status_line.startswith("HTTP/1.0 400"), c.status_line)
+        self.assertNotIn("sec-websocket-accept", c.headers)
+        self.assertNotIn(b"101", c.buf)
 
     def test_refusal_function(self):
         host = "127.0.0.1:1"
@@ -287,14 +295,58 @@ class TestSession(WsServerCase):
         with open(self.ctx.audit.path) as fh:
             self.assertNotIn("sekrit", fh.read())
 
+    def _ends(self):
+        return [e for e in _audit_events(self.ctx) if e["event"] == "bootmenu_end"]
+
+    def test_natural_exit_audited_once(self):
+        c = self.connect()
+        c.recv_json()
+        c.send_json({"type": "start"})
+        c.send_json({"type": "input", "data": "a\r"})
+        c.send_json({"type": "input", "data": "b\r"})
+        c.wait_for(lambda f: f["type"] == "exit")
+        self.assertTrue(_wait_until(lambda: len(self._ends()) >= 1))
+        ends = self._ends()
+        self.assertEqual(len(ends), 1, ends)
+        self.assertEqual(ends[0]["exit_code"], 0)
+        self.assertIs(ends[0]["forced"], False)
+        self.assertIsNone(ends[0]["reason"])
+
+    def test_end_session_audited_once(self):
+        from nfupgrader import api
+        self.session.start()
+        status, _, _ = api.dispatch("POST", "/api/bootmenu/end", {}, b"{}",
+                                    {"nfu_sid": self.sid}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 200)
+        self.assertFalse(self.session.running())
+        ends = self._ends()
+        self.assertEqual(len(ends), 1, ends)
+        self.assertIs(ends[0]["forced"], True)
+        self.assertIsNone(ends[0]["reason"])
+        self.assertEqual(ends[0]["exit_code"], 128 + signal.SIGKILL)
+
     def test_shutdown_bootmenu_ends_session(self):
         self.session.start()
         self.assertTrue(self.session.running())
         httpd.shutdown_bootmenu(self.ctx)
         self.assertFalse(self.session.running())
-        ends = [e for e in _audit_events(self.ctx) if e["event"] == "bootmenu_end"]
-        self.assertEqual(len(ends), 1)
+        ends = self._ends()
+        self.assertEqual(len(ends), 1, ends)
         self.assertEqual(ends[0]["reason"], "tool_stop")
+        self.assertIs(ends[0]["forced"], True)
+        self.assertEqual(ends[0]["exit_code"], 128 + signal.SIGKILL)
+        self.assertNotIn("bootmenu_end_timeout",
+                         [e["event"] for e in _audit_events(self.ctx)])
+
+    def test_shutdown_bootmenu_timeout_audited(self):
+        self.session.start()
+        self.session.kill_names = {"nothing-matches"}
+        httpd.shutdown_bootmenu(self.ctx)
+        self.assertTrue(self.session.running())
+        self.assertIn("bootmenu_end_timeout",
+                      [e["event"] for e in _audit_events(self.ctx)])
+        self.assertEqual(self._ends(), [])
+        self.session.kill_names = {"sh"}
 
     def test_shutdown_bootmenu_noop_without_session(self):
         httpd.shutdown_bootmenu(self.ctx)
@@ -337,10 +389,54 @@ class TestTimedWriter(unittest.TestCase):
             pass
 
 
+class TestServeUntilStopped(unittest.TestCase):
+    """main()'s serve loop ends the boot menu however serve_forever exits."""
+
+    class FakeServer(object):
+        def __init__(self, exc):
+            self.exc = exc
+            self.closed = False
+
+        def serve_forever(self):
+            raise self.exc
+
+        def server_close(self):
+            self.closed = True
+
+    def run_with(self, exc):
+        server = self.FakeServer(exc)
+        old_term = signal.getsignal(signal.SIGTERM)
+        old_int = signal.getsignal(signal.SIGINT)
+        self.addCleanup(signal.signal, signal.SIGTERM, old_term)
+        self.addCleanup(signal.signal, signal.SIGINT, old_int)
+        with mock.patch("nfupgrader.httpd.shutdown_bootmenu") as sb:
+            try:
+                httpd.serve_until_stopped(server, "CTX")
+            except BaseException as e:
+                raised = e
+            else:
+                raised = None
+        sb.assert_called_once_with("CTX")
+        self.assertTrue(server.closed)
+        return raised
+
+    def test_keyboardinterrupt_is_a_clean_stop(self):
+        self.assertIsNone(self.run_with(KeyboardInterrupt()))
+
+    def test_systemexit_still_ends_menu(self):
+        self.assertIsInstance(self.run_with(SystemExit(2)), SystemExit)
+
+    def test_error_still_ends_menu(self):
+        self.assertIsInstance(self.run_with(OSError("boom")), OSError)
+
+
 class TestSignals(unittest.TestCase):
     def test_sigterm_handler_raises_keyboardinterrupt(self):
+        old_term = signal.getsignal(signal.SIGTERM)
+        self.addCleanup(signal.signal, signal.SIGTERM, old_term)
         with self.assertRaises(KeyboardInterrupt):
             httpd._on_sigterm(signal.SIGTERM, None)
+        self.assertEqual(signal.getsignal(signal.SIGTERM), signal.SIG_IGN)
 
     def test_install_signals(self):
         old_hup = signal.getsignal(signal.SIGHUP)

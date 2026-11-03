@@ -350,22 +350,52 @@ def make_handler(ctx):
     return Handler
 
 
+def bootmenu_end_auditor(audit):
+    """The BootMenuSession on_exit hook: audit every session end exactly once
+    as bootmenu_end {exit_code, forced, reason}."""
+    def on_exit(info):
+        audit.record("bootmenu_end", exit_code=info.get("exit_code"),
+                     forced=info.get("forced"), reason=info.get("reason"))
+    return on_exit
+
+
 def shutdown_bootmenu(ctx):
-    """On a deliberate stop of the tool: end the boot menu session (menu
-    processes only) if one is running, audited as bootmenu_end
-    reason="tool_stop"."""
+    """On a stop of the tool: end the boot menu session (menu processes only)
+    if one is running. The end itself is audited by on_exit (reason
+    "tool_stop"); if the session is still running afterwards, that is audited
+    as bootmenu_end_timeout."""
     session = api._bootmenu_session(ctx)
     if session is None or not session.running():
         return
-    session.end()
-    state = session.state()
-    ctx.audit.record("bootmenu_end", reason="tool_stop", exit_code=state["exit_code"])
+    session.end(reason="tool_stop")
+    if session.running():
+        ctx.audit.record("bootmenu_end_timeout", pid=session.state()["pid"])
+
+
+def serve_until_stopped(server, ctx):
+    """Run server.serve_forever(); however it exits (Ctrl-C/SIGTERM, which
+    is a clean stop, or SystemExit / an error, which propagate), end the
+    boot menu and close the server socket."""
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        # A second SIGTERM/SIGINT must not interrupt ending the menu.
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            shutdown_bootmenu(ctx)
+        finally:
+            server.server_close()
 
 
 def _on_sigterm(signum, frame):
     """SIGTERM handler: unwind serve_forever like Ctrl-C does. (Python runs
     signal handlers in the main thread only, which is the one in
-    serve_forever.)"""
+    serve_forever.) A second SIGTERM is ignored from here on, so it cannot
+    interrupt ending the boot menu."""
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
     raise KeyboardInterrupt()
 
 
@@ -432,7 +462,8 @@ def main(argv=None):
     )
 
     state["bootmenu"] = bootmenu.BootMenuSession(
-        pidfile=os.path.join(inclogdir, bootmenu.PIDFILE_NAME))
+        pidfile=os.path.join(inclogdir, bootmenu.PIDFILE_NAME),
+        on_exit=bootmenu_end_auditor(audit))
 
     port = int(os.environ.get("NFU_PORT", "0"))
     bind = os.environ.get("NFU_BIND", "127.0.0.1")
@@ -454,17 +485,7 @@ def main(argv=None):
         print("Open (single-use):\n    {}".format(url))
     sys.stdout.flush()
     install_signals()
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        # A second SIGTERM/SIGINT must not interrupt ending the menu.
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
-        try:
-            shutdown_bootmenu(ctx)
-        finally:
-            server.shutdown()
-            server.server_close()
+    serve_until_stopped(server, ctx)
 
 
 if __name__ == "__main__":

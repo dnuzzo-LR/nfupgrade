@@ -656,8 +656,8 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         session = _bootmenu_session(ctx)
         if session is None or not session.running():
             return _json(409, {"error": "no boot menu session is running"})
+        # Audited (once, forced=True) by the session's on_exit hook.
         session.end()
-        ctx.audit.record("bootmenu_end", forced=True, client=client_ip)
         return _json(200, {"ended": True})
 
     if path == "/api/bootmenu/end-leftover" and method == "POST":

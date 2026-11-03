@@ -271,7 +271,7 @@ class BootMenuSession(object):
     """
 
     def __init__(self, argv=None, env=None, scrollback=262144, pidfile=None,
-                 kill_names=None):
+                 kill_names=None, on_exit=None):
         self.argv = list(argv) if argv is not None else default_argv()
         if env is None:
             env = dict(os.environ)
@@ -293,6 +293,13 @@ class BootMenuSession(object):
         self._client = None          # (token, send) or None
         self._next_token = 0
         self._thread = None
+        #: Called once per session when it ends (see _finalise) with
+        #: {"exit_code": int|None, "forced": bool, "reason": None|str};
+        #: exceptions are swallowed. Settable after construction.
+        self.on_exit = on_exit
+        self._end_forced = False
+        self._end_reason = None
+        self._finalising_pid = None   # pid whose on_exit has not yet run
 
     # -- lifecycle -----------------------------------------------------
 
@@ -343,6 +350,8 @@ class BootMenuSession(object):
             self._state = "running"
             self._started_at = time.time()
             self._exit_code = None
+            self._end_forced = False
+            self._end_reason = None
             self._buf = bytearray()
             if self.pidfile:
                 self._write_pidfile(pid)
@@ -411,14 +420,20 @@ class BootMenuSession(object):
                     return True
         return False
 
-    def end(self):
+    def end(self, reason=None):
         """SIGKILL each session process (child or descendant, read fresh
         from /proc) whose proc_name is in kill_names -- individually, never
         the process group, never anything else -- then wait for the child
-        to be reaped. Returns True iff something was killed."""
+        to be reaped (and on_exit to have run). Returns True iff something
+        was killed. The end is reported to on_exit as forced, with reason
+        (e.g. "tool_stop"; None for the End session button)."""
         procs, pid = self._procs_and_pid()
         if procs is None:
             return False
+        with self._lock:
+            if self._state != "running" or self._pid != pid:
+                return False
+            self._end_forced, self._end_reason = True, reason
         targets = {pid} | descendants(procs, pid)
         killed = False
         for p in procs:
@@ -428,15 +443,20 @@ class BootMenuSession(object):
                     killed = True
                 except OSError:
                     pass
-        if killed:
-            deadline = time.time() + _END_TIMEOUT
+        if not killed:
             with self._lock:
-                while self._state == "running" and self._pid == pid:
-                    left = deadline - time.time()
-                    if left <= 0:
-                        break
-                    self._cond.wait(left)
-        return killed
+                if self._state == "running" and self._pid == pid:
+                    self._end_forced, self._end_reason = False, None
+            return False
+        deadline = time.time() + _END_TIMEOUT
+        with self._lock:
+            while self._finalising_pid == pid or (
+                    self._state == "running" and self._pid == pid):
+                left = deadline - time.time()
+                if left <= 0:
+                    break
+                self._cond.wait(left)
+        return True
 
     # -- attachment ----------------------------------------------------
 
@@ -592,7 +612,9 @@ class BootMenuSession(object):
 
     def _finalise(self, pid, fd, status, decoder):
         """Child reaped: close the master, remove the pidfile, mark ended,
-        tell the client, wake end()."""
+        tell the client; then (outside the lock) call on_exit once, and only
+        after that wake end(), so a caller of end() -- e.g. shutdown just
+        before the process exits -- knows the end has been reported."""
         with self._fd_lock:
             with self._lock:
                 tail = decoder.decode(b"", final=True)
@@ -611,4 +633,17 @@ class BootMenuSession(object):
                 self._state = "ended"
                 self._exit_code = _exit_code(status) if status is not None else None
                 self._send_locked({"type": "exit", "code": self._exit_code})
+                info = {"exit_code": self._exit_code, "forced": self._end_forced,
+                        "reason": self._end_reason}
+                self._finalising_pid = pid
+                on_exit = self.on_exit
+        try:
+            if on_exit is not None:
+                on_exit(info)
+        except Exception:
+            pass
+        finally:
+            with self._lock:
+                if self._finalising_pid == pid:
+                    self._finalising_pid = None
                 self._cond.notify_all()
