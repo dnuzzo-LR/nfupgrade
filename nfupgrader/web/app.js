@@ -1613,17 +1613,16 @@ function licNumber(kind, s) {
   return t;   // not a number: the server names the field in its error
 }
 
-// The review/save body. Every field shown is sent (the server ignores unchanged
-// ones), except, when left as shown: a field the license lacks (sending it would
-// add it), and text fields (a license's Text is often empty, which lice cannot
-// set, so the server would reject an untouched one).
+// The review/save body. Only fields the user changed from the value first shown
+// are sent: an untouched field the license lacks would be added, and an
+// untouched odd value (an empty Text, which lice cannot set; a number the
+// server's checks reject) would block the review of an unrelated change.
 function licenseRequest() {
   var values = {};
-  var L = (lic && lic.license) || {};
   (lic.fields || []).forEach(function (f) {
     var v = licFieldValue(f);
     if (v === null) return;
-    if (v === licInitial[f.key] && (!(f.key in L) || f.kind === "str")) return;
+    if (v === licInitial[f.key]) return;
     values[f.key] = (f.kind === "int" || f.kind === "float") ? licNumber(f.kind, v) : v;
   });
   var req = {
@@ -1766,7 +1765,8 @@ function licenseSaved(status, d) {
   var html = "";
   if (status === 200) {
     html += d.ok ? "<p class='lic-ok'>✅ Saved.</p>"
-                 : "<p class='lic-bad'>❌ Not everything was saved.</p>";
+      : (d.applied || []).length ? "<p class='lic-bad'>❌ Not everything was saved.</p>"
+      : "<p class='lic-bad'>❌ Nothing was saved.</p>";
     if ((d.applied || []).length) html += "<p>Applied: " + esc(d.applied.join(", ")) + "</p>";
     if ((d.not_applied || []).length) {
       html += "<p class='lic-bad'>Not applied: " + esc(d.not_applied.join(", ")) + "</p>";

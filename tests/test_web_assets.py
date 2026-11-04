@@ -1,5 +1,8 @@
+import json
 import os
 import re
+import shutil
+import subprocess
 import unittest
 
 WEB = os.path.join(os.path.dirname(os.path.dirname(__file__)), "nfupgrader", "web")
@@ -334,9 +337,69 @@ class TestWebAssets(unittest.TestCase):
         # ne_on is sent only once Unlock has loaded the type list.
         req = self._fn("licenseRequest")
         self.assertIn("licTypes ? ", req)
-        # An untouched text field is not sent: a license's Text is often empty,
-        # which the server rejects (lice cannot set it).
-        self.assertIn('f.kind === "str"', req)
+        # Only fields changed from the value first shown are sent.
+        self.assertIn("v === licInitial[f.key]) return;", req)
+
+    def _node(self, src):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node not installed")
+        # Script on stdin as UTF-8 bytes: argv cannot carry it under LC_ALL=C.
+        r = subprocess.run([node], input=src.encode("utf-8"),
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr.decode("utf-8", "replace"))
+        return json.loads(r.stdout.decode("utf-8"))
+
+    def test_license_request_sends_only_edited_fields(self):
+        # M7: an untouched odd value (here NumNE "abc", Text "") is not sent.
+        fns = "".join("\nfunction %s(%s" % (n, self._fn(n)) for n in
+                      ("licFieldEl", "licFieldValue", "licNumber", "licenseRequest"))
+        src = """
+var els = {"lic-numne": {value: "abc"}, "lic-numusers": {value: "7"},
+           "lic-trial": {checked: false}, "lic-f-Text": {value: ""},
+           "lic-f-NumCusers": {value: "3"},
+           "lic-password": {value: "pw"}, "lic-expiry": {value: ""}};
+var document = {getElementById: function (id) { return els[id] || null; }};
+var LIC_MAIN_IDS = {NumNE: "lic-numne", NumUsers: "lic-numusers", Trial: "lic-trial"};
+var licTypes = null;
+var lic = {license: {NumNE: "abc", NumUsers: 7, Trial: false, Text: ""},
+           fields: [{key: "NumNE", kind: "int"}, {key: "NumUsers", kind: "int"},
+                    {key: "Trial", kind: "bool"}, {key: "Text", kind: "str"},
+                    {key: "NumCusers", kind: "int"}]};
+var licInitial = {NumNE: "abc", NumUsers: "7", Trial: false, Text: "", NumCusers: "3"};
+%s
+var out = [];
+out.push(licenseRequest().values);
+els["lic-numusers"].value = "9"; els["lic-trial"].checked = true;
+out.push(licenseRequest().values);
+process.stdout.write(JSON.stringify(out));
+""" % fns
+        out = self._node(src)
+        self.assertEqual(out[0], {})
+        self.assertEqual(out[1], {"NumUsers": 9, "Trial": True})
+
+    def test_license_saved_heading(self):
+        # F1: nothing applied -> "Nothing was saved", not "Not everything".
+        src = """
+var els = {"lic-password": {value: "x"}, "lic-msg": {}, "lic-result": {}};
+var document = {getElementById: function (id) { return els[id]; }};
+function setLicenseBusy() {}
+function refreshLicense() {}
+function esc(s) { return String(s); }
+%s
+var out = [];
+licenseSaved(200, {ok: false, applied: [], not_applied: ["NumNE"], error: "e"});
+out.push(els["lic-result"].innerHTML);
+licenseSaved(200, {ok: false, applied: ["NumUsers"], not_applied: ["NumNE"], error: "e"});
+out.push(els["lic-result"].innerHTML);
+process.stdout.write(JSON.stringify(out));
+""" % ("\nfunction clearLicensePassword(" + self._fn("clearLicensePassword") +
+       "\nfunction licenseSaved(" + self._fn("licenseSaved"))
+        out = self._node(src)
+        self.assertIn("Nothing was saved", out[0])
+        self.assertNotIn("Not everything", out[0])
+        self.assertIn("Not everything was saved", out[1])
 
     def test_install_form_wiring(self):
         for s in ("function applyHostMode(", "/api/install/status", "/api/install/hosts",
