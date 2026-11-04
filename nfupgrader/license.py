@@ -60,6 +60,8 @@ FIELDS = [
 ]
 _BY_KEY = dict((f["key"], f) for f in FIELDS)
 
+INT_MAX = 2147483647  # lice parses with stoi; larger values throw
+
 _EXP_RE = re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4})$")
 
 
@@ -136,9 +138,10 @@ def _as_int(v):
     if isinstance(v, bool):
         return None
     if isinstance(v, int):
-        return v if v >= 0 else None
+        return v if 0 <= v <= INT_MAX else None
     if isinstance(v, str) and re.match(r"^[0-9]+$", v.strip()):
-        return int(v.strip())
+        n = int(v.strip())
+        return n if n <= INT_MAX else None
     return None
 
 
@@ -154,7 +157,11 @@ def _as_float(v):
             return None
     else:
         return None
-    return x if (math.isfinite(x) and x >= 0) else None
+    if not (math.isfinite(x) and 0 <= x <= INT_MAX):
+        return None
+    if abs(round(x, 2) - x) > 1e-9:
+        return None  # lice keeps two decimals only
+    return x
 
 
 def _bad_char(s):
@@ -175,18 +182,21 @@ def validate(values, expiry, ne_on):
             err(key, "unknown field")
         elif f["kind"] == "int":
             if _as_int(v) is None:
-                err(key, "must be a whole number, 0 or more")
+                err(key, "must be a whole number, 0 to {}".format(INT_MAX))
         elif f["kind"] == "float":
             if _as_float(v) is None:
-                err(key, "must be a number, 0 or more")
+                err(key, "must be a number, 0 or more, with at most 2 decimals")
         elif f["kind"] == "bool":
             if not isinstance(v, bool):
                 err(key, "must be true or false")
         else:
             if not isinstance(v, str):
                 err(key, "must be text")
-            elif len(v) > f["max_len"]:
-                err(key, "at most {} characters".format(f["max_len"]))
+            elif len(v.encode("utf-8")) > f["max_len"]:
+                err(key, "at most {} bytes".format(f["max_len"]))
+            elif v == "" or v != v.strip():
+                err(key, "{} cannot be empty or start/end with spaces "
+                    "-- lice cannot store that".format(f["label"]))
             elif _bad_char(v):
                 err(key, "must not contain control characters")
     if expiry not in ("", None) and _norm_expiry(expiry) is None:
@@ -219,7 +229,7 @@ def _render(f, v):
     if f["kind"] == "bool":
         return "yes" if v else "no"
     if f["kind"] == "float":
-        return "{:g}".format(v)
+        return "{:.2f}".format(v)
     return str(v)
 
 
@@ -233,7 +243,11 @@ def diff(lic, values, expiry, ne_on, ne_table=None):
             continue
         after = _canon(f, values[key])
         before = lic.get(key)
-        if f["kind"] in ("int", "float") and before is not None:
+        if f["kind"] == "float" and isinstance(before, (int, float)) \
+                and not isinstance(before, bool):
+            before_c = round(float(before), 2)
+            after = round(after, 2)
+        elif f["kind"] == "int" and before is not None:
             before_c = _canon(f, before)
         else:
             before_c = before
@@ -264,6 +278,11 @@ def diff(lic, values, expiry, ne_on, ne_table=None):
 
 def build_script(password, d):
     """Stdin script for `lice`: password line, edits, save, quit."""
+    if "\n" in password or "\r" in password:
+        raise ValueError("password must not contain a newline")
+    for n in d["ne_toggle"]:
+        if isinstance(n, bool) or not isinstance(n, int):
+            raise ValueError("ne_toggle entries must be ints")
     s = password + "\n"
     for line in d["set_lines"]:
         s += line + "\n"

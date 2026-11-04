@@ -106,13 +106,47 @@ class TestLicense(unittest.TestCase):
     def test_diff_ne_none_unchanged(self):
         self.assertEqual(L.diff(LIC, {}, "", None)["ne_toggle"], [])
 
+    def test_validate_rejects_empty_and_edge_spaces(self):
+        for k in ("Text", "Version"):
+            for v in ("", "   ", " a", "a ", "\u00a0"):
+                self.assertEqual(self._fields(L.validate({k: v}, "", None)), [k], repr(v))
+        self.assertEqual(L.validate({"Text": "a b"}, "", None), [])
+
+    def test_validate_int_cap(self):
+        self.assertEqual(L.validate({"NumNE": 2147483647}, "", None), [])
+        self.assertTrue(L.validate({"NumNE": 2147483648}, "", None))
+        self.assertTrue(L.validate({"NumNE": "2147483648"}, "", None))
+        self.assertTrue(L.validate({"NumWeightedNE": 2147483648.0}, "", None))
+
+    def test_float_two_decimals(self):
+        self.assertTrue(L.validate({"NumWeightedNE": 1.234}, "", None))
+        self.assertEqual(L.validate({"NumWeightedNE": 1234.5}, "", None), [])
+        d = L.diff(dict(LIC, NumWeightedNE=1234.50), {"NumWeightedNE": 1234.5}, "", None)
+        self.assertEqual(d["changes"], [])
+        d = L.diff(dict(LIC, NumWeightedNE=1.0), {"NumWeightedNE": 2.5}, "", None)
+        self.assertEqual(d["set_lines"], ["set numweightedne 2.50"])
+
+    def test_build_script_rejects_newline_password_and_bad_toggle(self):
+        d = {"set_lines": [], "ne_toggle": [], "expiry": None}
+        for pw in ("a\nb", "a\rb"):
+            with self.assertRaises(ValueError):
+                L.build_script(pw, d)
+        for bad in ("5", True, 5.0):
+            with self.assertRaises(ValueError):
+                L.build_script("pw", dict(d, ne_toggle=[bad]))
+
+    def test_validate_max_len_bytes(self):
+        self.assertEqual(self._fields(L.validate({"Version": "\u00e9" * 20}, "", None)),
+                         ["Version"])
+        self.assertEqual(L.validate({"Version": "\u00e9" * 10}, "", None), [])
+
     def test_diff_disable_type(self):
         self.assertEqual(L.diff(LIC, {}, "", set())["ne_toggle"], [5])
 
     def test_diff_float_and_text(self):
         d = L.diff(dict(LIC, NumWeightedNE=1.0), {"NumWeightedNE": 2.5, "Text": "y"},
                    "", None)
-        self.assertEqual(d["set_lines"], ["set numweightedne 2.5", "set text y"])
+        self.assertEqual(d["set_lines"], ["set numweightedne 2.50", "set text y"])
 
     def test_diff_group_warning(self):
         table = L.parse_ne_all(NE_ALL)
