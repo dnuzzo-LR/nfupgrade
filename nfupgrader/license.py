@@ -292,6 +292,9 @@ def build_script(password, d):
     for n in d["ne_toggle"]:
         if isinstance(n, bool) or not isinstance(n, int):
             raise ValueError("ne_toggle entries must be ints")
+    # Input must hold >= 3 lines before EOF: on a wrong password lice reads up
+    # to 3 attempts, and at EOF during the prompt it loops forever
+    # (lice.cpp:369-372). Password + "save" + "quit" guarantees that.
     s = password + "\n"
     for line in d["set_lines"]:
         s += line + "\n"
@@ -304,14 +307,51 @@ AUTH_OK = "Authentication successful."
 _BAD_PW = ("Invalid password.", "Too many incorrect attempts.")
 WRONG_PW = "wrong license password"
 INVALID_PW = "invalid license password"
+TOO_LONG_PW = "license password too long"
+PW_MAX_BYTES = 254      # fgets into a 256-byte buffer, incl. newline and NUL
 LICE_TIMEOUT = 120      # lice/license loop forever on stdin EOF at the prompt
 MIGRATE_TIMEOUT = 600
+_SET_LINE = re.compile(r"^set \S+ \S.*$")
 
 
-def _pw_ok(password):
-    """A password we can safely send as one stdin line."""
-    return isinstance(password, str) and password != "" \
-        and "\n" not in password and "\r" not in password
+def _pw_error(password):
+    """Error string if the password cannot be sent as one stdin line, else ""."""
+    if not isinstance(password, str) or password == "" \
+            or "\n" in password or "\r" in password:
+        return INVALID_PW
+    if len(password.encode("utf-8", "replace")) > PW_MAX_BYTES:
+        return TOO_LONG_PW
+    return ""
+
+
+def _int_list(v, name):
+    if not isinstance(v, list) or any(
+            isinstance(n, bool) or not isinstance(n, int) for n in v):
+        raise ValueError("{} must be a list of NE type numbers".format(name))
+
+
+def _check_diff(d):
+    """Raise ValueError unless d is a well-formed diff() result."""
+    if not isinstance(d, dict):
+        raise ValueError("change set must be an object")
+    for k in ("changes", "set_lines", "ne_toggle"):
+        if not isinstance(d.get(k), list):
+            raise ValueError("{} must be a list".format(k))
+    for c in d["changes"]:
+        if not isinstance(c, dict) or "key" not in c or "after" not in c:
+            raise ValueError("each change needs key and after")
+        if c["key"] not in _BY_KEY:
+            raise ValueError("unknown field {}".format(c["key"]))
+    for line in d["set_lines"]:
+        if not isinstance(line, str) or "\n" in line or "\r" in line \
+                or not _SET_LINE.match(line):
+            raise ValueError("malformed set line")
+    _int_list(d["ne_toggle"], "ne_toggle")
+    if "ne_enable" in d:
+        _int_list(d["ne_enable"], "ne_enable")
+    exp = d.get("expiry")
+    if exp is not None and (not isinstance(exp, str) or _norm_expiry(exp) != exp):
+        raise ValueError("expiry must be MM/DD/YYYY")
 
 
 def _scrub(text, password):
@@ -328,8 +368,11 @@ def _wrong_pw(err):
 
 def unlock(host, password, lic_path=LIC_PATH):
     """Check the password with `lice -i` and list NE types (`ne all`)."""
-    if not _pw_ok(password):
-        return {"ok": False, "ne_types": [], "error": INVALID_PW}
+    pw_err = _pw_error(password)
+    if pw_err:
+        return {"ok": False, "ne_types": [], "error": pw_err}
+    # Input must hold >= 3 lines before EOF (3 password attempts; lice loops
+    # forever on EOF at the prompt, lice.cpp:369-372).
     r = host.run([LICE, "-i", lic_path], timeout=LICE_TIMEOUT,
                  input=password + "\nne all\nquit\n")
     if AUTH_OK in (r.out or ""):
@@ -430,23 +473,28 @@ def apply(host, password, d, lic_path=LIC_PATH):
         return {"ok": False, "error": err, "applied": [], "not_applied": [],
                 "license": None}
 
-    if not _pw_ok(password):
-        return fail(INVALID_PW)
+    pw_err = _pw_error(password)
+    if pw_err:
+        return fail(pw_err)
     try:
-        changes = list(d["changes"])
-        toggles = list(d["ne_toggle"])
-        exp = d.get("expiry")
+        _check_diff(d)
+        changes, toggles, exp = d["changes"], d["ne_toggle"], d.get("expiry")
         if not (changes or toggles or exp):
             return {"ok": True, "applied": [], "not_applied": [], "error": ""}
-        if exp is not None and _norm_expiry(exp) != exp:
-            raise ValueError("expiry must be MM/DD/YYYY")
-        for c in changes:
-            if c["key"] not in _BY_KEY:
-                raise ValueError("unknown field {}".format(c["key"]))
         script = build_script(password, d) if (d["set_lines"] or toggles) \
             else None
     except (ValueError, KeyError, TypeError, AttributeError) as e:
         return fail(_scrub("invalid change set: {}".format(e), password))
+
+    if script is None and exp:
+        # Expiry-only: license -M would be the first password check, and on
+        # a wrong password plus stdin EOF license.c:424-426 spins forever
+        # printing a prompt. Verify the password with lice first.
+        u = unlock(host, password, lic_path)
+        if not u["ok"]:
+            res = fail(u["error"])
+            res["not_applied"] = ["Expiry"]
+            return res
 
     if "ne_enable" in d:
         want_on = set(d["ne_enable"])
@@ -471,8 +519,12 @@ def apply(host, password, d, lic_path=LIC_PATH):
         elif _scrub(r.err, password):
             errors.append(_scrub(r.err, password))
     if authed and exp:
+        # Input must hold >= 3 lines before EOF: license_unlock tries 3 times
+        # and loops forever on EOF (license.c:424-426). After a successful
+        # unlock, -M reads no more stdin (set_license SET_MAINTENANCE_DATE,
+        # load_license_mem(0) does not prompt), so the extra lines are unread.
         r = host.run([LICENSE, "-M", exp], timeout=LICE_TIMEOUT,
-                     input=password + "\n")
+                     input=(password + "\n") * 3)
         if _wrong_pw(r.err):
             errors.append(WRONG_PW)
         elif r.rc != 0:

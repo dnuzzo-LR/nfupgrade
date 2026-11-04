@@ -180,6 +180,7 @@ class FakeLice(object):
         self.lic = json.loads(json.dumps(lic))
         self.password = password
         self.ignore = set(ignore)
+        self.eof_spins = []  # tools that hit stdin EOF at a password prompt
 
     def host(self, path="/p"):
         r = {("test", "-x", L.LICE): RunResult(0, "", ""),
@@ -190,20 +191,25 @@ class FakeLice(object):
             r[(L.LICENSE, "-M", exp)] = self._license_m
         return FakeHost(r)
 
-    def _auth(self, lines):
+    def _auth(self, lines, tool):
+        """Real lice/license loop forever on EOF at the prompt: the service
+        would only see a timeout (rc 124), so report that."""
         out, err = "", ""
         for n in range(3):
             out += "Password: "
             if not lines:
-                return False, out, err
+                self.eof_spins.append(tool)
+                return None, out, "timeout: {} spun on EOF".format(tool)
             if lines.pop(0) == self.password:
                 return True, out, err
             err += "Invalid password.\n" if n < 2 else "Too many incorrect attempts.\n"
         return False, out, err
 
     def _lice_i(self, argv, inp):
-        lines = (inp or "").split("\n")
-        ok, out, err = self._auth(lines)
+        lines = (inp or "").splitlines()
+        ok, out, err = self._auth(lines, "lice")
+        if ok is None:
+            return RunResult(124, "", err)
         if not ok:
             return RunResult(1, out, err)
         out += "Authentication successful.\n"
@@ -241,8 +247,11 @@ class FakeLice(object):
         return RunResult(0, out, err)
 
     def _license_m(self, argv, inp):
-        if (inp or "").split("\n")[0] != self.password:
-            return RunResult(1, "Password: ", "Invalid password.\n")
+        ok, out, err = self._auth((inp or "").splitlines(), "license")
+        if ok is None:
+            return RunResult(124, "", err)
+        if not ok:
+            return RunResult(1, out, err)
         m, d, y = argv[2].split("/")
         self.lic["MaintExpireDate"] = "{}-{}-{} 23:59:59".format(y, m, d)
         return RunResult(0, "Complete.\n", "")
@@ -289,8 +298,9 @@ class TestLicenseWrite(unittest.TestCase):
         i = h.calls.index([L.LICE, "-i", "/p"])
         self.assertTrue(h.inputs[i].startswith("pw\n"))
         m = h.calls.index([L.LICENSE, "-M", "01/05/2027"])
-        self.assertEqual(h.inputs[m], "pw\n")
+        self.assertEqual(h.inputs[m], "pw\npw\npw\n")
         self.assertLess(i, m)
+        self.assertEqual(fl.eof_spins, [])
 
     def test_apply_disable_type_and_expiry_only(self):
         fl = FakeLice(LIC)
@@ -299,7 +309,9 @@ class TestLicenseWrite(unittest.TestCase):
         h = fl.host()
         r = L.apply(h, "pw", self._diff(fl, {}, "12/31/2027"), "/p")
         self.assertEqual((r["ok"], r["applied"]), (True, ["Expiry"]))
-        self.assertNotIn((L.LICE, "-i"), _argv0s(h))
+        # Expiry-only still checks the password with lice first, but never saves.
+        i = h.calls.index([L.LICE, "-i", "/p"])
+        self.assertNotIn("save", h.inputs[i])
 
     def test_diff_ne_enable(self):
         d = L.diff(LIC, {}, "", {7})
@@ -321,6 +333,72 @@ class TestLicenseWrite(unittest.TestCase):
         self.assertEqual((r["ok"], r["not_applied"], r["license"]),
                          (False, ["NumNE"], None))
         self.assertIn("gone", r["error"])
+
+    def test_apply_expiry_only_wrong_password(self):
+        fl = FakeLice(LIC)
+        before = json.loads(json.dumps(fl.lic))
+        h = fl.host()
+        r = L.apply(h, "bad", self._diff(fl, {}, "1/5/2027"), "/p")
+        self.assertEqual((r["ok"], r["error"], r["applied"], r["not_applied"]),
+                         (False, "wrong license password", [], ["Expiry"]))
+        self.assertNotIn((L.LICENSE, "-M"), _argv0s(h))
+        self.assertEqual(fl.eof_spins, [])
+        self.assertEqual(fl.lic, before)
+        i = h.calls.index([L.LICE, "-i", "/p"])
+        self.assertGreaterEqual(h.inputs[i].count("\n"), 3)
+
+    def test_license_m_gets_password_thrice(self):
+        fl = FakeLice(LIC)
+        h = fl.host()
+        r = L.apply(h, "pw", self._diff(fl, {}, "1/5/2027"), "/p")
+        self.assertEqual((r["ok"], r["applied"]), (True, ["Expiry"]))
+        m = h.calls.index([L.LICENSE, "-M", "01/05/2027"])
+        self.assertEqual(h.inputs[m], "pw\npw\npw\n")
+        self.assertLess(h.calls.index([L.LICE, "-i", "/p"]), m)
+        self.assertEqual(fl.eof_spins, [])
+
+    def test_fake_spins_on_short_input(self):
+        fl = FakeLice(LIC)
+        r = fl.host().run([L.LICENSE, "-M", "01/05/2027"], input="bad\n")
+        self.assertEqual(r.rc, 124)
+        self.assertEqual(fl.eof_spins, ["license"])
+
+    def test_apply_rejects_malformed_diff(self):
+        fl = FakeLice(LIC)
+        h = fl.host()
+        good = self._diff(fl, {"NumNE": 500}, "", {5, 7})
+        bad = [None, [], dict(good, changes=None), dict(good, set_lines="x"),
+               dict(good, changes=[{"key": "NumNE"}]),
+               dict(good, changes=[{"after": 1}]),
+               dict(good, changes=[{"key": "Nope", "after": 1}]),
+               dict(good, ne_toggle=[True]), dict(good, ne_enable=["7"]),
+               dict(good, ne_enable=None),
+               dict(good, set_lines=["set numne"]),
+               dict(good, set_lines=["numne 5"]),
+               dict(good, set_lines=["set numne 5\rsave"]),
+               dict(good, set_lines=["set numne 5\n"]),
+               dict(good, set_lines=["set numne 5\nsave"]),
+               dict(good, set_lines=[5]),
+               dict(good, expiry="2027-01-05"), dict(good, expiry=5)]
+        for d in bad:
+            r = L.apply(h, "pw", d, "/p")
+            self.assertFalse(r["ok"], repr(d))
+            self.assertTrue(r["error"].startswith("invalid change set"), r["error"])
+        self.assertEqual(h.calls, [])
+
+    def test_password_too_long(self):
+        fl = FakeLice(LIC)
+        h = fl.host()
+        d = self._diff(fl, {"NumNE": 500})
+        self.assertEqual(L.apply(h, "x" * 255, d, "/p")["error"],
+                         "license password too long")
+        self.assertEqual(L.unlock(h, "x" * 255, "/p")["error"],
+                         "license password too long")
+        self.assertEqual(L.apply(h, "\u00e9" * 128, d, "/p")["error"],
+                         "license password too long")
+        self.assertEqual(h.calls, [])
+        fl.password = "x" * 254
+        self.assertTrue(L.apply(fl.host(), "x" * 254, d, "/p")["ok"])
 
     def test_apply_wrong_password(self):
         fl = FakeLice(LIC)
