@@ -22,6 +22,10 @@ REQUIRED_IDS = [
     "tab-btn-bootmenu", "tab-bootmenu", "bootmenu-status", "btn-bootmenu-open",
     "btn-bootmenu-end", "bootmenu-other", "btn-bootmenu-end-leftover", "bootmenu-term",
     "bootmenu-note", "bootmenu-loaderr",
+    "tab-license", "lic-status", "btn-lic-create", "btn-lic-migrate", "lic-main",
+    "lic-expiry", "lic-trial", "lic-numne", "lic-numusers", "lic-types",
+    "lic-type-filter", "lic-advanced", "lic-password", "btn-lic-unlock",
+    "btn-lic-review", "btn-lic-save", "lic-review", "lic-result",
 ]
 
 
@@ -269,12 +273,70 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn('list="cfg-hosts"', self.html)
         self.assertIn('<datalist id="cfg-hosts">', self.html)
 
-    def test_license_stub_disabled(self):
-        m = re.search(r'<input[^>]*id="cfg-license"[^>]*>', self.html)
-        self.assertIsNotNone(m, "no #cfg-license element in index.html")
-        el = m.group(0)
-        self.assertIn("disabled", el)
-        self.assertIn("coming later", el)
+    def test_install_form_links_license_tab(self):
+        # The old "coming later" stub is now a link that opens the License tab.
+        self.assertNotIn("coming later", self.html)
+        m = re.search(r'<button[^>]*id="cfg-license"[^>]*>([^<]*)</button>', self.html)
+        self.assertIsNotNone(m, "#cfg-license is not a button")
+        self.assertIn("Set up the license on the License tab", m.group(1))
+        self.assertIn('getElementById("cfg-license").onclick', self.js)
+        handler = self.js.split('getElementById("cfg-license").onclick', 1)[1].split("};", 1)[0]
+        self.assertIn('showTab("license")', handler)
+
+    def test_license_tab_button_and_panel(self):
+        self.assertIn('<button class="tab" data-tab="license">License</button>', self.html)
+        panel = self.html.split('id="tab-license"', 1)[1].split("</section>", 1)[0]
+        self.assertIn('<details id="lic-advanced"', panel)
+        exp = re.search(r'<input[^>]*id="lic-expiry"[^>]*>', panel).group(0)
+        self.assertIn('placeholder="MM/DD/YYYY"', exp)
+        self.assertIn('type="checkbox"', re.search(r'<input[^>]*id="lic-trial"[^>]*>', panel).group(0))
+        save = re.search(r'<button[^>]*id="btn-lic-save"[^>]*>', panel).group(0)
+        self.assertIn("disabled", save)
+        self.assertIn('<input', re.search(r'<input[^>]*id="lic-type-filter"[^>]*>', panel).group(0))
+
+    def test_license_password_not_persisted(self):
+        pw = re.search(r'<input[^>]*id="lic-password"[^>]*>', self.html)
+        self.assertIsNotNone(pw)
+        self.assertIn('type="password"', pw.group(0))
+        self.assertIn('autocomplete="off"', pw.group(0))
+        # No localStorage/sessionStorage near the password, and never in a URL.
+        for line in self.js.splitlines():
+            if "lic-password" in line or "licPassword" in line:
+                self.assertNotIn("localStorage", line)
+                self.assertNotIn("sessionStorage", line)
+                self.assertNotIn("encodeURIComponent", line)
+        self.assertNotIn("sessionStorage", self.js)
+        lic = self.js.split("// ---- License tab", 1)[1].split("// ---- end License tab", 1)[0]
+        self.assertNotIn("localStorage", lic)
+        self.assertNotIn("getJSON(\"/api/license?", lic)
+        # Cleared after Save completes and when the tab is left.
+        self.assertIn("clearLicensePassword()", self._fn("licenseSaved"))
+        self.assertIn("clearLicensePassword()", self._fn("initTabs"))
+        self.assertIn('getElementById("lic-password").value = ""', self._fn("clearLicensePassword"))
+
+    def test_license_flow_wiring(self):
+        for s in ('"/api/license/unlock"', '"/api/license/review"', '"/api/license/save"',
+                  '"/api/license/create"', '"/api/license/migrate"', 'getJSON("/api/license"'):
+            self.assertIn(s, self.js, "missing %r" % s)
+        save = self._fn("saveLicense")
+        self.assertIn("showConfirm(", save)
+        self.assertIn('postJSON("/api/license/save"', save)
+        self.assertIn("refreshLicense()", self._fn("licenseSaved"))
+        self.assertIn('name === "license"', self._fn("initTabs"))
+        self.assertIn("refreshLicense()", self._fn("initTabs"))
+        # Any edit invalidates the last review (Save goes back to disabled).
+        inv = self._fn("invalidateLicenseReview")
+        self.assertIn('getElementById("btn-lic-save").disabled = true', inv)
+        # Server text is escaped.
+        rev = self._fn("renderLicenseReview")
+        for part in ("esc(c.label)", "esc(w)", "esc(e.message)"):
+            self.assertIn(part, rev)
+        # ne_on is sent only once Unlock has loaded the type list.
+        req = self._fn("licenseRequest")
+        self.assertIn("licTypes ? ", req)
+        # An untouched text field is not sent: a license's Text is often empty,
+        # which the server rejects (lice cannot set it).
+        self.assertIn('f.kind === "str"', req)
 
     def test_install_form_wiring(self):
         for s in ("function applyHostMode(", "/api/install/status", "/api/install/hosts",

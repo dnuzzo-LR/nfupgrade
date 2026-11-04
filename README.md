@@ -198,6 +198,49 @@ xterm.js (`xterm.js`, `xterm.css`, `addon-fit.js`) is vendored unmodified under
 `nfupgrader/web/xterm/` (MIT, see `nfupgrader/web/xterm/LICENSE`); no external
 resources are loaded.
 
+## License tab
+
+The **License** tab sets this host's netFLEX license (`/usr/cnc/data/lic.ucs`)
+from the purchase email, typically right after an install. It drives netFLEX's
+own tools (`lice`, `license -M`, `license-migrate`) and never edits the file
+itself. The install form on the Config tab links here.
+
+- **Fields.** The main section has the **Expiry date** (`MM/DD/YYYY`) and the
+  **Trial** flag, **NE count** (`NumNE`, the NE limit netFLEX enforces), **Users**
+  (`NumUsers`) and the **NE types** (a filterable checklist). Every other `lice`
+  field (NEs available, weighted NEs, client/GUI users, other counts, feature
+  flags, version, text) is under **Advanced**, with the values the tab does not
+  edit (e.g. watch bits, NE groups) shown read-only.
+- **States.** With no license the tab offers **Create from template** (copies
+  `def.lic.ucs.linux64`, or `.linux`, owned by `cmm`). A license in an older
+  format offers **Convert** (`license-migrate`). On a host without the netFLEX
+  license tools it only says so.
+- **netFLEX must be down.** The license is shown read-only, with the reason, while
+  netFLEX is running (`/usr/cnc/.CNC_UP`), while an install, upgrade, check fix,
+  report snapshot or boot menu is running, and in preview mode. Stop netFLEX
+  (e.g. from the Boot menu tab) to edit it.
+- **Flow.** Before **Unlock**, the NE types list shows only the enabled types.
+  **Unlock** checks the license password and lists every type (ticked =
+  enabled); type changes are sent only after an Unlock. **Review changes** shows
+  each field's before → after, plus any warnings (e.g. a type in an NE group);
+  nothing is written. Any edit after a review disables **Save** until you review
+  again. **Save** asks for confirmation, then applies the changes and reads the
+  license back: the result names what was applied, anything that did not take,
+  the backup path, and any error (such as a wrong license password).
+- **Password.** The license password is typed on the tab and sent only with
+  Unlock, Review and Save. It is never stored (not in the browser, not in a URL,
+  not on the server), never logged or audited, and reaches `lice`/`license` only
+  on their standard input. The field is cleared after Save and whenever you leave
+  the tab.
+- **Backups.** Each Save first copies the license to
+  `/usr/cnc/data/lic.ucs.nfupgrader.<YYYYmmddHHMMSS>` (same owner and mode). The
+  newest 10 are kept; older ones are removed. To roll back, copy a backup over
+  `lic.ucs` with netFLEX down.
+- **Audit.** `license_saved` (client, backup path, per-field before/after, NE type
+  changes, expiry, what applied), `license_save_failed` (error, backup path),
+  `license_created` and `license_migrated` are recorded in
+  `nfupgrader_audit.jsonl`.
+
 ## Testing
 
 ```sh

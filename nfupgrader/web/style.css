@@ -52,7 +52,7 @@ button.primary { background: var(--accent); color: var(--accent-ink); border-col
 button.danger { background: #b3261e; color: #fff; border-color: #b3261e; }
 button.danger:hover { border-color: #7f1b15; }
 button:disabled { opacity: .5; cursor: not-allowed; }
-select, input[type=text], input:not([type]) { padding: .4rem .5rem; border: 1px solid var(--line);
+select, input[type=text], input[type=password], input:not([type]) { padding: .4rem .5rem; border: 1px solid var(--line);
   border-radius: 6px; font-size: 14px; }
 
 /* tables (site + checks) */
@@ -171,3 +171,29 @@ span.hard { color: var(--err); font-size: 12px; font-weight: 600; white-space: n
 .bootmenu-wrap.inactive { opacity: .55; }
 #bootmenu-term { height: 60vh; min-height: 300px; }
 #bootmenu-note { margin: .6rem 0 0; font-size: 13px; }
+
+/* License tab */
+.lic-status { font-weight: 600; margin-bottom: .6rem; }
+.lic-status.ok { color: var(--ok); }
+.lic-status.warn { color: var(--warn); }
+.lic-actions { margin-bottom: .6rem; }
+.lic-actions span { margin-left: .5rem; }
+label.inline { color: var(--ink); }
+.lic-types-bar { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; margin-bottom: .4rem; }
+.lic-type-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: .15rem .8rem; max-height: 18rem; overflow: auto; border: 1px solid var(--line);
+  border-radius: 6px; padding: .4rem .6rem; font-size: 13px; }
+.lic-type { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#lic-advanced { margin: 1rem 0; }
+#lic-advanced summary { cursor: pointer; color: var(--muted); font-weight: 600; }
+.lic-pw-bar { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+  margin: 1rem 0 .6rem; padding-top: .8rem; border-top: 1px solid var(--line); }
+.lic-pw-bar label { color: var(--muted); }
+.lic-warn { background: #fff8e1; border: 1px solid #e9c46a; border-radius: 6px;
+  padding: .5rem .7rem; margin: .4rem 0; font-weight: 600; color: #664d03; }
+.lic-errors { color: var(--err); }
+table.lic-changes { margin-top: .5rem; }
+.lic-ok { color: var(--ok); font-weight: 600; }
+.lic-bad { color: var(--err); font-weight: 600; }
+pre.lic-error { background: #fdecea; padding: .5rem .7rem; border-radius: 6px;
+  white-space: pre-wrap; word-break: break-all; font-size: 12px; }

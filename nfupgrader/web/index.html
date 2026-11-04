@@ -39,6 +39,7 @@
     <button class="tab active" data-tab="overview">Overview</button>
     <button class="tab" data-tab="config">Config</button>
     <button class="tab" data-tab="upgrade" id="tab-btn-upgrade">Upgrade</button>
+    <button class="tab" data-tab="license">License</button>
     <button class="tab" data-tab="reports">Reports</button>
     <button class="tab" data-tab="log">Log</button>
     <button class="tab" data-tab="bootmenu" id="tab-btn-bootmenu">Boot menu</button>
@@ -114,9 +115,9 @@
             <span class="hint">INSTALLWEBGUI</span>
           </div>
           <div class="cfg-row">
-            <label for="cfg-license">License file</label>
-            <input id="cfg-license" type="text" disabled value="License file — coming later">
-            <span class="hint">coming later</span>
+            <label for="cfg-license">License</label>
+            <button type="button" id="cfg-license">Set up the license on the License tab</button>
+            <span class="hint">after the install, with netFLEX down</span>
           </div>
           <h3>cnc.cnfg preview</h3>
           <pre id="cfg-cnc-preview"></pre>
@@ -172,6 +173,62 @@
         </div>
         <h3>Post-flight</h3>
         <div id="postflight">-</div>
+      </div>
+    </section>
+
+    <!-- LICENSE -->
+    <section class="panel" id="tab-license">
+      <div class="card">
+        <h2>License <span id="lic-spin" class="spinner" style="display:none"></span></h2>
+        <div id="lic-status" class="lic-status">Loading&hellip;</div>
+        <div class="lic-actions">
+          <button type="button" id="btn-lic-create" class="primary" style="display:none">Create from template</button>
+          <button type="button" id="btn-lic-migrate" class="primary" style="display:none">Convert to the current format</button>
+          <span id="lic-action-msg"></span>
+        </div>
+        <div id="lic-form" style="display:none">
+          <div id="lic-main">
+            <div class="cfg-row">
+              <label for="lic-expiry">Expiry date</label>
+              <input id="lic-expiry" type="text" placeholder="MM/DD/YYYY" autocomplete="off">
+              <span><label class="inline"><input type="checkbox" id="lic-trial"> Trial</label></span>
+            </div>
+            <div class="cfg-row">
+              <label for="lic-numne">NE count</label>
+              <input id="lic-numne" type="text" inputmode="numeric" autocomplete="off">
+              <span class="hint">NumNE &mdash; the NE limit netFLEX enforces</span>
+            </div>
+            <div class="cfg-row">
+              <label for="lic-numusers">Users</label>
+              <input id="lic-numusers" type="text" inputmode="numeric" autocomplete="off">
+              <span class="hint">NumUsers</span>
+            </div>
+          </div>
+          <div id="lic-types">
+            <h3>NE types</h3>
+            <div class="lic-types-bar">
+              <input id="lic-type-filter" type="text" placeholder="filter&hellip;" autocomplete="off">
+              <span id="lic-types-note" class="muted"></span>
+            </div>
+            <div id="lic-type-list" class="lic-type-list"></div>
+          </div>
+          <details id="lic-advanced">
+            <summary>Advanced</summary>
+            <div id="lic-adv-fields"></div>
+            <h3>Other values (read-only)</h3>
+            <div id="lic-adv-other" class="grid"></div>
+          </details>
+          <div class="lic-pw-bar">
+            <label for="lic-password">License password</label>
+            <input id="lic-password" type="password" autocomplete="off">
+            <button type="button" id="btn-lic-unlock">Unlock NE types</button>
+            <button type="button" id="btn-lic-review">Review changes</button>
+            <button type="button" id="btn-lic-save" class="primary" disabled>Save</button>
+            <span id="lic-msg"></span>
+          </div>
+          <div id="lic-review"></div>
+          <div id="lic-result"></div>
+        </div>
       </div>
     </section>
 

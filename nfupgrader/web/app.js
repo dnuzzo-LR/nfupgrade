@@ -82,6 +82,9 @@ function initTabs() {
     panels.forEach(function (p) { p.classList.toggle("active", p.id === "tab-" + name); });
     try { localStorage.setItem("nfu_tab", name); } catch (e) {}
     if (name === "bootmenu") bootMenuShown();
+    // The license password never outlives a visit to the License tab.
+    if (name === "license") refreshLicense();
+    else clearLicensePassword();
   }
   showTab = show;
   tabs.forEach(function (t) { t.onclick = function () { show(t.getAttribute("data-tab")); }; });
@@ -1408,6 +1411,416 @@ function endBootMenuLeftover() {
   });
 }
 
+// ---- License tab
+// Reads the license on show (GET /api/license). Unlock checks the password and
+// loads every NE type; Review asks the server for the before -> after list
+// (nothing is written); Save asks for confirmation, then applies it. The
+// password lives only in its input: never stored, never in a URL, cleared after
+// Save and when the tab is left.
+var lic = null;            // last GET /api/license body
+var licTypes = null;       // NE types from Unlock; null until unlocked
+var licInitial = {};       // field key -> value as first shown (to spot real edits)
+var licReview = null;      // last error-free review with changes; Save needs it
+var licBusy = false;       // a license POST is in flight
+var licSeq = 0;            // drops stale GET answers
+// Main fields have their own inputs; every other field is rendered under Advanced.
+var LIC_MAIN_IDS = { NumNE: "lic-numne", NumUsers: "lic-numusers", Trial: "lic-trial" };
+
+function licFieldEl(key) {
+  return document.getElementById(LIC_MAIN_IDS[key] || "lic-f-" + key);
+}
+
+function licFieldValue(f) {
+  var el = licFieldEl(f.key);
+  if (!el) return null;
+  return f.kind === "bool" ? el.checked : el.value;
+}
+
+function clearLicensePassword() {
+  document.getElementById("lic-password").value = "";
+}
+
+function licEditable() {
+  return !!(lic && lic.state === "ok" && lic.editable);
+}
+
+function applyLicenseEnabled() {
+  var on = licEditable() && !licBusy;
+  Array.prototype.forEach.call(
+    document.querySelectorAll("#lic-form input, #lic-form button"), function (el) {
+      if (el.id === "lic-type-filter") return;
+      // Before Unlock the type list is a read-only view of the enabled types.
+      el.disabled = !on || el.getAttribute("data-ro") === "1";
+    });
+  document.getElementById("btn-lic-save").disabled = !on || !licReview;
+  var canAct = !!(lic && lic.editable) && !licBusy;
+  document.getElementById("btn-lic-create").disabled = !canAct;
+  document.getElementById("btn-lic-migrate").disabled = !canAct;
+}
+
+function setLicenseBusy(on) {
+  licBusy = on;
+  applyLicenseEnabled();
+}
+
+function invalidateLicenseReview() {
+  licReview = null;
+  document.getElementById("btn-lic-save").disabled = true;
+  document.getElementById("lic-review").innerHTML = "";
+}
+
+function licenseStatusText(d) {
+  var t;
+  if (d.state === "unavailable") {
+    t = "The license tools are not on this host (/usr/cnc/mbin/lice) — is netFLEX installed?";
+  } else if (d.state === "missing") {
+    t = "No license on this box.";
+  } else if (d.state === "old_format") {
+    t = "The license is in an older format; convert it before editing." +
+        (d.error ? " (" + d.error + ")" : "");
+  } else if (d.state === "unreadable") {
+    t = "The license could not be read: " + (d.error || "unknown error");
+  } else {
+    t = d.editable ? "netFLEX is down — edits allowed."
+                   : "Read-only: " + (d.reason || "editing is not allowed right now");
+  }
+  if ((d.state === "missing" || d.state === "old_format") && !d.editable && d.reason) {
+    t += " Not possible right now: " + d.reason + ".";
+  }
+  return t;
+}
+
+function renderLicenseFields(d) {
+  var L = d.license || {};
+  var adv = "";
+  licInitial = {};
+  (d.fields || []).forEach(function (f) {
+    if (!f.main) {
+      var id = "lic-f-" + f.key;
+      var input = f.kind === "bool"
+        ? "<input type='checkbox' id='" + esc(id) + "'>"
+        : "<input type='text' id='" + esc(id) + "' autocomplete='off'" +
+          (f.max_len ? " maxlength='" + esc(f.max_len) + "'" : "") + ">";
+      adv += "<div class='cfg-row'><label for='" + esc(id) + "'>" + esc(f.label) +
+        "</label>" + input + "<span class='hint'>" + esc(f.key) +
+        (f.key in L ? "" : " (not in this license)") + "</span></div>";
+    }
+  });
+  document.getElementById("lic-adv-fields").innerHTML = adv;
+  (d.fields || []).forEach(function (f) {
+    var el = licFieldEl(f.key);
+    if (!el) return;
+    var v = L[f.key];
+    if (f.kind === "bool") el.checked = v === true;
+    else el.value = v === null || v === undefined ? "" : String(v);
+    licInitial[f.key] = licFieldValue(f);
+  });
+  document.getElementById("lic-expiry").value = d.expiry || "";
+
+  // Values lice reports that this tab does not edit (watch bits, NE groups, ...).
+  var skip = { EnabledNeTypes: 1, MaintExpireDate: 1 };
+  (d.fields || []).forEach(function (f) { skip[f.key] = 1; });
+  var other = "";
+  Object.keys(L).sort().forEach(function (k) {
+    if (skip[k]) return;
+    other += row(esc(k), esc(licPlain(L[k])));
+  });
+  document.getElementById("lic-adv-other").innerHTML = other || row("-", "");
+}
+
+// A read-only lice -j value as text: a list of records reads "2 MD Reader, 3 ...".
+function licPlain(v) {
+  if (v === null || typeof v !== "object") return v;
+  if (Array.isArray(v)) {
+    return v.map(function (e) {
+      if (e === null || typeof e !== "object") return String(e);
+      return Object.keys(e).map(function (k) { return licPlain(e[k]); }).join(" ");
+    }).join(", ");
+  }
+  return JSON.stringify(v);
+}
+
+// Before Unlock: the enabled types from lice -j, read-only. After: every type.
+function renderLicenseTypes() {
+  var rows, note;
+  if (licTypes) {
+    rows = licTypes;
+    note = "Ticked = enabled. " + licTypes.length + " types.";
+  } else {
+    rows = ((lic && lic.license && lic.license.EnabledNeTypes) || []).map(function (e) {
+      return { type: e.type, name: e.name, enabled: true };
+    });
+    note = "Enabled types shown. Enter the license password and Unlock to see and change all types.";
+  }
+  var html = "";
+  rows.forEach(function (r) {
+    html += "<label class='lic-type' data-text='" + esc((r.type + " " + (r.name || "")).toLowerCase()) +
+      "'><input type='checkbox' data-type='" + esc(r.type) + "'" +
+      (r.enabled ? " checked" : "") + (licTypes ? "" : " data-ro='1'") + "> " +
+      esc(r.type) + " " + esc(r.name || "") + "</label>";
+  });
+  document.getElementById("lic-type-list").innerHTML =
+    html || "<span class='muted'>No NE types enabled.</span>";
+  document.getElementById("lic-types-note").textContent = note;
+  applyLicenseTypeFilter();
+}
+
+function applyLicenseTypeFilter() {
+  var q = document.getElementById("lic-type-filter").value.toLowerCase().trim();
+  Array.prototype.forEach.call(document.querySelectorAll("#lic-type-list label.lic-type"),
+    function (l) {
+      l.style.display = !q || l.getAttribute("data-text").indexOf(q) >= 0 ? "" : "none";
+    });
+}
+
+function renderLicense(d) {
+  lic = d;
+  licTypes = null;
+  document.getElementById("lic-status").textContent = licenseStatusText(d);
+  document.getElementById("lic-status").className =
+    "lic-status " + (d.state === "ok" && d.editable ? "ok" : "warn");
+  document.getElementById("btn-lic-create").style.display = d.state === "missing" ? "" : "none";
+  document.getElementById("btn-lic-migrate").style.display = d.state === "old_format" ? "" : "none";
+  document.getElementById("lic-form").style.display = d.state === "ok" ? "" : "none";
+  invalidateLicenseReview();
+  if (d.state === "ok") {
+    renderLicenseFields(d);
+    renderLicenseTypes();
+  }
+  applyLicenseEnabled();
+}
+
+function refreshLicense() {
+  var seq = ++licSeq;
+  if (!loaded.license) spin("lic-spin", true);
+  getJSON("/api/license", function (d) {
+    if (seq !== licSeq) return;
+    spin("lic-spin", false);
+    loaded.license = true;
+    renderLicense(d);
+  }, function (status) {
+    if (seq !== licSeq) return;
+    spin("lic-spin", false);
+    document.getElementById("lic-status").textContent =
+      "Could not read the license (HTTP " + status + ").";
+  });
+}
+
+function licNumber(kind, s) {
+  var t = String(s).trim();
+  if (kind === "int" && /^[0-9]{1,10}$/.test(t)) return parseInt(t, 10);
+  if (kind === "float" && /^[0-9]+(\.[0-9]+)?$/.test(t)) return parseFloat(t);
+  return t;   // not a number: the server names the field in its error
+}
+
+// The review/save body. Every field shown is sent (the server ignores unchanged
+// ones), except, when left as shown: a field the license lacks (sending it would
+// add it), and text fields (a license's Text is often empty, which lice cannot
+// set, so the server would reject an untouched one).
+function licenseRequest() {
+  var values = {};
+  var L = (lic && lic.license) || {};
+  (lic.fields || []).forEach(function (f) {
+    var v = licFieldValue(f);
+    if (v === null) return;
+    if (v === licInitial[f.key] && (!(f.key in L) || f.kind === "str")) return;
+    values[f.key] = (f.kind === "int" || f.kind === "float") ? licNumber(f.kind, v) : v;
+  });
+  var req = {
+    password: document.getElementById("lic-password").value,
+    values: values,
+    expiry: document.getElementById("lic-expiry").value.trim()
+  };
+  // NE types only once Unlock has loaded the full list; otherwise unchanged.
+  var neOn = licTypes ? licCheckedTypes() : null;
+  if (neOn) req.ne_on = neOn;
+  return req;
+}
+
+function licCheckedTypes() {
+  var on = [];
+  Array.prototype.forEach.call(document.querySelectorAll("#lic-type-list input[type=checkbox]"),
+    function (c) { if (c.checked) on.push(parseInt(c.getAttribute("data-type"), 10)); });
+  return on;
+}
+
+function licTypeName(n) {
+  var name = "";
+  (licTypes || []).forEach(function (t) { if (t.type === n) name = t.name; });
+  return name;
+}
+
+function licShow(v) {
+  if (v === null || v === undefined || v === "") return "(not set)";
+  if (v === true) return "yes";
+  if (v === false) return "no";
+  return String(v);
+}
+
+function licChangeCount(d) {
+  return (d.changes || []).length + (d.ne_toggle || []).length + (d.expiry ? 1 : 0);
+}
+
+// d: a 200 review body, or null with errors (400 [{field,message}]).
+function renderLicenseReview(d, errors) {
+  var html = "";
+  if (errors && errors.length) {
+    html += "<div class='lic-errors'><b>Fix these first:</b><ul>";
+    errors.forEach(function (e) {
+      html += "<li>" + esc(e.field) + ": " + esc(e.message) + "</li>";
+    });
+    document.getElementById("lic-review").innerHTML = html + "</ul></div>";
+    return;
+  }
+  (d.warnings || []).forEach(function (w) {
+    html += "<div class='lic-warn'>⚠️ " + esc(w) + "</div>";
+  });
+  if (!licChangeCount(d)) {
+    document.getElementById("lic-review").innerHTML =
+      html + "<p class='muted'>No changes — the license already has these values.</p>";
+    return;
+  }
+  html += "<table class='checks lic-changes'><thead><tr><th>Field</th><th>Before</th>" +
+          "<th>After</th></tr></thead><tbody>";
+  (d.changes || []).forEach(function (c) {
+    html += "<tr><td>" + esc(c.label) + " <span class='muted'>(" + esc(c.key) + ")</span></td>" +
+      "<td>" + esc(licShow(c.before)) + "</td><td>" + esc(licShow(c.after)) + "</td></tr>";
+  });
+  var enable = d.ne_enable || [];
+  (d.ne_toggle || []).forEach(function (n) {
+    var on = enable.indexOf(n) >= 0;
+    html += "<tr><td>NE type " + esc(n) + " " + esc(licTypeName(n)) + "</td><td>" +
+      (on ? "disabled" : "enabled") + "</td><td>" + (on ? "enabled" : "disabled") + "</td></tr>";
+  });
+  if (d.expiry) {
+    html += "<tr><td>Expiry date</td><td>" + esc(licShow(lic && lic.expiry)) + "</td><td>" +
+      esc(d.expiry) + "</td></tr>";
+  }
+  document.getElementById("lic-review").innerHTML = html + "</tbody></table>";
+}
+
+function unlockLicense() {
+  var msg = document.getElementById("lic-msg");
+  msg.textContent = "Unlocking…";
+  setLicenseBusy(true);
+  postJSON("/api/license/unlock", { password: document.getElementById("lic-password").value },
+    function (status, d) {
+      setLicenseBusy(false);
+      if (status === 200 && d.ok) {
+        licTypes = d.ne_types || [];
+        invalidateLicenseReview();
+        renderLicenseTypes();
+        applyLicenseEnabled();
+        msg.textContent = "Unlocked — all NE types listed.";
+      } else {
+        msg.textContent = "Not unlocked: " + (d.error || ("HTTP " + status));
+      }
+    });
+}
+
+function reviewLicense() {
+  var msg = document.getElementById("lic-msg");
+  invalidateLicenseReview();
+  document.getElementById("lic-result").innerHTML = "";
+  msg.textContent = "Reviewing…";
+  setLicenseBusy(true);
+  postJSON("/api/license/review", licenseRequest(), function (status, d) {
+    setLicenseBusy(false);
+    if (status === 200) {
+      renderLicenseReview(d);
+      licReview = licChangeCount(d) ? d : null;
+      msg.textContent = licReview ? "Review the changes, then Save." : "";
+    } else if (status === 400) {
+      renderLicenseReview(null, d.errors || [{ field: "", message: d.error || "invalid" }]);
+      msg.textContent = "";
+    } else {
+      msg.textContent = "Not reviewed: " + (d.error || ("HTTP " + status));
+    }
+    applyLicenseEnabled();
+  });
+}
+
+function saveLicense() {
+  if (!licReview) return;
+  var n = licChangeCount(licReview);
+  showConfirm({
+    title: "Save the license on " + thisHost() + "?",
+    body: "Apply " + n + " change" + (n === 1 ? "" : "s") + " to /usr/cnc/data/lic.ucs.\n" +
+          "A backup copy (lic.ucs.nfupgrader.<time>) is taken first." +
+          ((licReview.warnings || []).length
+            ? "\n\nWarnings:\n  - " + licReview.warnings.join("\n  - ") : ""),
+    ok: "Save license",
+    danger: true
+  }, function () {
+    var req = licenseRequest();
+    document.getElementById("lic-msg").textContent = "Saving…";
+    setLicenseBusy(true);
+    postJSON("/api/license/save", req, licenseSaved);
+  });
+}
+
+function licenseSaved(status, d) {
+  clearLicensePassword();
+  setLicenseBusy(false);
+  document.getElementById("lic-msg").textContent = "";
+  var html = "";
+  if (status === 200) {
+    html += d.ok ? "<p class='lic-ok'>✅ Saved.</p>"
+                 : "<p class='lic-bad'>❌ Not everything was saved.</p>";
+    if ((d.applied || []).length) html += "<p>Applied: " + esc(d.applied.join(", ")) + "</p>";
+    if ((d.not_applied || []).length) {
+      html += "<p class='lic-bad'>Not applied: " + esc(d.not_applied.join(", ")) + "</p>";
+    }
+    if (d.backup) html += "<p>Backup: <code>" + esc(d.backup) + "</code></p>";
+    if (d.ok && !(d.applied || []).length) html += "<p class='muted'>Nothing needed changing.</p>";
+  } else if (status === 400) {
+    html += "<p class='lic-bad'>❌ Not saved:</p><ul>";
+    (d.errors || []).forEach(function (e) {
+      html += "<li>" + esc(e.field) + ": " + esc(e.message) + "</li>";
+    });
+    html += "</ul>";
+  } else {
+    html += "<p class='lic-bad'>❌ Not saved (HTTP " + esc(status) + ").</p>";
+  }
+  if (d.error) html += "<pre class='lic-error'>" + esc(d.error) + "</pre>";
+  document.getElementById("lic-result").innerHTML = html;
+  refreshLicense();
+}
+
+function licenseAction(path, title, body, okLabel, done) {
+  showConfirm({ title: title, body: body, ok: okLabel }, function () {
+    var msg = document.getElementById("lic-action-msg");
+    msg.textContent = "Working…";
+    setLicenseBusy(true);
+    postJSON(path, {}, function (status, d) {
+      setLicenseBusy(false);
+      msg.textContent = status === 200 ? done(d) : "Failed: " + (d.error || ("HTTP " + status));
+      refreshLicense();
+    });
+  });
+}
+
+function createLicense() {
+  licenseAction("/api/license/create", "Create a license from the template?",
+    "Copies the netFLEX default license template to /usr/cnc/data/lic.ucs. " +
+    "Then set the values from the purchase email and Save.", "Create license",
+    function (d) {
+      if (d.migrate && !d.migrate.ok) {
+        return "Created, but converting it failed (license-migrate exit " + d.migrate.rc + ").";
+      }
+      return "Created from the template.";
+    });
+}
+
+function migrateLicense() {
+  licenseAction("/api/license/migrate", "Convert the license to the current format?",
+    "Runs license-migrate on /usr/cnc/data/lic.ucs.", "Convert",
+    function (d) {
+      return d.ok ? "Converted." : "license-migrate failed (exit " + d.rc + ").";
+    });
+}
+// ---- end License tab
+
 // Tabs first, so a failure in a later binding can't leave the user stuck on one tab.
 initTabs();
 
@@ -1456,6 +1869,23 @@ document.getElementById("not-installed-cfg").onclick = function (ev) {
   if (showTab) showTab("config");
 };
 document.getElementById("btn-launch").onclick = launch;
+document.getElementById("cfg-license").onclick = function () {
+  if (showTab) showTab("license");
+};
+document.getElementById("btn-lic-create").onclick = createLicense;
+document.getElementById("btn-lic-migrate").onclick = migrateLicense;
+document.getElementById("btn-lic-unlock").onclick = unlockLicense;
+document.getElementById("btn-lic-review").onclick = reviewLicense;
+document.getElementById("btn-lic-save").onclick = saveLicense;
+document.getElementById("lic-type-filter").oninput = applyLicenseTypeFilter;
+// Any edit (not the password or the type filter) makes the last review stale.
+function onLicenseEdit(ev) {
+  var id = ev.target.id;
+  if (id === "lic-password" || id === "lic-type-filter") return;
+  if (licReview || document.getElementById("lic-review").innerHTML) invalidateLicenseReview();
+}
+document.getElementById("lic-form").addEventListener("input", onLicenseEdit);
+document.getElementById("lic-form").addEventListener("change", onLicenseEdit);
 document.getElementById("btn-bootmenu-open").onclick = openBootMenu;
 document.getElementById("btn-bootmenu-end").onclick = endBootMenu;
 document.getElementById("btn-bootmenu-end-leftover").onclick = endBootMenuLeftover;
