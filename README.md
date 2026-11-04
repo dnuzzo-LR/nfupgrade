@@ -4,6 +4,43 @@ Customer-facing web tool that wraps the netFLEX upgrade scripts so a customer ca
 upgrade the host they are logged into, with a consistent severity-prefixed log and
 a read-only status view of every host in the site.
 
+## Quick start
+
+On a RHEL/Rocky 7, 8 or 9 host that can reach GitHub, **as root**:
+
+1. **Install** (or update) the tool into `/opt/nfupgrader`:
+
+   ```sh
+   curl -fsSL https://github.com/dnuzzo-LR/nfupgrade/releases/latest/download/install.sh | bash
+   ```
+
+2. **Put the netFLEX CORE RPM** you want to install or upgrade to next to it:
+
+   ```sh
+   mv netFLEX-CORE-*.rpm /opt/nfupgrader/
+   ```
+
+3. **Start it:**
+
+   ```sh
+   cd /opt/nfupgrader && NFU_BIND=0.0.0.0 NFU_PORT=8099 ./run.sh
+   ```
+
+   It prints a single-use link such as
+   `http://<host>:8099/auth?token=…`. Open it in a browser on your desktop.
+   (Without `NFU_BIND`/`NFU_PORT` it listens on loopback only and prints the
+   `ssh -L` tunnel to use instead. With `NFU_BIND=0.0.0.0` the link and the
+   pages travel as plain HTTP.)
+
+4. **Use the tabs:** on a host without netFLEX the tool offers a new
+   **Install**; on an installed host, **Stage** then **Upgrade**. The
+   **License** tab sets the license from the purchase email, and the **Boot
+   menu** tab runs netFLEX's boot menu in the page. Details are below.
+
+Re-running the `curl` command updates the tool in place; `logs/` (audit log,
+saved configs, report snapshots) and any RPMs in `/opt/nfupgrader` are kept.
+`/opt/nfupgrader/VERSION` shows the installed version.
+
 Design and plans live in `~/WorkNotes`:
 - Design: `~/WorkNotes/design/2026-09-15-web-upgrade-tool-design.md`
 - Phase 1 plan: `~/WorkNotes/plans/2026-09-17-nfupgrader-phase1-fork-logging-plan.md`
@@ -15,7 +52,7 @@ Design and plans live in `~/WorkNotes`:
 | `nf_upgrade`, `nf_upgrader` | Forks of netFLEX `inc_upgrade` / `inc_upgrader`, behavior-identical to the originals but with a cleaned-up, severity-prefixed log. Intended to eventually replace the originals in the product. |
 | `nf_install` | New (not a fork): fresh netFLEX CORE install of the local host, with resume and reset. See *Installing on a new host*. |
 | `nf_log.ksh` | Sourced logging helpers: `loginfo` / `logwarn` / `logerror` / `logfatal` and the status-preserving `run_logged` sub-command wrapper. |
-| `ref/inc_upgrade`, `ref/inc_upgrader` | Pinned snapshots of the originals (netFLEX commit `776f42242`), used only as the baseline for the equivalence test. Not shipped. |
+| `ref/inc_upgrade`, `ref/inc_upgrader` | Pinned snapshots of the originals (netFLEX commit `776f42242`), used only as the baseline for the equivalence test. Never run. |
 | `test/` | ksh unit tests and the fork verifier. |
 
 ## Constraints
@@ -48,9 +85,12 @@ tool. Release tarballs contain the tool only, not the tests.
 git tag -a v1.0.0 -m "nfupgrader 1.0.0" && git push origin v1.0.0
 sh tools/make_release.sh 1.0.0     # builds dist/nfupgrader-1.0.0.tar.gz + dist/install.sh
 gh release create v1.0.0 --repo dnuzzo-LR/nfupgrade --title "nfupgrader 1.0.0" \
-    dist/nfupgrader-1.0.0.tar.gz dist/install.sh
+    --latest dist/nfupgrader-1.0.0.tar.gz dist/install.sh
 ```
 
+The release must not be a pre-release: the one-liner uses
+`releases/latest`, which skips pre-releases (fix one with
+`gh release edit v<ver> --prerelease=false --latest`).
 `make_release.sh` requires the tag to exist and the working tree to be clean;
 it fills the version, the tarball's checksum and the repo (from `origin`) into
 `tools/install.sh` and prints the `gh release create` command to run.

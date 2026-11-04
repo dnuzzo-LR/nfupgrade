@@ -60,7 +60,7 @@ echo "Built $TAR"
 echo "      $OUT/install.sh  (sha256 $SUM)"
 echo
 echo "Publish with:"
-echo "  gh release create v$VER --repo $REPO --title \"nfupgrader $VER\" \\"
+echo "  gh release create v$VER --repo $REPO --title \"nfupgrader $VER\" --latest \\"
 echo "      \"$TAR\" \"$OUT/install.sh\""
 echo
 echo "Install on a box (as root):"
