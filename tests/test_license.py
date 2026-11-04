@@ -94,9 +94,48 @@ class TestLicense(unittest.TestCase):
         self.assertTrue(L.validate({"Trial": 1}, "", None))
         self.assertEqual(L.validate({"Trial": True}, "", None), [])
         self.assertTrue(L.validate({}, "", [0]))
-        self.assertTrue(L.validate({}, "", [256]))
+        self.assertTrue(L.validate({}, "", [264]))
         self.assertTrue(L.validate({}, "", ["5"]))
         self.assertEqual(L.validate({}, "", [1, 255]), [])
+
+    def test_validate_ne_types_up_to_263(self):
+        # MAX_NE_TYPES is 264 (netflex common/include/ne_defs.h): 1..263 are real.
+        self.assertEqual(L.NE_TYPE_MAX, 263)
+        self.assertEqual(L.validate({}, "", [256, 260, 263]), [])
+        errs = L.validate({}, "", [264])
+        self.assertEqual(self._fields(errs), ["ne_on"])
+        self.assertIn("263", errs[0]["message"])
+
+    def test_diff_type_260_untouched(self):
+        lic = dict(LIC, EnabledNeTypes=[{"type": 5}, {"type": 260}])
+        table = [{"type": n, "name": "", "enabled": False, "group": 0, "count": 0}
+                 for n in (1, 5, 260)]
+        d = L.diff(lic, {"NumNE": 7}, "", [5, 260], table)
+        self.assertEqual((d["ne_toggle"], d["set_lines"]), ([], ["set numne 7"]))
+
+    def test_diff_never_toggles_unseen_types(self):
+        # lice -j can report type 0; the checklist starts at 1.
+        lic = dict(LIC, EnabledNeTypes=[{"type": 0}, {"type": 5}, {"type": 9}])
+        self.assertEqual(L.diff(lic, {}, "", [5, 9])["ne_toggle"], [])
+        self.assertEqual(L.diff(lic, {}, "", [5])["ne_toggle"], [9])
+        # With an unlock table, only types in it may be toggled.
+        table = L.parse_ne_all(NE_ALL)  # types 1, 5, 254
+        d = L.diff(lic, {}, "", [5, 1], table)
+        self.assertEqual((d["ne_toggle"], d["ne_enable"]), ([1], [1]))
+        self.assertEqual(L.diff(lic, {}, "", [5, 7], table)["ne_toggle"], [])
+
+    def test_validate_text_127_bytes(self):
+        # license.h: char text[LIC_TEXT_SIZE] (128); lice strncpy's 128 -> no NUL.
+        self.assertEqual(L.validate({"Text": "x" * 127}, "", None), [])
+        self.assertEqual(self._fields(L.validate({"Text": "x" * 128}, "", None)),
+                         ["Text"])
+        self.assertEqual(L.validate({"Version": "x" * 20}, "", None), [])
+
+    def test_validate_rejects_non_ascii_text(self):
+        for k in ("Text", "Version"):
+            errs = L.validate({k: "caf\u00e9"}, "", None)
+            self.assertEqual(self._fields(errs), [k])
+            self.assertIn("ASCII", errs[0]["message"])
 
     def test_diff_and_script(self):
         d = L.diff(LIC, {"NumNE": 500, "NumUsers": 10, "Trial": True}, "", {5, 7})
@@ -143,7 +182,8 @@ class TestLicense(unittest.TestCase):
     def test_validate_max_len_bytes(self):
         self.assertEqual(self._fields(L.validate({"Version": "\u00e9" * 20}, "", None)),
                          ["Version"])
-        self.assertEqual(L.validate({"Version": "\u00e9" * 10}, "", None), [])
+        self.assertEqual(self._fields(L.validate({"Version": "\u00e9" * 10}, "", None)),
+                         ["Version"])  # non-ASCII
 
     def test_diff_disable_type(self):
         self.assertEqual(L.diff(LIC, {}, "", set())["ne_toggle"], [5])
@@ -188,7 +228,7 @@ class FakeLice(object):
              (L.LICE, "-j", path): lambda a, i: RunResult(0, json.dumps(self.lic), ""),
              (L.LICE, "-i", path): self._lice_i}
         for exp in ("01/05/2027", "12/31/2027"):
-            r[(L.LICENSE, "-M", exp)] = self._license_m
+            r[(L.LICENSE, "-n", path, "-M", exp)] = self._license_m
         return FakeHost(r)
 
     def _auth(self, lines, tool):
@@ -252,7 +292,7 @@ class FakeLice(object):
             return RunResult(124, "", err)
         if not ok:
             return RunResult(1, out, err)
-        m, d, y = argv[2].split("/")
+        m, d, y = argv[4].split("/")
         self.lic["MaintExpireDate"] = "{}-{}-{} 23:59:59".format(y, m, d)
         return RunResult(0, "Complete.\n", "")
 
@@ -297,7 +337,7 @@ class TestLicenseWrite(unittest.TestCase):
         self.assertEqual(L.expiry_of(r["license"]), "01/05/2027")
         i = h.calls.index([L.LICE, "-i", "/p"])
         self.assertTrue(h.inputs[i].startswith("pw\n"))
-        m = h.calls.index([L.LICENSE, "-M", "01/05/2027"])
+        m = h.calls.index([L.LICENSE, "-n", "/p", "-M", "01/05/2027"])
         self.assertEqual(h.inputs[m], "pw\npw\npw\n")
         self.assertLess(i, m)
         self.assertEqual(fl.eof_spins, [])
@@ -341,7 +381,7 @@ class TestLicenseWrite(unittest.TestCase):
         r = L.apply(h, "bad", self._diff(fl, {}, "1/5/2027"), "/p")
         self.assertEqual((r["ok"], r["error"], r["applied"], r["not_applied"]),
                          (False, "wrong license password", [], ["Expiry"]))
-        self.assertNotIn((L.LICENSE, "-M"), _argv0s(h))
+        self.assertNotIn(L.LICENSE, [c[0] for c in h.calls])
         self.assertEqual(fl.eof_spins, [])
         self.assertEqual(fl.lic, before)
         i = h.calls.index([L.LICE, "-i", "/p"])
@@ -352,14 +392,41 @@ class TestLicenseWrite(unittest.TestCase):
         h = fl.host()
         r = L.apply(h, "pw", self._diff(fl, {}, "1/5/2027"), "/p")
         self.assertEqual((r["ok"], r["applied"]), (True, ["Expiry"]))
-        m = h.calls.index([L.LICENSE, "-M", "01/05/2027"])
+        m = h.calls.index([L.LICENSE, "-n", "/p", "-M", "01/05/2027"])
         self.assertEqual(h.inputs[m], "pw\npw\npw\n")
         self.assertLess(h.calls.index([L.LICE, "-i", "/p"]), m)
         self.assertEqual(fl.eof_spins, [])
 
+    def test_license_m_uses_lic_path(self):
+        fl = FakeLice(LIC)
+        h = fl.host("/x/lic.ucs")
+        r = L.apply(h, "pw", self._diff(fl, {}, "1/5/2027"), "/x/lic.ucs")
+        self.assertTrue(r["ok"], r)
+        self.assertIn([L.LICENSE, "-n", "/x/lic.ucs", "-M", "01/05/2027"], h.calls)
+        # license.c copies -n into char Lfile[80]: refuse a longer path.
+        long_path = "/" + "x" * 79
+        h = fl.host(long_path)
+        r = L.apply(h, "pw", self._diff(fl, {}, "12/31/2027"), long_path)
+        self.assertFalse(r["ok"])
+        self.assertIn("too long", r["error"])
+        self.assertEqual(h.calls, [])
+
+    def test_non_ascii_password_rejected(self):
+        fl = FakeLice(LIC)
+        h = fl.host()
+        d = self._diff(fl, {"NumNE": 500})
+        for fn in (lambda: L.apply(h, "p\u00e9", d, "/p"),
+                   lambda: L.unlock(h, "p\u00e9", "/p")):
+            r = fn()
+            self.assertFalse(r["ok"])
+            self.assertIn("ASCII", r["error"])
+            self.assertNotIn("p\u00e9", r["error"])
+        self.assertEqual(L._pw_error("p\u00e9"), L.NON_ASCII_PW)
+        self.assertEqual(h.calls, [])
+
     def test_fake_spins_on_short_input(self):
         fl = FakeLice(LIC)
-        r = fl.host().run([L.LICENSE, "-M", "01/05/2027"], input="bad\n")
+        r = fl.host().run([L.LICENSE, "-n", "/p", "-M", "01/05/2027"], input="bad\n")
         self.assertEqual(r.rc, 124)
         self.assertEqual(fl.eof_spins, ["license"])
 
@@ -410,7 +477,7 @@ class TestLicenseWrite(unittest.TestCase):
         self.assertEqual(r["error"], "wrong license password")
         self.assertEqual(r["applied"], [])
         self.assertEqual(r["not_applied"], ["NumNE", "NE type 7", "Expiry"])
-        self.assertNotIn((L.LICENSE, "-M"), _argv0s(h))
+        self.assertNotIn(L.LICENSE, [c[0] for c in h.calls])
         self.assertEqual(fl.lic, before)
 
     def test_apply_unrecognised_failure_shows_stderr(self):

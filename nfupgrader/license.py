@@ -61,12 +61,18 @@ FIELDS = [
     _f("ODC", "odc", "bool", "ODC"),
     _f("WSO", "wso", "bool", "WSO"),
     _f("Errigal", "errigal", "bool", "Errigal"),
+    # license.h: char version[VER_SIZE+1] (21); char text[LIC_TEXT_SIZE] (128),
+    # and lice strncpy's 128 bytes into it, so 128 would leave no NUL.
     _f("Version", "version", "str", "Version", max_len=20),
-    _f("Text", "text", "str", "Text", max_len=128),
+    _f("Text", "text", "str", "Text", max_len=127),
 ]
 _BY_KEY = dict((f["key"], f) for f in FIELDS)
 
 INT_MAX = 2147483647  # lice parses with stoi; larger values throw
+# NE types are 1..MAX_NE_TYPES-1 (MAX_NE_TYPES 264, netflex ne_defs.h); 0 is
+# not a product and never appears in the Unlock checklist.
+NE_TYPE_MAX = 263
+LFILE_MAX_BYTES = 79  # license.c strcpy's -n into char Lfile[80]
 
 _EXP_RE = re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4})$")
 
@@ -174,6 +180,12 @@ def _bad_char(s):
     return any(ord(c) < 0x20 or ord(c) == 0x7f for c in s)
 
 
+def _non_ascii(s):
+    # lice reads stdin as bytes under the service's (often C) locale; anything
+    # outside ASCII is mangled or refused, so ask for plain ASCII up front.
+    return any(ord(c) > 0x7f for c in s)
+
+
 def validate(values, expiry, ne_on):
     """Return [{"field","message"}] for anything invalid. ne_on None = skip."""
     errs = []
@@ -205,6 +217,9 @@ def validate(values, expiry, ne_on):
                     "-- lice cannot store that".format(f["label"]))
             elif _bad_char(v):
                 err(key, "must not contain control characters")
+            elif _non_ascii(v):
+                err(key, "must be plain ASCII text (no accented or "
+                    "special characters)")
     if expiry not in ("", None) and _norm_expiry(expiry) is None:
         err("expiry", "must be a valid MM/DD/YYYY date, 1970 or later")
     if ne_on is not None:
@@ -216,8 +231,10 @@ def validate(values, expiry, ne_on):
             err("ne_on", "must be a list of NE type numbers")
         else:
             for n in items:
-                if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= 255:
-                    err("ne_on", "NE type must be a whole number 1 to 255")
+                if isinstance(n, bool) or not isinstance(n, int) \
+                        or not 1 <= n <= NE_TYPE_MAX:
+                    err("ne_on", "NE type must be a whole number 1 to {}".format(
+                        NE_TYPE_MAX))
                     break
     return errs
 
@@ -241,7 +258,10 @@ def _render(f, v):
 
 def diff(lic, values, expiry, ne_on, ne_table=None):
     """Compute the edit between lic and the requested values (assumed valid).
-    ne_on None means NE types are unchanged."""
+    ne_on None means NE types are unchanged. Only types the client can see are
+    ever toggled: 1..NE_TYPE_MAX, and, when ne_table (the Unlock `ne all` rows)
+    is given, only types listed in it -- so an enabled type the checklist does
+    not show (e.g. type 0) is never switched off unasked."""
     changes, set_lines, warnings = [], [], []
     for f in FIELDS:
         key = f["key"]
@@ -268,7 +288,10 @@ def diff(lic, values, expiry, ne_on, ne_table=None):
         toggle = []
     else:
         want = set(ne_on)
-        toggle = sorted(cur ^ want)
+        visible = set(range(1, NE_TYPE_MAX + 1))
+        if ne_table is not None:
+            visible &= set(r["type"] for r in ne_table)
+        toggle = sorted((cur ^ want) & visible)
         enable = [n for n in toggle if n in want]
         by_type = dict((r["type"], r) for r in (ne_table or []))
         for n in toggle:
@@ -308,6 +331,7 @@ _BAD_PW = ("Invalid password.", "Too many incorrect attempts.")
 WRONG_PW = "wrong license password"
 INVALID_PW = "invalid license password"
 TOO_LONG_PW = "license password too long"
+NON_ASCII_PW = "the license password must be plain ASCII"
 PW_MAX_BYTES = 254      # fgets into a 256-byte buffer, incl. newline and NUL
 LICE_TIMEOUT = 120      # lice/license loop forever on stdin EOF at the prompt
 MIGRATE_TIMEOUT = 600
@@ -321,6 +345,8 @@ def _pw_error(password):
         return INVALID_PW
     if len(password.encode("utf-8", "replace")) > PW_MAX_BYTES:
         return TOO_LONG_PW
+    if _non_ascii(password):
+        return NON_ASCII_PW
     return ""
 
 
@@ -481,6 +507,8 @@ def apply(host, password, d, lic_path=LIC_PATH):
         changes, toggles, exp = d["changes"], d["ne_toggle"], d.get("expiry")
         if not (changes or toggles or exp):
             return {"ok": True, "applied": [], "not_applied": [], "error": ""}
+        if exp and len(lic_path.encode("utf-8")) > LFILE_MAX_BYTES:
+            raise ValueError("license path too long for license -n")
         script = build_script(password, d) if (d["set_lines"] or toggles) \
             else None
     except (ValueError, KeyError, TypeError, AttributeError) as e:
@@ -523,7 +551,9 @@ def apply(host, password, d, lic_path=LIC_PATH):
         # and loops forever on EOF (license.c:424-426). After a successful
         # unlock, -M reads no more stdin (set_license SET_MAINTENANCE_DATE,
         # load_license_mem(0) does not prompt), so the extra lines are unread.
-        r = host.run([LICENSE, "-M", exp], timeout=LICE_TIMEOUT,
+        # -n: license.c opens Lfile (default /usr/cnc/data/lic.ucs), so name
+        # the same file lice just edited.
+        r = host.run([LICENSE, "-n", lic_path, "-M", exp], timeout=LICE_TIMEOUT,
                      input=(password + "\n") * 3)
         if _wrong_pw(r.err):
             errors.append(WRONG_PW)
