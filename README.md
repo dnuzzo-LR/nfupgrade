@@ -24,10 +24,42 @@ Design and plans live in `~/WorkNotes`:
 - The Python service (later phases) targets **Python 3.6.8**, stdlib only — no third-party packages, no build step.
 - No nmake here — this repo is standalone; ignore any netFLEX `BASE`/`VPATH` build environment.
 
+## Installing nfupgrader on a host
+
+On a RHEL/Rocky 7, 8 or 9 host that can reach GitHub, as root:
+
+```sh
+curl -fsSL https://github.com/dnuzzo-LR/nfupgrade/releases/latest/download/install.sh | bash
+```
+
+Pin a version with `…/releases/download/v<version>/install.sh` instead of
+`latest`. The installer checks it is root on a supported OS with `python3`,
+`tar` and `sha256sum`; downloads `nfupgrader-<version>.tar.gz` from the same
+release and refuses (installing nothing) if its SHA-256 doesn't match the one
+built into the script; and unpacks it into `/opt/nfupgrader` (override with
+`NFU_INSTALL_DIR`). Re-running it updates in place: release files are
+overwritten, while `logs/`, any `netFLEX-CORE*.rpm` and anything else you put
+there are left alone. It writes `/opt/nfupgrader/VERSION` and does not start the
+tool. Release tarballs contain the tool only, not the tests.
+
+### Making a release
+
+```sh
+git tag -a v1.0.0 -m "nfupgrader 1.0.0" && git push origin v1.0.0
+sh tools/make_release.sh 1.0.0     # builds dist/nfupgrader-1.0.0.tar.gz + dist/install.sh
+gh release create v1.0.0 --repo dnuzzo-LR/nfupgrade --title "nfupgrader 1.0.0" \
+    dist/nfupgrader-1.0.0.tar.gz dist/install.sh
+```
+
+`make_release.sh` requires the tag to exist and the working tree to be clean;
+it fills the version, the tarball's checksum and the repo (from `origin`) into
+`tools/install.sh` and prints the `gh release create` command to run.
+
 ## Running the service on a host
 
-Copy the whole repo to the host (keep the layout — the `nfupgrader/` package and
-the `nf_upgrade` / `nf_upgrader` / `nf_log.ksh` scripts must stay siblings), then:
+Install it as above, or copy the whole repo to the host (keep the layout — the
+`nfupgrader/` package and the `nf_upgrade` / `nf_upgrader` / `nf_log.ksh`
+scripts must stay siblings), then:
 
 ```sh
 cd /opt/nfupgrader && ./run.sh
@@ -257,6 +289,7 @@ itself. The install form on the Config tab links here.
 ```sh
 ksh test/nf_log_test.ksh                          # unit tests for nf_log.ksh
 ksh test/nf_install_test.ksh                      # nf_install in a sandbox
+ksh test/install_test.ksh                         # make_release.sh + install.sh in a sandbox
 sh  test/nf_fork_verify.sh                         # fork syntax/equivalence/coverage/grammar
 python3 -m unittest discover -s tests -p 'test_*.py'   # Phase 2 python tests
 ```
