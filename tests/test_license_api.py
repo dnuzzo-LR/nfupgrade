@@ -1,6 +1,8 @@
 import json
 import os
+import shutil
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -27,6 +29,7 @@ class FakeSession(object):
 class TestLicenseApi(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
         self.ctx = make_ctx(self.tmp, running=False)
         self.lic_path = os.path.join(self.tmp, "lic.ucs")
         self.ctx = self.ctx._replace(license_path=self.lic_path)
@@ -248,6 +251,62 @@ class TestLicenseApi(unittest.TestCase):
             st, b = self.call("POST", "/api/license/migrate")
         self.assertEqual((st, b), (200, {"ok": True, "rc": 6}))
         self.assertIn("license_migrated", self.audit())
+
+    def test_create_and_migrate_refused_while_lock_held(self):
+        self.assertTrue(api._FIX_LOCK.acquire(False))
+        try:
+            with mock.patch.object(lic, "create_from_template") as cr, \
+                    mock.patch.object(lic, "migrate") as mg, \
+                    mock.patch.object(lic, "read_license") as rd:
+                for p in ("create", "migrate"):
+                    st, b = self.call("POST", "/api/license/" + p)
+                    self.assertEqual(st, 409)
+                    self.assertIn("another change", b["error"])
+        finally:
+            api._FIX_LOCK.release()
+        self.assertFalse(cr.called or mg.called or rd.called)
+
+    def test_save_rechecks_under_lock(self):
+        seen = []
+        real = api.license_editable
+
+        def spy(ctx, holding_lock=False):
+            seen.append((holding_lock, api._FIX_LOCK.locked()))
+            return real(ctx, holding_lock)
+
+        with mock.patch.object(api, "license_editable", spy), \
+                mock.patch.object(lic, "read_license", _read_ok), \
+                mock.patch.object(lic, "backup", return_value="/b"), \
+                mock.patch.object(lic, "apply", return_value={
+                    "ok": True, "applied": [], "not_applied": [], "error": "",
+                    "license": None}):
+            self.call("POST", "/api/license/save", self.req())
+        self.assertEqual(seen, [(True, True)])
+
+    def test_save_refused_in_launch_grace(self):
+        self.ctx.state["launched_at"] = time.time()
+        with mock.patch.object(lic, "read_license", _read_ok), \
+                mock.patch.object(lic, "apply") as ap, \
+                mock.patch.object(lic, "backup") as bk:
+            st, b = self.call("POST", "/api/license/save", self.req())
+        self.assertEqual(st, 409)
+        self.assertIn("just launched", b["error"])
+        self.assertFalse(ap.called or bk.called)
+        self.assertFalse(api._FIX_LOCK.locked())
+
+    def test_create_audits_migrate_rc(self):
+        reads = [{"state": "missing", "license": None, "error": ""},
+                 {"state": "old_format", "license": None, "error": "e"},
+                 _read_ok(None)]
+        with mock.patch.object(lic, "read_license", side_effect=reads), \
+                mock.patch.object(lic, "create_from_template", return_value="/t"), \
+                mock.patch.object(lic, "migrate",
+                                  return_value={"ok": True, "rc": 6, "error": ""}):
+            st, b = self.call("POST", "/api/license/create")
+        self.assertEqual(b["migrate"], {"ok": True, "rc": 6})
+        rec = [json.loads(l) for l in self.audit().splitlines()
+               if "license_created" in l][0]
+        self.assertEqual(rec["migrate"], {"ok": True, "rc": 6})
 
     def test_preview_refuses_writes(self):
         self.ctx.state["preview"] = "fresh"

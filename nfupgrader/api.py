@@ -281,8 +281,9 @@ def _license_path(ctx):
     return ctx.license_path or licmod.LIC_PATH
 
 
-def license_editable(ctx):
-    """(bool, reason): whether the license may be changed right now."""
+def license_editable(ctx, holding_lock=False):
+    """(bool, reason): whether the license may be changed right now.
+    holding_lock: the caller holds _FIX_LOCK, so skip the lock test."""
     if preview_scenario(ctx):
         return False, "preview mode"
     if ctx.host.run(["test", "-f", licmod.APP_UP]).rc == 0:
@@ -292,17 +293,21 @@ def license_editable(ctx):
     session = _bootmenu_session(ctx)
     if session is not None and session.running():
         return False, "the boot menu is open"
-    if fix_in_progress():
-        return False, "a check fix is running"
+    state = ctx.state if isinstance(ctx.state, dict) else {}
+    launched_at = state.get("launched_at")
+    if launched_at is not None and _now() - launched_at < FIX_LAUNCH_GRACE:
+        return False, "an upgrade or install was just launched"
+    if not holding_lock and fix_in_progress():
+        return False, "another change is in progress"
     if _snapshot_busy(ctx):
         return False, "a report snapshot is running"
     return True, ""
 
 
-def _license_body(ctx):
+def _license_body(ctx, holding_lock=False):
     """The GET /api/license body."""
     res = licmod.read_license(ctx.host, _license_path(ctx))
-    ok, reason = license_editable(ctx)
+    ok, reason = license_editable(ctx, holding_lock)
     res["editable"], res["reason"], res["fields"] = ok, reason, licmod.FIELDS
     if res["state"] == "ok":
         res["expiry"] = licmod.expiry_of(res["license"])
@@ -337,23 +342,33 @@ def _license_dispatch(method, path, body, client_ip, ctx):
     if path in ("/api/license/create", "/api/license/migrate"):
         creating = path.endswith("create")
         need = "missing" if creating else "old_format"
-        ok, reason = license_editable(ctx)
-        if not ok:
-            return _json(409, {"error": reason})
-        if licmod.read_license(ctx.host, lp)["state"] != need:
-            return _json(409, {"error": "license state is not {}".format(need)})
-        if not creating:
-            res = licmod.migrate(ctx.host)
-            ctx.audit.record("license_migrated", client=client_ip, rc=res["rc"])
-            return _json(200, {"ok": res["ok"], "rc": res["rc"]})
+        if not _FIX_LOCK.acquire(False):
+            return _json(409, {"error": "another change is in progress"})
         try:
-            tpl = licmod.create_from_template(lp)
-        except (ValueError, OSError) as e:
-            return _json(500, {"ok": False, "error": str(e)})
-        if licmod.read_license(ctx.host, lp)["state"] == "old_format":
-            licmod.migrate(ctx.host)
-        ctx.audit.record("license_created", client=client_ip, template=tpl)
-        return _json(200, _license_body(ctx))
+            ok, reason = license_editable(ctx, holding_lock=True)
+            if not ok:
+                return _json(409, {"error": reason})
+            if licmod.read_license(ctx.host, lp)["state"] != need:
+                return _json(409, {"error": "license state is not {}".format(need)})
+            if not creating:
+                res = licmod.migrate(ctx.host)
+                ctx.audit.record("license_migrated", client=client_ip, rc=res["rc"])
+                return _json(200, {"ok": res["ok"], "rc": res["rc"]})
+            try:
+                tpl = licmod.create_from_template(lp)
+            except (ValueError, OSError) as e:
+                return _json(500, {"ok": False, "error": str(e)})
+            mig = None
+            if licmod.read_license(ctx.host, lp)["state"] == "old_format":
+                m = licmod.migrate(ctx.host)
+                mig = {"ok": m["ok"], "rc": m["rc"]}
+            extra = {"migrate": mig} if mig is not None else {}
+            ctx.audit.record("license_created", client=client_ip, template=tpl, **extra)
+            body_out = _license_body(ctx, True)
+            body_out.update(extra)
+            return _json(200, body_out)
+        finally:
+            _FIX_LOCK.release()
 
     if path not in ("/api/license/unlock", "/api/license/review", "/api/license/save"):
         return _json(404, {"error": "not found"})
@@ -383,12 +398,12 @@ def _license_dispatch(method, path, body, client_ip, ctx):
                                       un["ne_types"]))
 
     # save
-    ok, reason = license_editable(ctx)
-    if not ok:
-        return _json(409, {"error": reason})
     if not _FIX_LOCK.acquire(False):
-        return _json(409, {"error": "a check fix is running"})
+        return _json(409, {"error": "another change is in progress"})
     try:
+        ok, reason = license_editable(ctx, holding_lock=True)
+        if not ok:
+            return _json(409, {"error": reason})
         cur = licmod.read_license(ctx.host, lp)
         if cur["state"] != "ok":
             return _json(409, {"error": "license is not readable"})
