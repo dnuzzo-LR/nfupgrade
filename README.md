@@ -41,10 +41,6 @@ Re-running the `curl` command updates the tool in place; `logs/` (audit log,
 saved configs, report snapshots) and any RPMs in `/opt/nfupgrader` are kept.
 `/opt/nfupgrader/VERSION` shows the installed version.
 
-Design and plans live in `~/WorkNotes`:
-- Design: `~/WorkNotes/design/2026-09-15-web-upgrade-tool-design.md`
-- Phase 1 plan: `~/WorkNotes/plans/2026-09-17-nfupgrader-phase1-fork-logging-plan.md`
-
 ## Layout
 
 | Path | What |
