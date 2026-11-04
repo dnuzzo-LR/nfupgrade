@@ -34,6 +34,11 @@ class TestLicenseApi(unittest.TestCase):
         self.lic_path = os.path.join(self.tmp, "lic.ucs")
         self.ctx = self.ctx._replace(license_path=self.lic_path)
         self.sid = self.ctx.auth.redeem("TOK", "127.0.0.1")
+        # Save verifies the password with unlock() first; default: correct.
+        p = mock.patch.object(lic, "unlock", return_value={
+            "ok": True, "ne_types": [], "error": ""})
+        p.start()
+        self.addCleanup(p.stop)
 
     def call(self, method, path, obj=None):
         body = json.dumps(obj).encode("utf-8") if obj is not None else b""
@@ -307,6 +312,122 @@ class TestLicenseApi(unittest.TestCase):
         rec = [json.loads(l) for l in self.audit().splitlines()
                if "license_created" in l][0]
         self.assertEqual(rec["migrate"], {"ok": True, "rc": 6})
+
+    def test_type_260_enabled_review_and_save_ok(self):
+        # I1: types 256-263 are real; one enabled must not 400 every change.
+        cur = {"NumNE": 5, "EnabledNeTypes": [{"type": 5}, {"type": 260}]}
+        read = lambda h, p=None: {"state": "ok", "license": dict(cur), "error": ""}
+        table = [{"type": n, "name": "T", "enabled": n in (5, 260), "group": 0,
+                  "count": 0} for n in (1, 5, 260, 263)]
+        un = {"ok": True, "ne_types": table, "error": ""}
+        seen = {}
+
+        def fake_apply(host, pw, d, path):
+            seen["d"] = d
+            return {"ok": True, "applied": ["NumNE"], "not_applied": [],
+                    "error": "", "license": None}
+
+        with mock.patch.object(lic, "read_license", read), \
+                mock.patch.object(lic, "unlock", return_value=un), \
+                mock.patch.object(lic, "backup", return_value="/b"), \
+                mock.patch.object(lic, "apply", fake_apply):
+            st, b = self.call("POST", "/api/license/review",
+                              self.req(ne_on=[5, 260]))
+            self.assertEqual(st, 200, b)
+            self.assertEqual((b["ne_toggle"], b["set_lines"]), ([], ["set numne 9"]))
+            st, b = self.call("POST", "/api/license/save", self.req(ne_on=[5, 260]))
+        self.assertEqual(st, 200, b)
+        self.assertEqual(seen["d"]["ne_toggle"], [])
+
+    def test_save_never_toggles_types_outside_unlock_table(self):
+        # I2: type 0 (lice -j counts from 0) is never in the checklist.
+        cur = {"NumNE": 5, "EnabledNeTypes": [{"type": 0}, {"type": 5}]}
+        read = lambda h, p=None: {"state": "ok", "license": dict(cur), "error": ""}
+        un = {"ok": True, "ne_types": [{"type": 5, "name": "A", "enabled": True,
+                                        "group": 0, "count": 0}], "error": ""}
+        seen = {}
+
+        def fake_apply(host, pw, d, path):
+            seen["d"] = d
+            return {"ok": True, "applied": [], "not_applied": [], "error": "",
+                    "license": None}
+
+        with mock.patch.object(lic, "read_license", read), \
+                mock.patch.object(lic, "unlock", return_value=un), \
+                mock.patch.object(lic, "backup", return_value="/b"), \
+                mock.patch.object(lic, "apply", fake_apply):
+            st, b = self.call("POST", "/api/license/save", self.req(ne_on=[5]))
+        self.assertEqual(st, 200, b)
+        self.assertEqual(seen["d"]["ne_toggle"], [])
+
+    def _write_lic(self):
+        with open(self.lic_path, "w") as fh:
+            fh.write("LIC")
+
+    def _backups(self):
+        return [n for n in os.listdir(self.tmp) if ".nfupgrader." in n]
+
+    def test_save_wrong_password_no_backup_no_apply(self):
+        # I3: a typo must not take a backup (rotating older ones out).
+        self._write_lic()
+        bad = {"ok": False, "ne_types": [], "error": lic.WRONG_PW}
+        with mock.patch.object(lic, "read_license", _read_ok), \
+                mock.patch.object(lic, "unlock", return_value=bad) as un, \
+                mock.patch.object(lic, "apply") as ap:
+            st, b = self.call("POST", "/api/license/save", self.req())
+        self.assertEqual(st, 403)
+        self.assertEqual(b["error"], lic.WRONG_PW)
+        self.assertTrue(un.called)
+        self.assertFalse(ap.called)
+        self.assertEqual(self._backups(), [])
+        a = self.audit()
+        self.assertIn("license_save_failed", a)
+        self.assertIn(lic.WRONG_PW, a)
+        self.assertNotIn(PW, a)
+        self.assertNotIn(PW, json.dumps(b))
+        self.assertFalse(api._FIX_LOCK.locked())
+
+    def test_save_empty_or_bad_password_400_no_tool(self):
+        self._write_lic()
+        for pw in ("", "a\nb", "p\u00e9"):
+            with mock.patch.object(lic, "read_license", _read_ok), \
+                    mock.patch.object(lic, "unlock") as un, \
+                    mock.patch.object(lic, "apply") as ap:
+                st, b = self.call("POST", "/api/license/save", self.req(password=pw))
+            self.assertEqual(st, 400, repr(pw))
+            self.assertTrue(b["error"])
+            self.assertFalse(un.called or ap.called, repr(pw))
+        self.assertEqual(self._backups(), [])
+        self.assertIn("license_save_failed", self.audit())
+
+    def test_save_right_password_backs_up_then_applies(self):
+        self._write_lic()
+        with mock.patch.object(lic, "read_license", _read_ok), \
+                mock.patch.object(lic, "apply", return_value={
+                    "ok": True, "applied": ["NumNE"], "not_applied": [],
+                    "error": "", "license": None}) as ap:
+            st, b = self.call("POST", "/api/license/save", self.req())
+        self.assertEqual(st, 200)
+        self.assertTrue(ap.called)
+        self.assertEqual(len(self._backups()), 1)
+
+    def test_failed_unlock_and_review_audited(self):
+        # M8: failed password attempts are audited (never the password).
+        bad = {"ok": False, "ne_types": [], "error": lic.WRONG_PW}
+        with mock.patch.object(lic, "read_license", _read_ok), \
+                mock.patch.object(lic, "unlock", return_value=bad):
+            self.call("POST", "/api/license/unlock", {"password": PW})
+            self.call("POST", "/api/license/review", self.req())
+        recs = [json.loads(l) for l in self.audit().splitlines()
+                if "license_unlock_failed" in l]
+        self.assertEqual(len(recs), 2)
+        self.assertEqual(recs[0]["client"], "127.0.0.1")
+        self.assertNotIn(PW, self.audit())
+        good = {"ok": True, "ne_types": [], "error": ""}
+        with mock.patch.object(lic, "read_license", _read_ok), \
+                mock.patch.object(lic, "unlock", return_value=good):
+            self.call("POST", "/api/license/unlock", {"password": PW})
+        self.assertEqual(self.audit().count("license_unlock_failed"), 2)
 
     def test_preview_refuses_writes(self):
         self.ctx.state["preview"] = "fresh"

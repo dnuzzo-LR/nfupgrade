@@ -381,6 +381,8 @@ def _license_dispatch(method, path, body, client_ip, ctx):
             return _json(409, {"error": "license is not readable"})
         pw = payload.get("password")
         res = licmod.unlock(ctx.host, pw if isinstance(pw, str) else "", lp)
+        if not res["ok"]:
+            ctx.audit.record("license_unlock_failed", client=client_ip)
         return _json(200 if res["ok"] else 403, res)
 
     password, values, expiry, ne_on, errors = _license_request(payload)
@@ -393,6 +395,7 @@ def _license_dispatch(method, path, body, client_ip, ctx):
             return _json(409, {"error": "license is not readable"})
         un = licmod.unlock(ctx.host, password, lp)
         if not un["ok"]:
+            ctx.audit.record("license_unlock_failed", client=client_ip)
             return _json(403, {"error": un["error"]})
         return _json(200, licmod.diff(cur["license"], values, expiry, ne_on,
                                       un["ne_types"]))
@@ -407,7 +410,19 @@ def _license_dispatch(method, path, body, client_ip, ctx):
         cur = licmod.read_license(ctx.host, lp)
         if cur["state"] != "ok":
             return _json(409, {"error": "license is not readable"})
-        d = licmod.diff(cur["license"], values, expiry, ne_on)
+        # Check the password before backup(): each backup rotates an older one
+        # out, so a run of typos must not push out the pre-change copy.
+        pw_err = licmod._pw_error(password)
+        if pw_err:
+            ctx.audit.record("license_save_failed", client=client_ip, error=pw_err)
+            return _json(400, {"ok": False, "error": pw_err})
+        un = licmod.unlock(ctx.host, password, lp)
+        if not un["ok"]:
+            ctx.audit.record("license_save_failed", client=client_ip,
+                             error=un["error"])
+            return _json(403, {"ok": False, "error": un["error"]})
+        # Same NE table as review, so save toggles only types the user saw.
+        d = licmod.diff(cur["license"], values, expiry, ne_on, un["ne_types"])
         if not (d["changes"] or d["ne_toggle"] or d["expiry"]):
             return _json(200, {"ok": True, "applied": []})
         try:

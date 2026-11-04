@@ -223,22 +223,26 @@ itself. The install form on the Config tab links here.
   **Unlock** checks the license password and lists every type (ticked =
   enabled); type changes are sent only after an Unlock. **Review changes** shows
   each field's before → after, plus any warnings (e.g. a type in an NE group);
-  nothing is written. Any edit after a review disables **Save** until you review
+  nothing is written. Only fields you changed are sent, and only NE types in
+  the Unlock list (1-263) are ever switched on or off. Any edit after a review disables **Save** until you review
   again. **Save** asks for confirmation, then applies the changes and reads the
   license back: the result names what was applied, anything that did not take,
   the backup path, and any error (such as a wrong license password).
 - **Password.** The license password is typed on the tab and sent only with
   Unlock, Review and Save. It is never stored (not in the browser, not in a URL,
   not on the server), never logged or audited, and reaches `lice`/`license` only
-  on their standard input. The field is cleared after Save and whenever you leave
+  on their standard input. It must be plain ASCII (as must Text and Version).
+  The field is cleared after Save and whenever you leave
   the tab.
-- **Backups.** Each Save first copies the license to
+- **Backups.** Each Save first checks the password (a wrong one saves nothing
+  and takes no backup), then copies the license to
   `/usr/cnc/data/lic.ucs.nfupgrader.<YYYYmmddHHMMSS>` (same owner and mode). The
   newest 10 are kept; older ones are removed. To roll back, copy a backup over
   `lic.ucs` with netFLEX down.
 - **Audit.** `license_saved` (client, backup path, per-field before/after, NE type
-  changes, expiry, what applied), `license_save_failed` (error, backup path),
-  `license_created` and `license_migrated` are recorded in
+  changes, expiry, what applied), `license_save_failed` (error, backup path if
+  one was taken), `license_unlock_failed` (client; a failed Unlock or Review
+  password), `license_created` and `license_migrated` are recorded in
   `nfupgrader_audit.jsonl`.
 
 ## Testing
