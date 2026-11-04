@@ -12,6 +12,7 @@ import os
 from nfupgrader import progress, logtail, launcher, localinfo, siteview, site, checks, cfg
 from nfupgrader import reports, snapjobs, installstate, steps, cnccnfg, bootmenu
 from nfupgrader import preview as previewdata
+from nfupgrader import license as licmod
 
 Context = collections.namedtuple("Context", [
     "host", "hostname", "inclogdir", "phase", "tracefile",
@@ -19,12 +20,12 @@ Context = collections.namedtuple("Context", [
     "effective_config", "user_config", "launch_cwd", "cnc_cnfg_path",
     "peer_host_factory", "checks_path", "state", "depot_dirs",
     "reports_path", "reports_root", "runner",
-    "nf_install_path", "hosts_path",
+    "nf_install_path", "hosts_path", "license_path",
 ])
 # The trailing fields are only used by side effects (launch), info gathering,
 # checks, the config builder, or reports; default them so the dispatcher/tests
 # need not supply each one. (namedtuple field defaults via __new__.__defaults__ — py3.6.)
-Context.__new__.__defaults__ = (None,) * 13
+Context.__new__.__defaults__ = (None,) * 14
 
 # One check fix at a time: fixes change system state as root (dnf, sysctl, limits).
 # Held for the whole fix request, so launches and snapshots are refused meanwhile
@@ -276,6 +277,144 @@ def _interrupted_notice(ctx):
         newest["id"])
 
 
+def _license_path(ctx):
+    return ctx.license_path or licmod.LIC_PATH
+
+
+def license_editable(ctx):
+    """(bool, reason): whether the license may be changed right now."""
+    if preview_scenario(ctx):
+        return False, "preview mode"
+    if ctx.host.run(["test", "-f", licmod.APP_UP]).rc == 0:
+        return False, "netFLEX is running \u2014 stop it to edit the license"
+    if launcher.anything_running(ctx.host):
+        return False, "an install or upgrade is running"
+    session = _bootmenu_session(ctx)
+    if session is not None and session.running():
+        return False, "the boot menu is open"
+    if fix_in_progress():
+        return False, "a check fix is running"
+    if _snapshot_busy(ctx):
+        return False, "a report snapshot is running"
+    return True, ""
+
+
+def _license_body(ctx):
+    """The GET /api/license body."""
+    res = licmod.read_license(ctx.host, _license_path(ctx))
+    ok, reason = license_editable(ctx)
+    res["editable"], res["reason"], res["fields"] = ok, reason, licmod.FIELDS
+    if res["state"] == "ok":
+        res["expiry"] = licmod.expiry_of(res["license"])
+    return res
+
+
+def _license_request(payload):
+    """(password, values, expiry, ne_on, errors) from a review/save body."""
+    password = payload.get("password")
+    values = payload.get("values")
+    expiry = payload.get("expiry") or ""
+    ne_on = payload.get("ne_on")
+    if not isinstance(password, str):
+        return None, None, None, None, [{"field": "password", "message": "required"}]
+    if not isinstance(values, dict):
+        return None, None, None, None, [{"field": "values", "message": "must be an object"}]
+    if not isinstance(expiry, str):
+        return None, None, None, None, [{"field": "expiry", "message": "must be text"}]
+    if ne_on is not None and (not isinstance(ne_on, list) or not all(
+            isinstance(n, int) and not isinstance(n, bool) for n in ne_on)):
+        return None, None, None, None, [{"field": "ne_on", "message": "must be a list of numbers"}]
+    return password, values, expiry, ne_on, licmod.validate(values, expiry, ne_on)
+
+
+def _license_dispatch(method, path, body, client_ip, ctx):
+    """Handle /api/license*; returns a _json response."""
+    lp = _license_path(ctx)
+    if path == "/api/license" and method == "GET":
+        return _json(200, _license_body(ctx))
+    if method != "POST":
+        return _json(404, {"error": "not found"})
+    if path in ("/api/license/create", "/api/license/migrate"):
+        creating = path.endswith("create")
+        need = "missing" if creating else "old_format"
+        ok, reason = license_editable(ctx)
+        if not ok:
+            return _json(409, {"error": reason})
+        if licmod.read_license(ctx.host, lp)["state"] != need:
+            return _json(409, {"error": "license state is not {}".format(need)})
+        if not creating:
+            res = licmod.migrate(ctx.host)
+            ctx.audit.record("license_migrated", client=client_ip, rc=res["rc"])
+            return _json(200, {"ok": res["ok"], "rc": res["rc"]})
+        try:
+            tpl = licmod.create_from_template(lp)
+        except (ValueError, OSError) as e:
+            return _json(500, {"ok": False, "error": str(e)})
+        if licmod.read_license(ctx.host, lp)["state"] == "old_format":
+            licmod.migrate(ctx.host)
+        ctx.audit.record("license_created", client=client_ip, template=tpl)
+        return _json(200, _license_body(ctx))
+
+    if path not in ("/api/license/unlock", "/api/license/review", "/api/license/save"):
+        return _json(404, {"error": "not found"})
+    payload = _json_object(body)
+    if payload is None:
+        return _json(400, {"error": "bad json"})
+
+    if path == "/api/license/unlock":
+        if licmod.read_license(ctx.host, lp)["state"] != "ok":
+            return _json(409, {"error": "license is not readable"})
+        pw = payload.get("password")
+        res = licmod.unlock(ctx.host, pw if isinstance(pw, str) else "", lp)
+        return _json(200 if res["ok"] else 403, res)
+
+    password, values, expiry, ne_on, errors = _license_request(payload)
+    if errors:
+        return _json(400, {"errors": errors})
+
+    if path == "/api/license/review":
+        cur = licmod.read_license(ctx.host, lp)
+        if cur["state"] != "ok":
+            return _json(409, {"error": "license is not readable"})
+        un = licmod.unlock(ctx.host, password, lp)
+        if not un["ok"]:
+            return _json(403, {"error": un["error"]})
+        return _json(200, licmod.diff(cur["license"], values, expiry, ne_on,
+                                      un["ne_types"]))
+
+    # save
+    ok, reason = license_editable(ctx)
+    if not ok:
+        return _json(409, {"error": reason})
+    if not _FIX_LOCK.acquire(False):
+        return _json(409, {"error": "a check fix is running"})
+    try:
+        cur = licmod.read_license(ctx.host, lp)
+        if cur["state"] != "ok":
+            return _json(409, {"error": "license is not readable"})
+        d = licmod.diff(cur["license"], values, expiry, ne_on)
+        if not (d["changes"] or d["ne_toggle"] or d["expiry"]):
+            return _json(200, {"ok": True, "applied": []})
+        try:
+            bak = licmod.backup(lp)
+        except Exception as e:
+            return _json(500, {"ok": False, "error": "backup failed: {}".format(e)})
+        res = licmod.apply(ctx.host, password, d, lp)
+        if res["ok"]:
+            ctx.audit.record("license_saved", client=client_ip, backup=bak,
+                             changes=d["changes"], ne_toggle=d["ne_toggle"],
+                             expiry=d["expiry"], applied=res["applied"],
+                             not_applied=res["not_applied"])
+        else:
+            ctx.audit.record("license_save_failed", client=client_ip, backup=bak,
+                             error=res["error"], not_applied=res["not_applied"])
+        out = dict(res)
+        out["backup"] = bak
+        return _json(200, out)
+    finally:
+        _FIX_LOCK.release()
+
+
 def dispatch(method, path, query, body, cookies, client_ip, ctx):
     """Return (status, headers, body_bytes) for a request."""
     # --- auth redemption (no session required) ---
@@ -327,8 +466,12 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         return _json(200, {"preview": scenario})
 
     if method == "POST" and preview_scenario(ctx) and path in (
-            "/api/launch", "/api/install/reset", "/api/checks/fix"):
+            "/api/launch", "/api/install/reset", "/api/checks/fix",
+            "/api/license/save", "/api/license/create", "/api/license/migrate"):
         return _json(409, {"error": PREVIEW_REFUSED})
+
+    if path == "/api/license" or path.startswith("/api/license/"):
+        return _license_dispatch(method, path, body, client_ip, ctx)
 
     if path == "/api/progress" and method == "GET":
         # Either engine can be live (nf_upgrader for stage/upgrade, nf_install
