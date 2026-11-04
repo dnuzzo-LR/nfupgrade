@@ -10,9 +10,11 @@ import subprocess
 RunResult = collections.namedtuple("RunResult", ["rc", "out", "err"])
 
 
-def _exec(argv, timeout=None):
+def _exec(argv, timeout=None, input=None):
     """Run argv locally, capture output, return a RunResult. Never raises on
     non-zero exit; a missing binary yields rc 127, a timeout rc 124.
+    `input` (str) is written to the child's stdin then closed; None means
+    stdin is /dev/null.
 
     The child runs in its own session/process group so a timeout can kill the
     whole pipeline: killing only `sh` would leave grandchildren (e.g. the
@@ -22,6 +24,7 @@ def _exec(argv, timeout=None):
     try:
         p = subprocess.Popen(
             argv,
+            stdin=subprocess.DEVNULL if input is None else subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             universal_newlines=True,
@@ -31,7 +34,7 @@ def _exec(argv, timeout=None):
     except FileNotFoundError:
         return RunResult(127, "", "not found: {}".format(argv[0]))
     try:
-        out, err = p.communicate(timeout=timeout)
+        out, err = p.communicate(input=input, timeout=timeout)
     except subprocess.TimeoutExpired:
         try:
             os.killpg(p.pid, signal.SIGKILL)
@@ -61,9 +64,9 @@ class Host(object):
         self.name = name
         self.local = True
 
-    def run(self, argv, timeout=None):
-        """Run argv (a list) locally; return a RunResult."""
-        return _exec(argv, timeout=timeout)
+    def run(self, argv, timeout=None, input=None):
+        """Run argv (a list) locally; return a RunResult. `input` goes to stdin."""
+        return _exec(argv, timeout=timeout, input=input)
 
 
 class SshHost(object):
@@ -74,8 +77,9 @@ class SshHost(object):
         self.local = False
         self.connect_timeout = connect_timeout
 
-    def run(self, argv, timeout=None):
-        return _exec(build_ssh_argv(self.name, argv, self.connect_timeout), timeout=timeout)
+    def run(self, argv, timeout=None, input=None):
+        return _exec(build_ssh_argv(self.name, argv, self.connect_timeout),
+                     timeout=timeout, input=input)
 
 
 class FakeHost(object):
@@ -86,7 +90,13 @@ class FakeHost(object):
         self.local = True
         self.responses = responses or {}
         self.calls = []
+        self.inputs = []
 
-    def run(self, argv, timeout=None):
+    def run(self, argv, timeout=None, input=None):
+        """Record the call; a response may be a callable f(argv, input)."""
         self.calls.append(list(argv))
-        return self.responses.get(tuple(argv), RunResult(1, "", "unmocked"))
+        self.inputs.append(input)
+        r = self.responses.get(tuple(argv), RunResult(1, "", "unmocked"))
+        if callable(r):
+            return r(list(argv), input)
+        return r

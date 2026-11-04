@@ -64,3 +64,22 @@ class TestSsh(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestHostInput(unittest.TestCase):
+    def test_run_passes_input(self):
+        self.assertEqual(Host().run(["cat"], input="a\nb\n").out, "a\nb\n")
+
+    def test_run_without_input_gets_eof(self):
+        t = time.time()
+        self.assertEqual(Host().run(["cat"], timeout=5).out, "")
+        self.assertLess(time.time() - t, 4)
+
+    def test_fakehost_records_input_and_callable(self):
+        def f(argv, inp):
+            return RunResult(0, "got:{}".format(inp), "")
+        fh = FakeHost({("x",): f, ("y",): RunResult(0, "y", "")})
+        self.assertEqual(fh.run(["x"], input="pw\n").out, "got:pw\n")
+        fh.run(["y"])
+        self.assertEqual(fh.inputs, ["pw\n", None])
+        self.assertEqual(fh.calls, [["x"], ["y"]])
