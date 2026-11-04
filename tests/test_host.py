@@ -62,10 +62,6 @@ class TestSsh(unittest.TestCase):
         self.assertIsNotNone(r.rc)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestHostInput(unittest.TestCase):
     def test_run_passes_input(self):
         self.assertEqual(Host().run(["cat"], input="a\nb\n").out, "a\nb\n")
@@ -83,3 +79,7 @@ class TestHostInput(unittest.TestCase):
         fh.run(["y"])
         self.assertEqual(fh.inputs, ["pw\n", None])
         self.assertEqual(fh.calls, [["x"], ["y"]])
+
+
+if __name__ == "__main__":
+    unittest.main()
