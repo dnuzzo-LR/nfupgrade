@@ -215,6 +215,13 @@ itself. The install form on the Config tab links here.
   `def.lic.ucs.linux64`, or `.linux`, owned by `cmm`). A license in an older
   format offers **Convert** (`license-migrate`). On a host without the netFLEX
   license tools it only says so.
+- **Repair.** netFLEX 5.5.0.16's template ships an out-of-range expiry date, and
+  `lice` crashes (SIGSEGV) reading any license with one — including a license
+  just created from that template. The tab detects the crash and shows a
+  **Repair license** box: enter the real expiry date and the license password,
+  and it checks the password, backs up the license, sets the date with
+  `license -n <file> -M`, and reads it back. Audited as `license_repaired` /
+  `license_repair_failed`.
 - **netFLEX must be down.** The license is shown read-only, with the reason, while
   netFLEX is running (`/usr/cnc/.CNC_UP`), while an install, upgrade, check fix,
   report snapshot or boot menu is running, and in preview mode. Stop netFLEX

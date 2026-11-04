@@ -77,6 +77,16 @@ LFILE_MAX_BYTES = 79  # license.c strcpy's -n into char Lfile[80]
 _EXP_RE = re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4})$")
 
 
+# lice segfaults (SIGSEGV: -11 from Popen, 139 via a shell) when the stored
+# expiry is out of range: localtime() returns NULL and lice passes it to
+# strftime() unchecked (lice.cpp:1369, :1470). The 5.5.0.16 template
+# def.lic.ucs.linux64 ships such a value. `license -M` never formats the old
+# date, so setting a real expiry with it repairs the file (see repair()).
+LICE_CRASH_RCS = (-11, 139)
+LICE_CRASHED = ("lice crashed reading the license (netFLEX bug: the expiry date "
+                "stored in it is invalid). Set an expiry date to repair it.")
+
+
 def read_license(host, lic_path=LIC_PATH):
     """Read the license via `lice -j`. Returns {"state","license","error"}."""
     def res(state, lic=None, err=""):
@@ -97,6 +107,8 @@ def read_license(host, lic_path=LIC_PATH):
         return res("ok", lic)
     if "earlier version of netFLEX" in (r.err or ""):
         return res("old_format", err=r.err.strip())
+    if r.rc in LICE_CRASH_RCS:
+        return res("needs_repair", err=LICE_CRASHED)
     return res("unreadable", err=(r.err or "").strip())
 
 
@@ -585,3 +597,41 @@ def apply(host, password, d, lic_path=LIC_PATH):
     return {"ok": not not_applied,
             "applied": applied, "not_applied": not_applied,
             "error": "\n".join(errors), "license": lic}
+
+
+def repair(host, password, expiry, lic_path=LIC_PATH):
+    """Repair a license lice cannot read because of an invalid stored expiry:
+    check the password with `lice -i` (which does not format the date), then
+    set the expiry with `license -n <file> -M`, then read it back.
+    Returns {"ok", "error", "license"}; never raises for bad input and never
+    returns the password."""
+    def fail(err, lic=None):
+        return {"ok": False, "error": err, "license": lic}
+
+    pw_err = _pw_error(password)
+    if pw_err:
+        return fail(pw_err)
+    exp = _norm_expiry(expiry)
+    if exp is None:
+        return fail("expiry must be a date as MM/DD/YYYY (year 1970 or later)")
+    if len(lic_path.encode("utf-8")) > LFILE_MAX_BYTES:
+        return fail("license path too long for license -n")
+    un = unlock(host, password, lic_path)
+    if not un["ok"]:
+        return fail(un["error"])
+    # >= 3 lines before EOF (license_unlock tries 3 times, then loops forever
+    # on EOF, license.c:424-426); -M reads no more stdin after unlocking.
+    r = host.run([LICENSE, "-n", lic_path, "-M", exp], timeout=LICE_TIMEOUT,
+                 input=(password + "\n") * 3)
+    if _wrong_pw(r.err):
+        return fail(WRONG_PW)
+    if r.rc != 0:
+        return fail(_scrub(r.err, password) or "license -M exited {}".format(r.rc))
+    rb = read_license(host, lic_path)
+    if rb["state"] != "ok":
+        return fail("the license is still unreadable after setting the expiry: {}".format(
+            _scrub(rb["error"] or rb["state"], password)))
+    if expiry_of(rb["license"]) != exp:
+        return fail("the expiry did not take (license shows {})".format(
+            expiry_of(rb["license"]) or "no date"), rb["license"])
+    return {"ok": True, "error": "", "license": rb["license"]}

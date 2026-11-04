@@ -332,6 +332,52 @@ def _license_request(payload):
     return password, values, expiry, ne_on, licmod.validate(values, expiry, ne_on)
 
 
+def _license_repair(payload, client_ip, ctx, lp):
+    """POST /api/license/repair {password, expiry}: set a real expiry on a
+    license lice crashes on (state needs_repair). Same guards as save: the
+    change lock, editability rechecked under it, password checked before the
+    backup, backup before any write."""
+    password = payload.get("password")
+    expiry = payload.get("expiry")
+    if not isinstance(password, str) or not isinstance(expiry, str):
+        return _json(400, {"errors": [{"field": "password/expiry", "message": "required"}]})
+    if licmod._norm_expiry(expiry) is None:
+        return _json(400, {"errors": [{"field": "expiry",
+                                       "message": "use MM/DD/YYYY (year 1970 or later)"}]})
+    if not _FIX_LOCK.acquire(False):
+        return _json(409, {"error": "another change is in progress"})
+    try:
+        ok, reason = license_editable(ctx, holding_lock=True)
+        if not ok:
+            return _json(409, {"error": reason})
+        if licmod.read_license(ctx.host, lp)["state"] != "needs_repair":
+            return _json(409, {"error": "license does not need repair"})
+        pw_err = licmod._pw_error(password)
+        if pw_err:
+            ctx.audit.record("license_repair_failed", client=client_ip, error=pw_err)
+            return _json(400, {"ok": False, "error": pw_err})
+        un = licmod.unlock(ctx.host, password, lp)
+        if not un["ok"]:
+            ctx.audit.record("license_repair_failed", client=client_ip, error=un["error"])
+            return _json(403, {"ok": False, "error": un["error"]})
+        try:
+            bak = licmod.backup(lp)
+        except Exception as e:
+            return _json(500, {"ok": False, "error": "backup failed: {}".format(e)})
+        res = licmod.repair(ctx.host, password, expiry, lp)
+        if res["ok"]:
+            ctx.audit.record("license_repaired", client=client_ip, backup=bak,
+                             expiry=licmod._norm_expiry(expiry))
+        else:
+            ctx.audit.record("license_repair_failed", client=client_ip, backup=bak,
+                             error=res["error"])
+        out = dict(res)
+        out["backup"] = bak
+        return _json(200, out)
+    finally:
+        _FIX_LOCK.release()
+
+
 def _license_dispatch(method, path, body, client_ip, ctx):
     """Handle /api/license*; returns a _json response."""
     lp = _license_path(ctx)
@@ -370,11 +416,15 @@ def _license_dispatch(method, path, body, client_ip, ctx):
         finally:
             _FIX_LOCK.release()
 
-    if path not in ("/api/license/unlock", "/api/license/review", "/api/license/save"):
+    if path not in ("/api/license/unlock", "/api/license/review", "/api/license/save",
+                    "/api/license/repair"):
         return _json(404, {"error": "not found"})
     payload = _json_object(body)
     if payload is None:
         return _json(400, {"error": "bad json"})
+
+    if path == "/api/license/repair":
+        return _license_repair(payload, client_ip, ctx, lp)
 
     if path == "/api/license/unlock":
         if licmod.read_license(ctx.host, lp)["state"] != "ok":
@@ -497,7 +547,8 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
 
     if method == "POST" and preview_scenario(ctx) and path in (
             "/api/launch", "/api/install/reset", "/api/checks/fix",
-            "/api/license/save", "/api/license/create", "/api/license/migrate"):
+            "/api/license/save", "/api/license/create", "/api/license/migrate",
+            "/api/license/repair"):
         return _json(409, {"error": PREVIEW_REFUSED})
 
     if path == "/api/license" or path.startswith("/api/license/"):

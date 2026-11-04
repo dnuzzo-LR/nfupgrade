@@ -435,5 +435,71 @@ class TestLicenseApi(unittest.TestCase):
             self.assertEqual(self.call("POST", "/api/license/" + p, self.req())[0], 409)
 
 
+class TestLicenseRepairApi(unittest.TestCase):
+    setUp = TestLicenseApi.setUp
+    call = TestLicenseApi.call
+    audit = TestLicenseApi.audit
+    NEEDS = {"state": "needs_repair", "license": None,
+             "error": "lice crashed reading the license"}
+
+    def test_get_reports_needs_repair(self):
+        with mock.patch.object(lic, "read_license", return_value=dict(self.NEEDS)):
+            st, b = self.call("GET", "/api/license")
+        self.assertEqual((st, b["state"]), (200, "needs_repair"))
+
+    def test_repair_backs_up_then_repairs_and_audits(self):
+        order = []
+        with mock.patch.object(lic, "read_license", return_value=dict(self.NEEDS)), \
+                mock.patch.object(lic, "backup", side_effect=lambda p: order.append("backup") or p + ".bak"), \
+                mock.patch.object(lic, "repair", side_effect=lambda h, pw, e, p: order.append("repair") or
+                                  {"ok": True, "error": "", "license": {"NumNE": 1}}):
+            st, b = self.call("POST", "/api/license/repair",
+                              {"password": PW, "expiry": "12/31/2027"})
+        self.assertEqual(st, 200)
+        self.assertTrue(b["ok"])
+        self.assertEqual(order, ["backup", "repair"])
+        self.assertIn("license_repaired", self.audit())
+        self.assertNotIn(PW, self.audit())
+        self.assertFalse(api._FIX_LOCK.locked())
+
+    def test_repair_wrong_password_makes_no_backup(self):
+        lic.unlock.return_value = {"ok": False, "ne_types": [], "error": lic.WRONG_PW}
+        with mock.patch.object(lic, "read_license", return_value=dict(self.NEEDS)), \
+                mock.patch.object(lic, "backup") as bk, mock.patch.object(lic, "repair") as rp:
+            st, b = self.call("POST", "/api/license/repair",
+                              {"password": "x", "expiry": "12/31/2027"})
+        self.assertEqual(st, 403)
+        bk.assert_not_called()
+        rp.assert_not_called()
+        self.assertIn("license_repair_failed", self.audit())
+
+    def test_repair_only_when_needed_and_editable(self):
+        with mock.patch.object(lic, "read_license", _read_ok), \
+                mock.patch.object(lic, "repair") as rp:
+            st, _ = self.call("POST", "/api/license/repair",
+                              {"password": PW, "expiry": "12/31/2027"})
+        self.assertEqual(st, 409)
+        self.ctx.host.responses[("test", "-f", lic.APP_UP)] = RunResult(0, "", "")
+        with mock.patch.object(lic, "read_license", return_value=dict(self.NEEDS)):
+            st, _ = self.call("POST", "/api/license/repair",
+                              {"password": PW, "expiry": "12/31/2027"})
+        self.assertEqual(st, 409)
+        rp.assert_not_called()
+
+    def test_repair_bad_date_400(self):
+        with mock.patch.object(lic, "read_license", return_value=dict(self.NEEDS)), \
+                mock.patch.object(lic, "repair") as rp:
+            st, b = self.call("POST", "/api/license/repair",
+                              {"password": PW, "expiry": "2027-12-31"})
+        self.assertEqual(st, 400)
+        rp.assert_not_called()
+
+    def test_repair_refused_in_preview(self):
+        self.ctx.state["preview"] = "before"
+        st, _ = self.call("POST", "/api/license/repair",
+                          {"password": PW, "expiry": "12/31/2027"})
+        self.assertEqual(st, 409)
+
+
 if __name__ == "__main__":
     unittest.main()

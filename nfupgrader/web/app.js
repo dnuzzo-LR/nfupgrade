@@ -1438,6 +1438,7 @@ function licFieldValue(f) {
 
 function clearLicensePassword() {
   document.getElementById("lic-password").value = "";
+  document.getElementById("lic-repair-password").value = "";
 }
 
 function licEditable() {
@@ -1456,6 +1457,7 @@ function applyLicenseEnabled() {
   var canAct = !!(lic && lic.editable) && !licBusy;
   document.getElementById("btn-lic-create").disabled = !canAct;
   document.getElementById("btn-lic-migrate").disabled = !canAct;
+  document.getElementById("btn-lic-repair").disabled = !canAct;
 }
 
 function setLicenseBusy(on) {
@@ -1478,13 +1480,16 @@ function licenseStatusText(d) {
   } else if (d.state === "old_format") {
     t = "The license is in an older format; convert it before editing." +
         (d.error ? " (" + d.error + ")" : "");
+  } else if (d.state === "needs_repair") {
+    t = d.error || "The license needs repair: set its expiry date.";
   } else if (d.state === "unreadable") {
     t = "The license could not be read: " + (d.error || "unknown error");
   } else {
     t = d.editable ? "netFLEX is down — edits allowed."
                    : "Read-only: " + (d.reason || "editing is not allowed right now");
   }
-  if ((d.state === "missing" || d.state === "old_format") && !d.editable && d.reason) {
+  if ((d.state === "missing" || d.state === "old_format" || d.state === "needs_repair") &&
+      !d.editable && d.reason) {
     t += " Not possible right now: " + d.reason + ".";
   }
   return t;
@@ -1581,6 +1586,7 @@ function renderLicense(d) {
     "lic-status " + (d.state === "ok" && d.editable ? "ok" : "warn");
   document.getElementById("btn-lic-create").style.display = d.state === "missing" ? "" : "none";
   document.getElementById("btn-lic-migrate").style.display = d.state === "old_format" ? "" : "none";
+  document.getElementById("lic-repair").style.display = d.state === "needs_repair" ? "" : "none";
   document.getElementById("lic-form").style.display = d.state === "ok" ? "" : "none";
   invalidateLicenseReview();
   if (d.state === "ok") {
@@ -1819,6 +1825,31 @@ function migrateLicense() {
       return d.ok ? "Converted." : "license-migrate failed (exit " + d.rc + ").";
     });
 }
+function repairLicense() {
+  var exp = document.getElementById("lic-repair-expiry").value;
+  var msg = document.getElementById("lic-repair-msg");
+  showConfirm({ title: "Repair the license?", ok: "Repair",
+                body: "Backs up /usr/cnc/data/lic.ucs, then sets its expiry date to " + exp +
+                      " with license -M." }, function () {
+    msg.textContent = "Working…";
+    setLicenseBusy(true);
+    postJSON("/api/license/repair",
+             { password: document.getElementById("lic-repair-password").value, expiry: exp },
+             function (status, d) {
+      setLicenseBusy(false);
+      clearLicensePassword();
+      if (status === 200 && d.ok) {
+        msg.textContent = "Repaired. Backup: " + (d.backup || "-");
+      } else if (d.errors && d.errors.length) {
+        msg.textContent = "Not repaired: " + d.errors.map(function (e) { return e.message; }).join("; ");
+      } else {
+        msg.textContent = "Not repaired: " + (d.error || ("HTTP " + status)) +
+                          (d.backup ? " (backup: " + d.backup + ")" : "");
+      }
+      refreshLicense();
+    });
+  });
+}
 // ---- end License tab
 
 // Tabs first, so a failure in a later binding can't leave the user stuck on one tab.
@@ -1874,6 +1905,7 @@ document.getElementById("cfg-license").onclick = function () {
 };
 document.getElementById("btn-lic-create").onclick = createLicense;
 document.getElementById("btn-lic-migrate").onclick = migrateLicense;
+document.getElementById("btn-lic-repair").onclick = repairLicense;
 document.getElementById("btn-lic-unlock").onclick = unlockLicense;
 document.getElementById("btn-lic-review").onclick = reviewLicense;
 document.getElementById("btn-lic-save").onclick = saveLicense;

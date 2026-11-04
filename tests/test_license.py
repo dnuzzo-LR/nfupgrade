@@ -615,5 +615,79 @@ class TestLicenseFiles(unittest.TestCase):
         self.assertFalse(os.path.exists(dst))
 
 
+class CrashLice(FakeLice):
+    """lice -j / plain lice segfault while the stored expiry is invalid
+    (the 5.5.0.16 template); license -M repairs it."""
+
+    def host(self, path="/p"):
+        h = FakeLice.host(self, path)
+        h.responses[(L.LICE, "-j", path)] = lambda a, i: (
+            RunResult(-11, "", "") if self.lic["MaintExpireDate"] == "BAD"
+            else RunResult(0, json.dumps(self.lic), ""))
+        return h
+
+
+class TestLicenseRepair(unittest.TestCase):
+    def setUp(self):
+        self.f = CrashLice(dict(LIC, MaintExpireDate="BAD"))
+        self.h = self.f.host()
+
+    def test_read_lice_crash_needs_repair(self):
+        for rc in (-11, 139):
+            r = L.read_license(_fh(j=RunResult(rc, "", "")), "/p")
+            self.assertEqual(r["state"], "needs_repair")
+            self.assertIn("expiry", r["error"])
+        self.assertEqual(L.read_license(self.h, "/p")["state"], "needs_repair")
+
+    def test_repair_sets_expiry(self):
+        r = L.repair(self.h, "pw", "12/31/2027", "/p")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(L.expiry_of(r["license"]), "12/31/2027")
+        self.assertEqual(L.read_license(self.h, "/p")["state"], "ok")
+        calls = [tuple(c) for c in self.h.calls]
+        i_lice = calls.index((L.LICE, "-i", "/p"))
+        i_m = calls.index((L.LICENSE, "-n", "/p", "-M", "12/31/2027"))
+        self.assertLess(i_lice, i_m)                      # password checked first
+        self.assertEqual(self.h.inputs[i_lice], "pw\nne all\nquit\n")
+        self.assertEqual(self.h.inputs[i_m], "pw\npw\npw\n")
+        self.assertEqual(self.f.eof_spins, [])
+
+    def test_repair_accepts_unpadded_date(self):
+        r = L.repair(self.h, "pw", "1/5/2027", "/p")
+        self.assertTrue(r["ok"], r)
+        self.assertIn([L.LICENSE, "-n", "/p", "-M", "01/05/2027"], self.h.calls)
+
+    def test_repair_wrong_password(self):
+        r = L.repair(self.h, "nope", "12/31/2027", "/p")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["error"], L.WRONG_PW)
+        self.assertNotIn((L.LICENSE, "-n", "/p", "-M", "12/31/2027"),
+                         [tuple(c) for c in self.h.calls])
+        self.assertEqual(self.f.lic["MaintExpireDate"], "BAD")
+
+    def test_repair_rejects_bad_input_without_running_tools(self):
+        for pw, exp in (("pw", "2027-12-31"), ("pw", "13/45/2027"), ("pw", ""),
+                        ("p\nw", "12/31/2027"), ("", "12/31/2027")):
+            h = CrashLice(dict(LIC, MaintExpireDate="BAD")).host()
+            r = L.repair(h, pw, exp, "/p")
+            self.assertFalse(r["ok"], (pw, exp))
+            self.assertFalse([c for c in h.calls if c[0] in (L.LICE, L.LICENSE)
+                              and c[1:2] != ["-j"]], (pw, exp))
+
+    def test_repair_reports_when_still_unreadable(self):
+        h = self.h
+        h.responses[(L.LICENSE, "-n", "/p", "-M", "12/31/2027")] = \
+            lambda a, i: RunResult(0, "Complete.\n", "")   # date not actually set
+        r = L.repair(h, "pw", "12/31/2027", "/p")
+        self.assertFalse(r["ok"])
+        self.assertIn("still", r["error"])
+
+    def test_repair_never_returns_password(self):
+        for pw in ("pw", "wrongpass"):
+            r = L.repair(CrashLice(dict(LIC, MaintExpireDate="BAD")).host(),
+                         pw, "12/31/2027", "/p")
+            self.assertNotIn(pw if pw != "pw" else "wrongpass", json.dumps(r))
+
+
 if __name__ == "__main__":
     unittest.main()

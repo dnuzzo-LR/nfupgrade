@@ -186,6 +186,20 @@
           <button type="button" id="btn-lic-migrate" class="primary" style="display:none">Convert to the current format</button>
           <span id="lic-action-msg"></span>
         </div>
+        <div id="lic-repair" class="lic-repair" style="display:none">
+          <p>This license's stored expiry date is invalid, so netFLEX's <code>lice</code> tool
+            crashes reading it. Set the real expiry date to repair it.</p>
+          <div class="cfg-row">
+            <label for="lic-repair-expiry">Expiry date</label>
+            <input id="lic-repair-expiry" type="text" placeholder="MM/DD/YYYY" size="12">
+          </div>
+          <div class="cfg-row">
+            <label for="lic-repair-password">License password</label>
+            <input id="lic-repair-password" type="password" autocomplete="new-password" size="20">
+          </div>
+          <button type="button" id="btn-lic-repair" class="primary">Repair license</button>
+          <span id="lic-repair-msg"></span>
+        </div>
         <div id="lic-form" style="display:none">
           <div id="lic-main">
             <div class="cfg-row">

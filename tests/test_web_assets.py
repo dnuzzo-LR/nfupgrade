@@ -162,6 +162,18 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn('"/api/preview"', self.js)
         self.assertIn("renderPreview(s);", self.js.split("function refreshInstall(", 1)[1])
 
+    def test_license_repair_box(self):
+        for i in ("lic-repair", "lic-repair-expiry", "lic-repair-password", "btn-lic-repair",
+                  "lic-repair-msg"):
+            self.assertIn('id="%s"' % i, self.html)
+        self.assertIn('id="lic-repair-password" type="password"', self.html)
+        fn = self.js.split("function repairLicense(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn('"/api/license/repair"', fn)
+        self.assertIn("showConfirm(", fn)
+        clear = self.js.split("function clearLicensePassword(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn('"lic-repair-password"', clear)
+        self.assertIn('d.state === "needs_repair"', self.js.split("function renderLicense(", 1)[1])
+
     def test_all_required_ids_present(self):
         missing = [i for i in REQUIRED_IDS if ('id="%s"' % i) not in self.html]
         self.assertEqual(missing, [], "index.html missing IDs: %s" % missing)
@@ -382,7 +394,8 @@ process.stdout.write(JSON.stringify(out));
     def test_license_saved_heading(self):
         # F1: nothing applied -> "Nothing was saved", not "Not everything".
         src = """
-var els = {"lic-password": {value: "x"}, "lic-msg": {}, "lic-result": {}};
+var els = {"lic-password": {value: "x"}, "lic-repair-password": {value: "y"},
+            "lic-msg": {}, "lic-result": {}};
 var document = {getElementById: function (id) { return els[id]; }};
 function setLicenseBusy() {}
 function refreshLicense() {}
