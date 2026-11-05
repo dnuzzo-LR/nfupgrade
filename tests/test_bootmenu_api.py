@@ -141,7 +141,7 @@ class TestBootmenuStatus(unittest.TestCase):
         self.assertEqual(data["available"], False)
         # R5: not greyed -- only "netFLEX is not installed" and "preview mode" grey the tab.
         self.assertEqual(data["greyed"], False)
-        self.assertEqual(data["reason"], "an install or upgrade is running")
+        self.assertEqual(data["reason"], "an install, upgrade or patch is running")
 
     def test_status_own_session_running_is_available(self):
         ctx = make_ctx(self.tmp, running=False)

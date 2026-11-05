@@ -11,6 +11,7 @@ import os
 
 from nfupgrader import progress, logtail, launcher, localinfo, siteview, site, checks, cfg
 from nfupgrader import reports, snapjobs, installstate, steps, cnccnfg, bootmenu
+from nfupgrader import patches
 from nfupgrader import preview as previewdata
 from nfupgrader import license as licmod
 
@@ -204,7 +205,7 @@ def bootmenu_availability(ctx):
                     reason="netFLEX is not installed")
     if launcher.anything_running(ctx.host):
         return dict(no_other, available=False, greyed=False,
-                    reason="an install or upgrade is running")
+                    reason="an install, upgrade or patch is running")
     session = _bootmenu_session(ctx)
     if session is not None and session.running():
         return dict(no_other, available=True, greyed=False, reason="")
@@ -291,7 +292,7 @@ def license_editable(ctx, holding_lock=False):
     if ctx.host.run(["test", "-f", licmod.APP_UP]).rc == 0:
         return False, "netFLEX is running \u2014 stop it to edit the license"
     if launcher.anything_running(ctx.host):
-        return False, "an install or upgrade is running"
+        return False, "an install, upgrade or patch is running"
     session = _bootmenu_session(ctx)
     if session is not None and session.running():
         return False, "the boot menu is open"
@@ -497,6 +498,27 @@ def _license_dispatch(method, path, body, client_ip, ctx):
         _FIX_LOCK.release()
 
 
+def _patch_job_completion(ctx):
+    """If a patch job spawned by this service has exited, audit its outcome once
+    and forget it. Never puts the Popen handle anywhere but ctx.state."""
+    st = ctx.state if isinstance(ctx.state, dict) else {}
+    job = st.get("patch_job")
+    if not job:
+        return
+    rc = job["popen"].poll()
+    if rc is None:
+        return
+    del st["patch_job"]
+    if rc == 0:
+        ctx.audit.record("patch_install_done", path=job.get("path"),
+                         version=job.get("version"), client=job.get("client"))
+    else:
+        ctx.audit.record("patch_install_failed", rc=rc,
+                         trace=logtail.latest_trace(upgrade_logdir(ctx), "patch", ctx.hostname),
+                         path=job.get("path"), version=job.get("version"),
+                         client=job.get("client"))
+
+
 def dispatch(method, path, query, body, cookies, client_ip, ctx):
     """Return (status, headers, body_bytes) for a request."""
     # --- auth redemption (no session required) ---
@@ -559,7 +581,8 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
     if path == "/api/progress" and method == "GET":
         # Either engine can be live (nf_upgrader for stage/upgrade, nf_install
         # for a new install); at most one runs at a time.
-        running = launcher.anything_running(ctx.host)
+        # nf_patch is deliberately excluded: a patch run is not upgrade/install progress.
+        running = launcher.upgrader_running(ctx.host) or launcher.installer_running(ctx.host)
         logdir = upgrade_logdir(ctx)
         rec = progress.read_progress(ctx.hostname, _active_phase(ctx), logdir, running)
         rec["logdir"] = logdir
@@ -572,7 +595,7 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
             lines = previewdata.live_lines(preview_scenario(ctx))
             return _json(200, {"running": bool(lines),
                                "file": previewdata.TRACE if lines else None, "lines": lines})
-        if not launcher.anything_running(ctx.host):
+        if not (launcher.upgrader_running(ctx.host) or launcher.installer_running(ctx.host)):
             return _json(200, {"running": False, "file": None, "lines": []})
         live, lines = logtail.live_step(upgrade_logdir(ctx))
         return _json(200, {"running": True, "file": live, "lines": lines})
@@ -977,5 +1000,65 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         # The httpd layer performs the actual launch (side effect); the
         # dispatcher records intent and returns accepted. See httpd on_launch.
         return _json(202, {"accepted": True, "mode": mode, "action": action})
+
+    if path == "/api/patches" and method == "GET":
+        _patch_job_completion(ctx)
+        unavailable = None
+        if preview_scenario(ctx):
+            unavailable = "preview mode"
+        elif host_mode(ctx) == "install":
+            unavailable = "netFLEX is not installed"
+        out = patches.gather(ctx.host, ctx.depot_dirs)
+        trace = logtail.latest_trace(upgrade_logdir(ctx), "patch", ctx.hostname)
+        result = None
+        try:
+            with open(trace, encoding="utf-8", errors="replace") as fh:
+                lines = [ln.rstrip("\n") for ln in fh if ln.strip()]
+            if lines and "RESULT:" in lines[-1]:
+                result = lines[-1]
+        except (IOError, OSError):
+            trace = None
+        if trace is not None and not os.path.exists(trace):
+            trace = None
+        out["running"] = launcher.patcher_running(ctx.host)
+        out["available"] = unavailable is None
+        out["reason"] = unavailable
+        out["last"] = {"trace": trace, "result": result}
+        return _json(200, out)
+
+    if path == "/api/patches/install" and method == "POST":
+        payload = _json_object(body)
+        if payload is None:
+            return _json(400, {"error": "bad json"})
+        want = payload.get("path")
+        if not isinstance(want, str) or not want:
+            return _json(400, {"error": "path required"})
+        if preview_scenario(ctx):
+            return _json(409, {"error": "preview mode"})
+        session = _bootmenu_session(ctx)
+        if session is not None and session.running():
+            return _json(409, {"error": "the boot menu is open"})
+        if fix_in_progress():
+            return _json(409, {"error": "check fix in progress"})
+        if _snapshot_busy(ctx):
+            return _json(409, {"error": "report snapshot in progress"})
+        if launcher.anything_running(ctx.host):
+            return _json(409, {"error": "an install, upgrade or patch is running"})
+        # Only a path the depot scan itself produced is ever handed to nf_patch.
+        rows = patches.gather(ctx.host, ctx.depot_dirs).get("patches", [])
+        row = None
+        for r in rows:
+            if r.get("path") == want:
+                row = r
+                break
+        if row is None or row.get("status") != "installable" or row.get("needs_stop"):
+            reason = (row.get("reason") if row else "") or "not in the depot list"
+            ctx.audit.record("patch_install_refused", path=want, reason=reason,
+                             client=client_ip)
+            return _json(400, {"error": reason})
+        ctx.audit.record("patch_install_started", path=want, version=row.get("version"),
+                         client=client_ip)
+        # httpd (patch_side_effect) spawns nf_patch from this 202.
+        return _json(202, {"accepted": True, "path": want, "version": row.get("version")})
 
     return _json(404, {"error": "not found"})
