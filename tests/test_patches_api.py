@@ -135,6 +135,30 @@ class TestPatchesApi(unittest.TestCase):
         self.assertEqual(st, 409)
         self.assertEqual(b["error"], "preview mode")
 
+    def test_post_inside_launch_grace_409(self):
+        self.ctx.state["launched_at"] = 1000.0
+        with mock.patch.object(api, "_now", return_value=1000.0 + api.FIX_LAUNCH_GRACE - 1):
+            st, b = self.call("POST", "/api/patches/install", {"path": ROW_OK["path"]})
+        self.assertEqual(st, 409)
+        self.assertEqual(b["error"], "an upgrade or install was just launched")
+        with mock.patch.object(api, "_now", return_value=1000.0 + api.FIX_LAUNCH_GRACE + 1):
+            st, b = self.call("POST", "/api/patches/install", {"path": ROW_OK["path"]})
+        self.assertEqual(st, 202)
+
+    def test_post_while_nf_upgrade_running_409(self):
+        self.ctx.host.responses[("pgrep", "-f", "nf_upgrade")] = RunResult(0, "88\n", "")
+        self.ctx.host.responses[("cat", "/proc/88/cmdline")] = RunResult(
+            0, "/usr/bin/ksh\0/opt/nfupgrader/nf_upgrade\0-c\0x\0-s\0", "")
+        st, b = self.call("POST", "/api/patches/install", {"path": ROW_OK["path"]})
+        self.assertEqual(st, 409)
+        self.assertNotIn("patch_install_started", self.audit())
+
+    def test_post_install_mode_409(self):
+        with mock.patch.object(api, "host_mode", return_value="install"):
+            st, b = self.call("POST", "/api/patches/install", {"path": ROW_OK["path"]})
+        self.assertEqual(st, 409)
+        self.assertEqual(b["error"], "netFLEX is not installed")
+
     def test_completion_failed_audits_once(self):
         self.ctx.state["patch_job"] = {"popen": FakePopen(2), "path": ROW_OK["path"],
                                        "version": "5.4.0.29-3", "client": "1.2.3.4"}

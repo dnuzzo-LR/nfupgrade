@@ -444,6 +444,7 @@ class TestPatchSideEffect(unittest.TestCase):
             api._FIX_LOCK.release()
         self.assertEqual((status, body), (409, {"error": "another action is running"}))
         self.assertNotIn("patch_job", ctx.state)
+        self.assertEqual(len(self._refused()), 1)
 
     def test_something_running_is_409(self):
         host = FakeHost({("pgrep", "-f", "nf_patch"): RunResult(0, "5\n", ""),
@@ -452,6 +453,7 @@ class TestPatchSideEffect(unittest.TestCase):
         status, body = httpd.patch_side_effect(ctx, "ip", "/d/p.rpm",
                                                perform=lambda c, r: self.fail("spawned"))
         self.assertEqual(status, 409)
+        self.assertEqual(self._refused()[0]["reason"], "another action is running")
         self.assertFalse(api.fix_in_progress())
 
     def test_spawn_failure_is_500_and_audited(self):
@@ -461,9 +463,45 @@ class TestPatchSideEffect(unittest.TestCase):
         status, body = httpd.patch_side_effect(ctx, "ip", "/d/p.rpm", perform=perform)
         self.assertEqual(status, 500)
         self.assertNotIn("patch_job", ctx.state)
-        ev = [json.loads(l)["event"] for l in open(os.path.join(self.tmp, "audit.jsonl"))]
-        self.assertIn("launch_error", ev)
+        recs = [json.loads(l) for l in open(os.path.join(self.tmp, "audit.jsonl"))]
+        failed = [r for r in recs if r["event"] == "patch_install_failed"]
+        self.assertEqual(len(failed), 1)
+        self.assertEqual(failed[0]["path"], "/d/p.rpm")
+        self.assertEqual(failed[0]["error"], "boom")
+        self.assertEqual(failed[0]["client"], "ip")
+        self.assertIn("version", failed[0])
         self.assertFalse(api.fix_in_progress())
+
+    def _refused(self):
+        p = os.path.join(self.tmp, "audit.jsonl")
+        if not os.path.exists(p):
+            return []
+        return [json.loads(l) for l in open(p)
+                if json.loads(l)["event"] == "patch_install_refused"]
+
+    def test_bootmenu_open_is_409_and_audited(self):
+        class Running(object):
+            def running(self):
+                return True
+        ctx = launch_ctx(self.tmp)._replace(state={"bootmenu": Running()})
+        status, body = httpd.patch_side_effect(ctx, "ip", "/d/p.rpm",
+                                               perform=lambda c, r: self.fail("spawned"))
+        self.assertEqual((status, body), (409, {"error": "the boot menu is open"}))
+        ref = self._refused()
+        self.assertEqual(len(ref), 1)
+        self.assertEqual((ref[0]["path"], ref[0]["reason"], ref[0]["client"]),
+                         ("/d/p.rpm", "the boot menu is open", "ip"))
+        self.assertFalse(api.fix_in_progress())
+
+    def test_snapshot_busy_is_409(self):
+        class Busy(object):
+            def busy(self):
+                return True
+        ctx = launch_ctx(self.tmp, runner=Busy())._replace(state={})
+        status, body = httpd.patch_side_effect(ctx, "ip", "/d/p.rpm",
+                                               perform=lambda c, r: self.fail("spawned"))
+        self.assertEqual((status, body), (409, {"error": "report snapshot in progress"}))
+        self.assertEqual(len(self._refused()), 1)
 
     def test_safe_dispatch_routes_202(self):
         seen = []

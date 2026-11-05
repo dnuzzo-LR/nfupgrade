@@ -1035,6 +1035,15 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
             return _json(400, {"error": "path required"})
         if preview_scenario(ctx):
             return _json(409, {"error": "preview mode"})
+        if host_mode(ctx) == "install":
+            return _json(409, {"error": "netFLEX is not installed"})
+        # An accepted upgrade/stage/install launch is not visible to pgrep
+        # straight away (and an upgrade first runs its before snapshot), so
+        # refuse for the same grace period the fix and license paths use.
+        state = ctx.state if isinstance(ctx.state, dict) else {}
+        launched_at = state.get("launched_at")
+        if launched_at is not None and _now() - launched_at < FIX_LAUNCH_GRACE:
+            return _json(409, {"error": "an upgrade or install was just launched"})
         session = _bootmenu_session(ctx)
         if session is not None and session.running():
             return _json(409, {"error": "the boot menu is open"})
@@ -1044,6 +1053,10 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
             return _json(409, {"error": "report snapshot in progress"})
         if launcher.anything_running(ctx.host):
             return _json(409, {"error": "an install, upgrade or patch is running"})
+        # nf_upgrade (a stage, or the upgrade nf_upgrader drives) is checked
+        # here only; anything_running is deliberately not widened.
+        if launcher.script_running(ctx.host, "nf_upgrade"):
+            return _json(409, {"error": "an upgrade is running (nf_upgrade)"})
         # Only a path the depot scan itself produced is ever handed to nf_patch.
         rows = patches.gather(ctx.host, ctx.depot_dirs).get("patches", [])
         row = None

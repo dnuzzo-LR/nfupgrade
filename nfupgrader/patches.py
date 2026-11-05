@@ -124,8 +124,14 @@ def evaluate(installed, files, host_block, app_up):
 
 
 
-def _highest(versions):
-    """Highest of several version strings: by (int load, string)."""
+def _highest(versions, generic=None):
+    """Highest of several version strings: by (int load, string). With
+    `generic`, only versions of that generic count (None if there are none):
+    a leftover PATCH of another release must not hide the current one."""
+    if generic is not None:
+        versions = [v for v in versions
+                    if (split_version(v) or (None,))[0] == generic]
+
     def key(v):
         sp = split_version(v)
         return (sp[1] if sp else -1, v)
@@ -146,7 +152,10 @@ def _read_installed(host):
     patch = None
     r = host.run(["rpm", "-q", "--qf", "%{VERSION}\\n", "netFLEX-CORE-PATCH"])
     if r.rc == 0:
-        patch = _highest([ln.strip() for ln in r.out.splitlines() if ln.strip()])
+        core_sp = split_version(core)
+        if core_sp is not None:
+            patch = _highest([ln.strip() for ln in r.out.splitlines() if ln.strip()],
+                             core_sp[0])
     ipatch = host.run(["rpm", "-q", "netFLEX-CORE-IPATCH"]).rc == 0
     installed = {"core": core, "core_arch": core_arch, "patch": patch}
     installed["current_load"] = current_load(installed)

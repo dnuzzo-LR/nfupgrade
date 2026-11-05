@@ -193,18 +193,33 @@ def perform_patch(ctx, rpm_path):
 
 def patch_side_effect(ctx, ip, rpm_path, version=None, perform=None):
     """Carry out an accepted POST /api/patches: spawn nf_patch under
-    api._FIX_LOCK (non-blocking; busy -> 409), re-checking that nothing else
-    runs. Records ctx.state["patch_job"] and points the Log tab at the patch
-    trace; ctx.state["phase"] is deliberately left alone."""
+    api._FIX_LOCK (non-blocking; busy -> 409), re-checking under the lock, as
+    launch_side_effect does, that the boot menu is not open, no report snapshot
+    is running and nothing else runs. Every 409 is audited
+    "patch_install_refused"; a spawn failure is audited "patch_install_failed"
+    (and "launch_error"). Records ctx.state["patch_job"] and points the Log tab
+    at the patch trace; ctx.state["phase"] is deliberately left alone."""
     perform = perform or perform_patch
+
+    def refused(reason):
+        ctx.audit.record("patch_install_refused", path=rpm_path, reason=reason, client=ip)
+        return 409, {"error": reason}
+
     if not api._FIX_LOCK.acquire(False):
-        return 409, {"error": "another action is running"}
+        return refused("another action is running")
     try:
+        session = api._bootmenu_session(ctx)
+        if session is not None and session.running():
+            return refused("the boot menu is open")
+        if api._snapshot_busy(ctx):
+            return refused("report snapshot in progress")
         if launcher.anything_running(ctx.host):
-            return 409, {"error": "another action is running"}
+            return refused("another action is running")
         try:
             popen = perform(ctx, rpm_path)
         except Exception as e:
+            ctx.audit.record("patch_install_failed", path=rpm_path, version=version,
+                             client=ip, error=str(e))
             ctx.audit.record("launch_error", error=str(e), client=ip)
             return 500, {"error": "launch failed: {}".format(e)}
         if isinstance(ctx.state, dict):

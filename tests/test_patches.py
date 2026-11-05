@@ -127,9 +127,6 @@ class TestEvaluate(unittest.TestCase):
         self.assertEqual(rows[0]["reason"], "netFLEX-CORE is not installed")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 def _fake(core="5.4.1.28 i686\n", patch="", ipatch=False, files=None, lock=False,
           stage=False, link=False, up=False, loads="", dirs=("/d",)):
@@ -217,3 +214,17 @@ class TestGather(unittest.TestCase):
     def test_upgrade_lock_blocks(self):
         g = patches.gather(_fake(lock=True), ["/d"])
         self.assertEqual(g["host_block"], "an upgrade is in progress (/usr/cnc/.UPGRADE_LOCK)")
+
+    def test_highest_installed_patch_only_on_core_generic(self):
+        # A leftover PATCH of another generic (5.4.0.40) has the higher load
+        # but must not hide the 5.4.1 patch: current is 29, not CORE's 28.
+        h = _fake(patch="5.4.0.40\n5.4.1.29\n", files={"/d": [N29, N30]})
+        g = patches.gather(h, ["/d"])
+        self.assertEqual(g["installed"]["patch"], "5.4.1.29")
+        self.assertEqual(g["installed"]["current_load"], 29)
+        self.assertEqual([(r["version"], r["status"]) for r in g["patches"]],
+                         [("5.4.1.29", "installed"), ("5.4.1.30", "installable")])
+
+
+if __name__ == "__main__":
+    unittest.main()
