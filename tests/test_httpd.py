@@ -238,7 +238,8 @@ class TestLaunchSideEffect(unittest.TestCase):
             self.assertEqual(status, 202)
             self.assertIn("launched_at", ctx.state)
             del ctx.state["launched_at"]
-            self.assertEqual(ctx.state, {"user_config": "/x.cfg", "phase": mode})
+            self.assertEqual(ctx.state, {"user_config": "/x.cfg", "phase": mode,
+                                          "log_follow": None})
 
     def test_refused_while_fix_in_progress(self):
         def begin(*a, **kw):
@@ -411,6 +412,86 @@ class TestInstallSideEffect(unittest.TestCase):
         self.assertEqual(status, 500)
         self.assertEqual(body["error"], 'launch failed: bad "path"')
         self.assertIn("launch_error", self.events())
+
+
+class TestPatchSideEffect(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def test_accepted_sets_job_and_follow(self):
+        calls = []
+        ctx = launch_ctx(self.tmp)._replace(state={"phase": "stage"}, nf_patch_path="/o/nf_patch")
+
+        def perform(c, rpm):
+            calls.append(rpm)
+            return "POPEN"
+        status, body = httpd.patch_side_effect(ctx, "ip", "/d/p.rpm", version="5.4.1", perform=perform)
+        self.assertEqual((status, body), (202, {"accepted": True, "path": "/d/p.rpm"}))
+        self.assertEqual(calls, ["/d/p.rpm"])
+        self.assertEqual(ctx.state["patch_job"], {"popen": "POPEN", "path": "/d/p.rpm",
+                                                  "version": "5.4.1", "client": "ip"})
+        self.assertEqual(ctx.state["log_follow"], "patch")
+        self.assertEqual(ctx.state["phase"], "stage")
+        self.assertFalse(api.fix_in_progress())
+
+    def test_busy_lock_is_409(self):
+        ctx = launch_ctx(self.tmp)._replace(state={})
+        self.assertTrue(api._FIX_LOCK.acquire(False))
+        try:
+            status, body = httpd.patch_side_effect(ctx, "ip", "/d/p.rpm",
+                                                   perform=lambda c, r: self.fail("spawned"))
+        finally:
+            api._FIX_LOCK.release()
+        self.assertEqual((status, body), (409, {"error": "another action is running"}))
+        self.assertNotIn("patch_job", ctx.state)
+
+    def test_something_running_is_409(self):
+        host = FakeHost({("pgrep", "-f", "nf_patch"): RunResult(0, "5\n", ""),
+                         ("cat", "/proc/5/cmdline"): RunResult(0, "nf_patch\0-f\0x\0", "")})
+        ctx = launch_ctx(self.tmp, host=host)._replace(state={})
+        status, body = httpd.patch_side_effect(ctx, "ip", "/d/p.rpm",
+                                               perform=lambda c, r: self.fail("spawned"))
+        self.assertEqual(status, 409)
+        self.assertFalse(api.fix_in_progress())
+
+    def test_spawn_failure_is_500_and_audited(self):
+        def perform(c, rpm):
+            raise OSError("boom")
+        ctx = launch_ctx(self.tmp)._replace(state={})
+        status, body = httpd.patch_side_effect(ctx, "ip", "/d/p.rpm", perform=perform)
+        self.assertEqual(status, 500)
+        self.assertNotIn("patch_job", ctx.state)
+        ev = [json.loads(l)["event"] for l in open(os.path.join(self.tmp, "audit.jsonl"))]
+        self.assertIn("launch_error", ev)
+        self.assertFalse(api.fix_in_progress())
+
+    def test_safe_dispatch_routes_202(self):
+        seen = []
+
+        def disp(method, path, query, body, cookies, ip, ctx):
+            out = json.dumps({"accepted": True, "path": "/d/p.rpm", "version": "5.4.1"}).encode()
+            return 202, [], out
+
+        def patch(ctx, ip, path, version=None):
+            seen.append((path, version))
+            return 202, {"accepted": True, "path": path}
+        ctx = launch_ctx(self.tmp)
+        status, headers, out = httpd.safe_dispatch(
+            "POST", "/api/patches/install", {}, b"{}", {}, "ip", ctx, dispatch=disp, patch=patch)
+        self.assertEqual(status, 202)
+        self.assertEqual(seen, [("/d/p.rpm", "5.4.1")])
+        self.assertEqual(json.loads(out.decode()), {"accepted": True, "path": "/d/p.rpm"})
+
+    def test_stage_launch_and_reset_clear_log_follow(self):
+        ctx = launch_ctx(self.tmp)._replace(state={"log_follow": "patch"})
+        httpd.launch_side_effect(ctx, "stage", "ip", perform=lambda c, m: None)
+        self.assertIsNone(ctx.state["log_follow"])
+        for fn in (lambda c: httpd.launch_side_effect(c, "install", "ip", action="install",
+                                                       perform_inst=lambda c, a: None),
+                   lambda c: httpd.reset_side_effect(c, "ip", perform_inst=lambda c, a: None)):
+            ctx = launch_ctx(self.tmp)._replace(state={"log_follow": "patch"})
+            fn(ctx)
+            self.assertIsNone(ctx.state["log_follow"])
 
 
 class TestLoadInterruptedFix(unittest.TestCase):

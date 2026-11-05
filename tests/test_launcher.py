@@ -91,6 +91,23 @@ class TestLauncher(unittest.TestCase):
         self.assertFalse(launcher.is_script_argv(["vi", "nf_install"], "nf_install"))
         self.assertFalse(launcher.is_script_argv(["/usr/bin/ksh", "/o/nf_installer"], "nf_install"))
 
+    def test_patcher_running(self):
+        h = FakeHost({("pgrep", "-f", "nf_patch"): RunResult(0, "88\n", ""),
+                      ("cat", "/proc/88/cmdline"): RunResult(0, "/usr/bin/ksh\0/opt/nfupgrader/nf_patch\0-f\0x\0", "")})
+        self.assertTrue(launcher.patcher_running(h))
+        self.assertTrue(launcher.anything_running(h))
+        self.assertFalse(launcher.installer_running(h))
+
+    def test_editor_on_nf_patch_is_not_running(self):
+        h = FakeHost({("pgrep", "-f", "nf_patch"): RunResult(0, "89\n", ""),
+                      ("cat", "/proc/89/cmdline"): RunResult(0, "vi\0nf_patch\0", "")})
+        self.assertFalse(launcher.patcher_running(h))
+        self.assertFalse(launcher.anything_running(h))
+
+    def test_patch_argv(self):
+        self.assertEqual(launcher.build_patch_argv("/o/nf_patch", "/d/p.rpm", "/l"),
+                         ["/o/nf_patch", "-f", "/d/p.rpm", "-l", "/l"])
+
 
 if __name__ == "__main__":
     unittest.main()

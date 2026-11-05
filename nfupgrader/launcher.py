@@ -80,9 +80,19 @@ def installer_running(host):
     return script_running(host, "nf_install")
 
 
+def patcher_running(host):
+    """True iff an nf_patch process is alive on the host."""
+    return script_running(host, "nf_patch")
+
+
 def anything_running(host):
-    """True iff either nf_upgrader or nf_install is alive on the host."""
-    return upgrader_running(host) or installer_running(host)
+    """True iff nf_upgrader, nf_install or nf_patch is alive on the host."""
+    return upgrader_running(host) or installer_running(host) or patcher_running(host)
+
+
+def build_patch_argv(nf_patch_path, rpm_path, logdir):
+    """Return the argv to launch nf_patch for one patch rpm."""
+    return [nf_patch_path, "-f", rpm_path, "-l", logdir]
 
 
 def build_install_argv(nf_install_path, config_path, action):
@@ -108,5 +118,15 @@ def launch_install(nf_install_path, config_path, action, cwd=None):
     argv = build_install_argv(nf_install_path, config_path, action)
     return subprocess.Popen(
         argv, cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+def launch_patch(nf_patch_path, rpm_path, logdir):
+    """Launch nf_patch detached. nf_patch runs in the foreground, so the
+    returned Popen's pid is nf_patch's own (its trace is patch_inc_<host>.<pid>)."""
+    argv = build_patch_argv(nf_patch_path, rpm_path, logdir)
+    return subprocess.Popen(
+        argv, cwd=None, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         start_new_session=True,
     )

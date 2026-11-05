@@ -186,6 +186,36 @@ def launch_side_effect(ctx, mode, ip, perform=None, begin=None, action=None, per
         api._FIX_LOCK.release()
 
 
+def perform_patch(ctx, rpm_path):
+    """Spawn nf_patch for one rpm, logging into the upgrade log directory."""
+    return launcher.launch_patch(ctx.nf_patch_path, rpm_path, api.upgrade_logdir(ctx))
+
+
+def patch_side_effect(ctx, ip, rpm_path, version=None, perform=None):
+    """Carry out an accepted POST /api/patches: spawn nf_patch under
+    api._FIX_LOCK (non-blocking; busy -> 409), re-checking that nothing else
+    runs. Records ctx.state["patch_job"] and points the Log tab at the patch
+    trace; ctx.state["phase"] is deliberately left alone."""
+    perform = perform or perform_patch
+    if not api._FIX_LOCK.acquire(False):
+        return 409, {"error": "another action is running"}
+    try:
+        if launcher.anything_running(ctx.host):
+            return 409, {"error": "another action is running"}
+        try:
+            popen = perform(ctx, rpm_path)
+        except Exception as e:
+            ctx.audit.record("launch_error", error=str(e), client=ip)
+            return 500, {"error": "launch failed: {}".format(e)}
+        if isinstance(ctx.state, dict):
+            ctx.state["patch_job"] = {"popen": popen, "path": rpm_path,
+                                      "version": version, "client": ip}
+            ctx.state["log_follow"] = "patch"
+        return 202, {"accepted": True, "path": rpm_path}
+    finally:
+        api._FIX_LOCK.release()
+
+
 def _install_locked(ctx, action, ip, perform_inst, has_state):
     """launch_side_effect's install-mode body (install/resume/reset), run while
     holding api._FIX_LOCK. No report snapshot is ever taken for these."""
@@ -196,6 +226,7 @@ def _install_locked(ctx, action, ip, perform_inst, has_state):
         return 500, {"error": "launch failed: {}".format(e)}
     if has_state:
         ctx.state["phase"] = "install"
+        ctx.state["log_follow"] = None
     return 202, {"accepted": True, "mode": "install", "action": action}
 
 
@@ -221,6 +252,7 @@ def _launch_locked(ctx, mode, ip, perform, begin, has_state):
             return 409, {"error": "report snapshot in progress"}
         if has_state:
             ctx.state["phase"] = mode
+            ctx.state["log_follow"] = None
         return 202, {"accepted": True, "mode": mode, "snapshot": before}
     try:
         perform(ctx, mode)
@@ -229,6 +261,7 @@ def _launch_locked(ctx, mode, ip, perform, begin, has_state):
         return 500, {"error": "launch failed: {}".format(e)}
     if has_state:
         ctx.state["phase"] = mode
+        ctx.state["log_follow"] = None
     return 202, {"accepted": True, "mode": mode}
 
 
@@ -237,13 +270,14 @@ def _json_response(status, obj):
 
 
 def safe_dispatch(method, path, query, body, cookies, ip, ctx, dispatch=None, launch=None,
-                  reset=None):
+                  reset=None, patch=None):
     """api.dispatch plus the launch/reset side effect after an accepted (202)
     launch or install reset. Any exception becomes a 500 JSON error (traceback
     to stderr) so the client gets an answer instead of a dropped connection."""
     dispatch = dispatch or api.dispatch
     launch = launch or launch_side_effect
     reset = reset or reset_side_effect
+    patch = patch or patch_side_effect
     try:
         status, headers, out = dispatch(method, path, query, body, cookies, ip, ctx)
         if path == "/api/launch" and status == 202:
@@ -252,6 +286,10 @@ def safe_dispatch(method, path, query, body, cookies, ip, ctx, dispatch=None, la
             # its response, not in the request the UI sent.
             action = json.loads(out.decode("utf-8")).get("action")
             status, obj = launch(ctx, mode, ip, action=action)
+            status, headers, out = _json_response(status, obj)
+        elif path == "/api/patches/install" and status == 202:
+            accepted = json.loads(out.decode("utf-8"))
+            status, obj = patch(ctx, ip, accepted.get("path"), version=accepted.get("version"))
             status, headers, out = _json_response(status, obj)
         elif path == "/api/install/reset" and status == 202:
             status, obj = reset(ctx, ip)
@@ -444,6 +482,8 @@ def main(argv=None):
         "NFU_UPGRADE_PATH", os.path.join(here, "..", "nf_upgrade"))
     nf_install_path = os.environ.get(
         "NFU_INSTALL_PATH", os.path.join(here, "..", "nf_install"))
+    nf_patch_path = os.environ.get(
+        "NFU_PATCH_PATH", os.path.join(here, "..", "nf_patch"))
     hosts_path = "/etc/hosts"
     effective_config = os.environ.get(
         "NFU_EFFECTIVE_CONFIG", os.path.join(inclogdir, "nfupgrader_effective.cfg"))
@@ -482,6 +522,7 @@ def main(argv=None):
         checks_path=checks_path, state=state, depot_dirs=depot_dirs,
         reports_path=reports_path, reports_root=reports_root, runner=runner,
         nf_install_path=nf_install_path, hosts_path=hosts_path,
+        nf_patch_path=nf_patch_path,
     )
 
     state["bootmenu"] = bootmenu.BootMenuSession(

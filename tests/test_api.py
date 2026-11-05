@@ -722,6 +722,21 @@ class TestActivePhase(unittest.TestCase):
         self.assertTrue(d["reset"])
         self.assertEqual([e["msg"] for e in d["entries"]], ["second run"])
 
+    def test_log_follows_patch_trace_without_touching_progress(self):
+        open(os.path.join(self.tmp, "stage_inc_h1.10"), "w").write("2026-09-23 16:00:00 INFO  s\n")
+        open(os.path.join(self.tmp, "patch_inc_h1.7"), "w").write("2026-09-23 17:00:00 INFO  patching\n")
+        ctx = self.ctx(phase=None, tracefile=None, state={"log_follow": "patch"})
+        d = self.get(ctx, "/api/log", offset="0")
+        self.assertEqual(d["file"], "patch_inc_h1.7")
+        self.assertEqual([e["msg"] for e in d["entries"]], ["patching"])
+        self.assertNotEqual(self.get(ctx, "/api/progress")["phase"], "patch")
+        ctx.state["log_follow"] = None
+        self.assertEqual(self.get(ctx, "/api/log", offset="0")["file"], "stage_inc_h1.10")
+
+    def test_context_defaults_cover_nf_patch_path(self):
+        self.assertEqual(len(api.Context.__new__.__defaults__), 15)
+        self.assertIn("nf_patch_path", api.Context._fields)
+
     def test_log_reports_full_path_and_existence(self):
         ctx = self.ctx(phase=None, tracefile=None)
         d = self.get(ctx, "/api/log", offset="0")

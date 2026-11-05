@@ -20,12 +20,12 @@ Context = collections.namedtuple("Context", [
     "effective_config", "user_config", "launch_cwd", "cnc_cnfg_path",
     "peer_host_factory", "checks_path", "state", "depot_dirs",
     "reports_path", "reports_root", "runner",
-    "nf_install_path", "hosts_path", "license_path",
+    "nf_install_path", "hosts_path", "license_path", "nf_patch_path",
 ])
 # The trailing fields are only used by side effects (launch), info gathering,
 # checks, the config builder, or reports; default them so the dispatcher/tests
 # need not supply each one. (namedtuple field defaults via __new__.__defaults__ — py3.6.)
-Context.__new__.__defaults__ = (None,) * 14
+Context.__new__.__defaults__ = (None,) * 15
 
 # One check fix at a time: fixes change system state as root (dnf, sysctl, limits).
 # Held for the whole fix request, so launches and snapshots are refused meanwhile
@@ -246,6 +246,8 @@ def _active_tracefile(ctx, phase):
     if ctx.tracefile:
         return ctx.tracefile
     logdir = upgrade_logdir(ctx)
+    if isinstance(ctx.state, dict) and ctx.state.get("log_follow") == "patch":
+        return logtail.latest_trace(logdir, "patch", ctx.hostname)
     if phase == "install":
         return logtail.latest_of(logdir, ["install", "reset"], ctx.hostname)
     return logtail.latest_trace(logdir, phase, ctx.hostname)
