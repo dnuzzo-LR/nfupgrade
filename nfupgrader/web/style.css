@@ -208,4 +208,4 @@ pre.lic-error { background: #fdecea; padding: .5rem .7rem; border-radius: 6px;
 .patch-table .st-installed { color: var(--ok); }
 .patch-table .hint { color: var(--muted); font-size: 12px; }
 .patch-msg, .patch-last { margin-top: .6rem; }
-.patch-last .bad { color: var(--bad, #b42318); }
+.patch-last .bad { color: var(--err); }

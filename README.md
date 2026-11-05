@@ -342,9 +342,10 @@ installed) and Install is refused in preview mode.
   installed, a `netFLEX-CORE-IPATCH` is installed (contact support), an upgrade lock
   (`/usr/cnc/.UPGRADE_LOCK`) exists, or an upgrade is staged (`/usr/cnc_stage`).
   Install is also refused while an install, upgrade, patch, check fix, report
-  snapshot or boot menu session is running.
+  snapshot or boot menu session is running, and for a short grace period just
+  after an upgrade, stage or install was launched.
 - **Needs stop.** If the patch's `REBOOT_LOADS` applies and netFLEX is up, Install
-  is disabled with "This patch requires netFLEX to be stopped \u2014 use the Boot
+  is disabled with "This patch requires netFLEX to be stopped — use the Boot
   menu tab". (Best-effort; the RPM's own refusal is the backstop.)
 - **Not supported.** `IPATCH`, `INC` and `ATTEXT` patches are listed, marked not
   supported, and never installed.
@@ -352,12 +353,13 @@ installed) and Install is refused in preview mode.
   directory is `-l`, else `$INCLOGDIR`, else `/usr/cnc/logs`. It re-runs the rules
   above, then `rpm -Uvh`, then verifies the new version is reported. Exit codes:
   `0` installed (or eligible with `-n`), `1` refused before rpm was touched, `2`
-  rpm failed. The trace is `<logdir>/patch_inc_<host>.<pid>`; its last line is
+  rpm -Uvh failed or the post-install check did not show the new version. The trace is `<logdir>/patch_inc_<host>.<pid>`; its last line is
   `RESULT: installed <version>`, `RESULT: refused: <reason>` or
   `RESULT: failed: <reason>`. On refused/failed the tab shows the trace path to send
   to support.
 - **Audit.** `patch_install_started` (client, file, version), `patch_install_refused`
-  (reason), `patch_install_done` and `patch_install_failed` (exit code, trace path)
+  (reason), `patch_install_done` and `patch_install_failed` (exit code, trace path;
+  or the error when `nf_patch` could not be started)
   in `nfupgrader_audit.jsonl`.
 
 ## Testing
