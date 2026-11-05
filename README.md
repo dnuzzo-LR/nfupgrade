@@ -47,6 +47,7 @@ saved configs, report snapshots) and any RPMs in `/opt/nfupgrader` are kept.
 |------|------|
 | `nf_upgrade`, `nf_upgrader` | Forks of netFLEX `inc_upgrade` / `inc_upgrader`, behavior-identical to the originals but with a cleaned-up, severity-prefixed log. Intended to eventually replace the originals in the product. |
 | `nf_install` | New (not a fork): fresh netFLEX CORE install of the local host, with resume and reset. See *Installing on a new host*. |
+| `nf_patch` | New (not a fork): checks and installs one `netFLEX-CORE-PATCH` RPM on the local host (`nf_patch -f <rpm>`). See *Patches tab*. |
 | `nf_log.ksh` | Sourced logging helpers: `loginfo` / `logwarn` / `logerror` / `logfatal` and the status-preserving `run_logged` sub-command wrapper. |
 | `ref/inc_upgrade`, `ref/inc_upgrader` | Pinned snapshots of the originals (netFLEX commit `776f42242`), used only as the baseline for the equivalence test. Never run. |
 | `test/` | ksh unit tests and the fork verifier. |
@@ -119,7 +120,7 @@ the host being upgraded.
 | `NFU_USER_CONFIG` | (unset) | Customer's upgrade `.cfg`. On Launch, an effective copy is generated that sources it and forces `PROMPTFORVALIDATE=NO`; the original is never edited. Required to use the Launch buttons. |
 | `NFU_EFFECTIVE_CONFIG` | `${INCLOGDIR}/nfupgrader_effective.cfg` | Where the generated effective config is written and read. |
 | `NFU_LAUNCH_CWD` | dir of `NFU_USER_CONFIG` | Directory `nf_upgrade` runs from (for relative `DEPOTFILE`/`linux_packages` lookup). |
-| `NFU_DEPOT_DIRS` | directory `run.sh` was started from, then `/opt/apt/upgrade` | Colon-separated directories scanned (top level only) for `netFLEX-CORE*.rpm`. The Config tab lists them automatically on page load; **Refresh depots** re-scans. Picking one fills `DEPOTFILE`, `NEW_GENERIC` and `NEW_LOAD` from the filename. Missing directories are skipped. |
+| `NFU_DEPOT_DIRS` | directory `run.sh` was started from, then `/opt/apt/upgrade` | Colon-separated directories scanned (top level only) for `netFLEX-CORE*.rpm` (the CORE list excludes any file with `PATCH` in its name; the Patches tab scans the same directories for `*PATCH*.rpm`). The Config tab lists them automatically on page load; **Refresh depots** re-scans. Picking one fills `DEPOTFILE`, `NEW_GENERIC` and `NEW_LOAD` from the filename. Missing directories are skipped. |
 | `NFU_PREVIEW_INSTALL` | (unset: off) | Preview the install screens on any box, even one already running netFLEX. Set to `1` (or `before`, `running`, `failed`, `done`). The UI shows install mode with sample data and a yellow PREVIEW banner whose picker switches between those scenarios. Pre-flight checks run for real (read-only). **Launch, Resume, Reset and Fix are refused**; Save writes `nfupgrader_preview.cfg` / `nfupgrader_preview_cnc.cnfg` beside — never over — the real saved config. |
 | `NFU_REPORTS` | `nfupgrader/reports.default.json` | Report list for the Reports tab. Snapshots go to `${INCLOGDIR}/nfupgrader_reports/` (newest 20 kept); an Upgrade launch takes a *before* snapshot first and an *after* snapshot when the upgrade ends. |
 
@@ -320,11 +321,51 @@ itself. The install form on the Config tab links here.
   password), `license_created` and `license_migrated` are recorded in
   `nfupgrader_audit.jsonl`.
 
+## Patches tab
+
+The **Patches** tab (after Upgrade) installs a netFLEX patch RPM from the depot
+directories (`NFU_DEPOT_DIRS`) on **this host**. It lists every `*PATCH*.rpm` found
+(top level only) with its version and a status; only the one eligible patch has an
+**Install** button. Install asks for confirmation, then launches `nf_patch`
+detached; the Log tab follows its trace. **netFLEX stays up** during the install, but
+the patch restarts its processes. The tab is greyed in install mode (netFLEX not
+installed) and Install is refused in preview mode.
+
+- **Eligibility rules.** Identity comes from `rpm -qp` on the file, not the file name.
+  Only `netFLEX-CORE-PATCH` is supported. A patch must match the installed CORE's
+  release (generic, e.g. `5.4.1`) and architecture (the installed `netFLEX-CORE`
+  arch, e.g. `i686` or `x86_64`). Order is strict: with a PATCH installed only the
+  next load (current + 1) is offered; with none installed, only the lowest patch
+  above the CORE load (a missing first patch cannot be detected). Others show as
+  installed, out of sequence ("install X first"), wrong release or wrong arch.
+- **Host blocks.** A banner replaces the Install buttons when netFLEX-CORE is not
+  installed, a `netFLEX-CORE-IPATCH` is installed (contact support), an upgrade lock
+  (`/usr/cnc/.UPGRADE_LOCK`) exists, or an upgrade is staged (`/usr/cnc_stage`).
+  Install is also refused while an install, upgrade, patch, check fix, report
+  snapshot or boot menu session is running.
+- **Needs stop.** If the patch's `REBOOT_LOADS` applies and netFLEX is up, Install
+  is disabled with "This patch requires netFLEX to be stopped \u2014 use the Boot
+  menu tab". (Best-effort; the RPM's own refusal is the backstop.)
+- **Not supported.** `IPATCH`, `INC` and `ATTEXT` patches are listed, marked not
+  supported, and never installed.
+- **`nf_patch`.** `nf_patch -f <rpm> [-l <logdir>] [-n]`; `-n` checks only. The log
+  directory is `-l`, else `$INCLOGDIR`, else `/usr/cnc/logs`. It re-runs the rules
+  above, then `rpm -Uvh`, then verifies the new version is reported. Exit codes:
+  `0` installed (or eligible with `-n`), `1` refused before rpm was touched, `2`
+  rpm failed. The trace is `<logdir>/patch_inc_<host>.<pid>`; its last line is
+  `RESULT: installed <version>`, `RESULT: refused: <reason>` or
+  `RESULT: failed: <reason>`. On refused/failed the tab shows the trace path to send
+  to support.
+- **Audit.** `patch_install_started` (client, file, version), `patch_install_refused`
+  (reason), `patch_install_done` and `patch_install_failed` (exit code, trace path)
+  in `nfupgrader_audit.jsonl`.
+
 ## Testing
 
 ```sh
 ksh test/nf_log_test.ksh                          # unit tests for nf_log.ksh
 ksh test/nf_install_test.ksh                      # nf_install in a sandbox
+ksh test/nf_patch_test.ksh                        # nf_patch in a sandbox (fake rpm)
 ksh test/install_test.ksh                         # make_release.sh + install.sh in a sandbox
 sh  test/nf_fork_verify.sh                         # fork syntax/equivalence/coverage/grammar
 python3 -m unittest discover -s tests -p 'test_*.py'   # Phase 2 python tests

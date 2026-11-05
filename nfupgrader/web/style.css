@@ -197,3 +197,15 @@ table.lic-changes { margin-top: .5rem; }
 .lic-bad { color: var(--err); font-weight: 600; }
 pre.lic-error { background: #fdecea; padding: .5rem .7rem; border-radius: 6px;
   white-space: pre-wrap; word-break: break-all; font-size: 12px; }
+
+.patch-installed { font-weight: 600; margin-bottom: .6rem; }
+.patch-banner { border: 1px solid var(--warn); color: var(--warn); border-radius: 4px;
+  padding: .5rem .7rem; margin-bottom: .6rem; }
+.patch-table { width: 100%; border-collapse: collapse; }
+.patch-table th, .patch-table td { text-align: left; padding: .3rem .5rem;
+  border-bottom: 1px solid var(--line, #d8dee4); }
+.patch-table .st-installable { font-weight: 600; color: var(--accent); }
+.patch-table .st-installed { color: var(--ok); }
+.patch-table .hint { color: var(--muted); font-size: 12px; }
+.patch-msg, .patch-last { margin-top: .6rem; }
+.patch-last .bad { color: var(--bad, #b42318); }

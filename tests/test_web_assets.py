@@ -29,6 +29,8 @@ REQUIRED_IDS = [
     "lic-expiry", "lic-trial", "lic-numne", "lic-numusers", "lic-types",
     "lic-type-filter", "lic-advanced", "lic-password", "btn-lic-unlock",
     "btn-lic-review", "btn-lic-save", "lic-review", "lic-result",
+    "tab-btn-patches", "tab-patches", "patch-installed", "patch-banner",
+    "patch-table", "btn-patch-refresh", "patch-msg", "patch-last",
 ]
 
 
@@ -297,6 +299,21 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn('getElementById("cfg-license").onclick', self.js)
         handler = self.js.split('getElementById("cfg-license").onclick', 1)[1].split("};", 1)[0]
         self.assertIn('showTab("license")', handler)
+
+    def test_patches_tab_after_upgrade(self):
+        m = re.search(r'data-tab="upgrade"[^>]*>[^<]*</button>\s*<button[^>]*data-tab="patches"',
+                      self.html)
+        self.assertIsNotNone(m, "Patches tab button must follow the Upgrade tab")
+        self.assertIn('id="tab-btn-patches"', self.html)
+        self.assertIn('name === "patches"', self._fn("initTabs"))
+
+    def test_patches_wiring_and_copy(self):
+        self.assertIn("function refreshPatches(", self.js)
+        self.assertIn('"/api/patches/install"', self.js)
+        self.assertIn("netFLEX stays up, but its processes will be restarted", self.js)
+        self.assertIn("This patch requires netFLEX to be stopped — use the Boot menu tab", self.js)
+        self.assertIn('showTab("log")', self._fn("patchInstalled"))
+        self.assertIn("esc(", self._fn("renderPatches"))
 
     def test_license_tab_button_and_panel(self):
         self.assertIn('<button class="tab" data-tab="license">License</button>', self.html)

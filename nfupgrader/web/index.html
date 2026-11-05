@@ -39,6 +39,7 @@
     <button class="tab active" data-tab="overview">Overview</button>
     <button class="tab" data-tab="config">Config</button>
     <button class="tab" data-tab="upgrade" id="tab-btn-upgrade">Upgrade</button>
+    <button class="tab" data-tab="patches" id="tab-btn-patches">Patches</button>
     <button class="tab" data-tab="license">License</button>
     <button class="tab" data-tab="reports">Reports</button>
     <button class="tab" data-tab="log">Log</button>
@@ -177,6 +178,17 @@
     </section>
 
     <!-- LICENSE -->
+    <section class="panel" id="tab-patches">
+      <div class="card">
+        <h2>Patches <button type="button" id="btn-patch-refresh" style="float:right">Refresh</button></h2>
+        <div id="patch-installed" class="patch-installed">Loading&hellip;</div>
+        <div id="patch-banner" class="patch-banner" style="display:none"></div>
+        <div id="patch-table"></div>
+        <div id="patch-msg" class="patch-msg"></div>
+        <div id="patch-last" class="patch-last"></div>
+      </div>
+    </section>
+
     <section class="panel" id="tab-license">
       <div class="card">
         <h2>License <span id="lic-spin" class="spinner" style="display:none"></span></h2>

@@ -82,6 +82,7 @@ function initTabs() {
     panels.forEach(function (p) { p.classList.toggle("active", p.id === "tab-" + name); });
     try { localStorage.setItem("nfu_tab", name); } catch (e) {}
     if (name === "bootmenu") bootMenuShown();
+    if (name === "patches") refreshPatches();
     // The license password never outlives a visit to the License tab.
     if (name === "license") refreshLicense();
     else clearLicensePassword();
@@ -579,6 +580,129 @@ function refreshPostflight() {
 function esc(s) {
   return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
     .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+// ---- Patches tab: install a netFLEX-CORE-PATCH RPM from the depot (nf_patch).
+var patchPoll = null;      // timer while a patch install is running
+var patchData = null;      // last /api/patches response
+var patchMsg = "";         // transient message under the table
+
+var PATCH_STOP_MSG = "This patch requires netFLEX to be stopped — use the Boot menu tab";
+
+function patchStatusText(p, installed) {
+  switch (p.status) {
+    case "installable": return "► next";
+    case "installed": return "installed";
+    case "out_of_sequence": return p.reason || "out of sequence";
+    case "wrong_release": return p.reason || "wrong release";
+    case "wrong_arch": return p.reason || ("wrong arch (box is " + (installed.core_arch || "?") + ")");
+    case "unsupported": return p.reason || "not supported";
+    case "unreadable": return p.reason || "unreadable";
+    default: return p.reason || p.status || "";
+  }
+}
+
+function refreshPatches() {
+  getJSON("/api/patches", function (d) {
+    patchData = d;
+    var tab = document.getElementById("tab-btn-patches");
+    tab.disabled = !d.available;
+    tab.classList.toggle("greyed", !d.available);
+    tab.title = d.available ? "" : d.reason || "";
+    if (!d.available && document.getElementById("tab-patches").classList.contains("active") && showTab) {
+      showTab("overview");
+      return;
+    }
+    renderPatches(d);
+    if (d.running && !patchPoll) {
+      patchPoll = setInterval(refreshPatches, 3000);
+    } else if (!d.running && patchPoll) {
+      // finished: one last refresh already happened with this response
+      clearInterval(patchPoll);
+      patchPoll = null;
+    }
+  });
+}
+
+function renderPatches(d) {
+  var inst = d.installed || {};
+  document.getElementById("patch-installed").textContent =
+    "Installed: CORE " + (inst.core || "—") + (inst.core_arch ? " (" + inst.core_arch + ")" : "") +
+    "   PATCH " + (inst.patch || "—") +
+    (inst.current_load != null ? "   (current load " + inst.current_load + ")" : "");
+  var ban = document.getElementById("patch-banner");
+  var blocked = d.host_block || (d.available ? "" : d.reason || "");
+  ban.style.display = blocked ? "block" : "none";
+  ban.innerHTML = esc(blocked);
+  var rows = d.patches || [];
+  var html = "";
+  if (!rows.length) {
+    html = "<p class='hint'>No patch files found in the depot directories.</p>";
+  } else {
+    html = "<table class='patch-table'><tr><th>File</th><th>Version</th><th>Status</th></tr>";
+    rows.forEach(function (p, i) {
+      html += "<tr><td>" + esc(p.name) + "</td><td>" + esc(p.version) + "</td><td class='st-" +
+        esc(p.status) + "'>" + esc(patchStatusText(p, inst));
+      if (p.status === "installable") {
+        var off = d.running || p.needs_stop || !!blocked;
+        html += " <button type='button' class='primary' data-patch='" + i + "'" +
+          (off ? " disabled" : "") + ">Install</button>";
+        if (p.needs_stop) html += "<div class='hint'>" + esc(PATCH_STOP_MSG) + "</div>";
+      }
+      html += "</td></tr>";
+    });
+    html += "</table>";
+  }
+  var box = document.getElementById("patch-table");
+  box.innerHTML = html;
+  var btns = box.querySelectorAll("button[data-patch]");
+  for (var i = 0; i < btns.length; i++) {
+    btns[i].onclick = (function (p) { return function () { installPatch(p); }; })(rows[btns[i].getAttribute("data-patch")]);
+  }
+  var msg = document.getElementById("patch-msg");
+  if (d.running) {
+    msg.innerHTML = "Installing… see <a href='#' id='patch-log-link'>Log tab</a>";
+    document.getElementById("patch-log-link").onclick = function (e) { e.preventDefault(); showTab("log"); };
+  } else {
+    msg.textContent = patchMsg;
+  }
+  var last = d.last || {};
+  var lh = "";
+  if (!d.running && last.result) {
+    var bad = /RESULT: (refused|failed)/.test(last.result);
+    lh = "Last patch: <span class='" + (bad ? "bad" : "") + "'>" + esc(last.result.replace(/^.*RESULT:\s*/, "")) + "</span>";
+    if (last.trace) {
+      lh += "<div class='hint'>Trace: " + esc(last.trace) +
+        (bad ? " — send this file to support" : "") + "</div>";
+    }
+  }
+  document.getElementById("patch-last").innerHTML = lh;
+}
+
+function installPatch(p) {
+  showConfirm({
+    title: "Install patch " + p.version + " on " + thisHost() + "?",
+    ok: "Install patch",
+    body: "netFLEX stays up, but its processes will be restarted. " +
+      "Installing " + p.name + " cannot be undone from this tool."
+  }, function () {
+    patchMsg = "";
+    postJSON("/api/patches/install", { path: p.path }, function (status, body) {
+      if (status === 202) patchInstalled(body);
+      else {
+        patchMsg = "Not installed: " + (body.error || "HTTP " + status);
+        refreshPatches();
+      }
+    });
+  });
+}
+
+function patchInstalled(body) {
+  patchMsg = "";
+  var msg = document.getElementById("patch-msg");
+  msg.innerHTML = "Installing… see <a href='#' id='patch-log-link'>Log tab</a>";
+  document.getElementById("patch-log-link").onclick = function (e) { e.preventDefault(); showTab("log"); };
+  refreshPatches();
 }
 
 var snapshots = [];
@@ -1918,6 +2042,7 @@ function onLicenseEdit(ev) {
 }
 document.getElementById("lic-form").addEventListener("input", onLicenseEdit);
 document.getElementById("lic-form").addEventListener("change", onLicenseEdit);
+document.getElementById("btn-patch-refresh").onclick = refreshPatches;
 document.getElementById("btn-bootmenu-open").onclick = openBootMenu;
 document.getElementById("btn-bootmenu-end").onclick = endBootMenu;
 document.getElementById("btn-bootmenu-end-leftover").onclick = endBootMenuLeftover;
@@ -2008,6 +2133,7 @@ refreshPostflight();
 refreshReports();
 refreshReportsJob();
 refreshBootMenu();
+refreshPatches();
 setInterval(refreshProgress, 2000);
 setInterval(refreshInstall, 2000);
 setInterval(refreshLive, 2000);
