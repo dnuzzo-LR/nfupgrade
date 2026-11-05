@@ -122,3 +122,84 @@ def evaluate(installed, files, host_block, app_up):
         row.pop("_load", None)
     return rows
 
+
+
+def _highest(versions):
+    """Highest of several version strings: by (int load, string)."""
+    def key(v):
+        sp = split_version(v)
+        return (sp[1] if sp else -1, v)
+    return max(versions, key=key) if versions else None
+
+
+def _read_installed(host):
+    """Query rpm for installed CORE/PATCH versions. Returns the installed dict
+    (core, core_arch, patch, current_load) and whether an IPATCH is present."""
+    core = core_arch = None
+    r = host.run(["rpm", "-q", "--qf", "%{VERSION} %{ARCH}\\n", "netFLEX-CORE"])
+    if r.rc == 0:
+        pairs = [ln.split() for ln in r.out.splitlines() if len(ln.split()) >= 2]
+        if pairs:
+            best = max(pairs, key=lambda t: (
+                (split_version(t[0]) or ("", -1))[1], t[0]))
+            core, core_arch = best[0], best[1]
+    patch = None
+    r = host.run(["rpm", "-q", "--qf", "%{VERSION}\\n", "netFLEX-CORE-PATCH"])
+    if r.rc == 0:
+        patch = _highest([ln.strip() for ln in r.out.splitlines() if ln.strip()])
+    ipatch = host.run(["rpm", "-q", "netFLEX-CORE-IPATCH"]).rc == 0
+    installed = {"core": core, "core_arch": core_arch, "patch": patch}
+    installed["current_load"] = current_load(installed)
+    return installed, ipatch
+
+
+def _read_file(host, path):
+    """Describe one patch rpm file as an evaluate() input dict."""
+    row = {"path": path, "name": path.rsplit("/", 1)[-1], "pkg": None,
+           "version": None, "arch": None, "reboot_loads": []}
+    r = host.run(["rpm", "-qp", "--qf", "%{NAME} %{VERSION} %{ARCH}\\n", path])
+    if r.rc == 0:
+        parts = r.out.split()
+        if len(parts) >= 3:
+            row["pkg"], row["version"], row["arch"] = parts[0], parts[1], parts[2]
+    return row
+
+
+def gather(host, dirs, stage_root="/usr/cnc_stage", incroot="/usr/cnc"):
+    """Collect installed state and depot patch files, then evaluate them.
+
+    Returns {"installed", "host_block", "app_up", "patches"}. REBOOT_LOADS is
+    read (rpm -qp --scripts) only for the one row that is installable."""
+    installed, ipatch = _read_installed(host)
+    if installed["core"] is None:
+        block = "netFLEX-CORE is not installed"
+    elif ipatch:
+        block = "an incremental patch (netFLEX-CORE-IPATCH) is installed \u2014 contact support"
+    elif host.run(["test", "-f", incroot + "/.UPGRADE_LOCK"]).rc == 0:
+        block = "an upgrade is in progress (/usr/cnc/.UPGRADE_LOCK)"
+    elif (host.run(["test", "-e", stage_root]).rc == 0
+          or host.run(["test", "-L", stage_root]).rc == 0):
+        block = ("a staged upgrade is present (/usr/cnc_stage) \u2014 "
+                 "finish or back out the upgrade first")
+    else:
+        block = None
+    app_up = host.run(["test", "-f", incroot + "/.CNC_UP"]).rc == 0
+
+    files = []
+    for d in dirs:
+        r = host.run(["find", d, "-maxdepth", "1", "-name", "*PATCH*.rpm"])
+        if r.rc != 0:
+            continue
+        for path in sorted(r.out.split(), key=lambda x: x.rsplit("/", 1)[-1]):
+            files.append(_read_file(host, path))
+
+    rows = evaluate(installed, files, block, app_up)
+    for i, row in enumerate(rows):
+        if row["status"] == "installable":
+            r = host.run(["rpm", "-qp", "--scripts", row["path"]])
+            if r.rc == 0:
+                files[i]["reboot_loads"] = parse_reboot_loads(r.out)
+                rows = evaluate(installed, files, block, app_up)
+            break
+    return {"installed": installed, "host_block": block, "app_up": app_up,
+            "patches": rows}

@@ -80,6 +80,15 @@ class TestDepots(unittest.TestCase):
         self.assertEqual(depots[0]["load"], "03")
         self.assertEqual(depots[0]["path"], "/depot/netFLEX-CORE-5.5.0.03-1.rhel8.x86_64.rpm")
 
+    def test_list_depots_excludes_patch_files(self):
+        out = ("/depot/netFLEX-CORE-PATCH-5.4.1.32-1.rhel8.i686.rpm\n"
+               "/depot/netFLEX-CORE-5.4.1.28-1.rhel8.i686.rpm\n")
+        h = FakeHost({("find", "/depot", "-maxdepth", "1", "-name", "netFLEX-CORE*.rpm"):
+                      RunResult(0, out, "")})
+        depots = cfg.list_depots(h, ["/depot"])
+        self.assertEqual([d["name"] for d in depots],
+                         ["netFLEX-CORE-5.4.1.28-1.rhel8.i686.rpm"])
+
     def test_list_depots_empty_dir(self):
         h = FakeHost({("find", "/none", "-maxdepth", "1", "-name", "netFLEX-CORE*.rpm"):
                       RunResult(1, "", "")})

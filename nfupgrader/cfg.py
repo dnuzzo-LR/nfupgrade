@@ -92,7 +92,7 @@ _DEPOT_RE = re.compile(r"netFLEX-CORE-([0-9][0-9.]*)-")
 
 
 def list_depots(host, dirs):
-    """Scan dirs for netFLEX-CORE*.rpm via Host.run(find). Return
+    """Scan dirs for netFLEX-CORE*.rpm (excluding *PATCH* files) via Host.run(find). Return
     [{path, name, generic, load}] with generic/load derived from the version."""
     out = []
     for d in dirs:
@@ -101,6 +101,8 @@ def list_depots(host, dirs):
             continue
         for path in r.out.split():
             name = path.rsplit("/", 1)[-1]
+            if "PATCH" in name:
+                continue
             m = _DEPOT_RE.search(name)
             generic, load = derive_generic_load(m.group(1)) if m else ("", "")
             out.append({"path": path, "name": name, "generic": generic, "load": load})

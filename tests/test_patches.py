@@ -1,6 +1,7 @@
 import unittest
 
 from nfupgrader import patches
+from nfupgrader.host import FakeHost, RunResult
 
 CORE = {"core": "5.4.1.28", "core_arch": "i686", "patch": None}
 
@@ -128,3 +129,91 @@ class TestEvaluate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _fake(core="5.4.1.28 i686\n", patch="", ipatch=False, files=None, lock=False,
+          stage=False, link=False, up=False, loads="", dirs=("/d",)):
+    r = {}
+    ok = RunResult(0, "", "")
+    for d in dirs:
+        names = (files or {}).get(d)
+        if names is None:
+            continue
+        r[("find", d, "-maxdepth", "1", "-name", "*PATCH*.rpm")] = RunResult(
+            0, "".join(d + "/" + n + "\n" for n in names), "")
+        for n in names:
+            ver = n.split("PATCH-")[1].split("-")[0]
+            r[("rpm", "-qp", "--qf", "%{NAME} %{VERSION} %{ARCH}\\n", d + "/" + n)] = \
+                RunResult(0, "netFLEX-CORE-PATCH " + ver + " i686\n", "")
+            r[("rpm", "-qp", "--scripts", d + "/" + n)] = RunResult(0, loads, "")
+    r[("rpm", "-q", "--qf", "%{VERSION} %{ARCH}\\n", "netFLEX-CORE")] = (
+        RunResult(0, core, "") if core else RunResult(1, "", ""))
+    r[("rpm", "-q", "--qf", "%{VERSION}\\n", "netFLEX-CORE-PATCH")] = (
+        RunResult(0, patch, "") if patch else RunResult(1, "", ""))
+    if ipatch:
+        r[("rpm", "-q", "netFLEX-CORE-IPATCH")] = ok
+    if lock:
+        r[("test", "-f", "/usr/cnc/.UPGRADE_LOCK")] = ok
+    if stage:
+        r[("test", "-e", "/usr/cnc_stage")] = ok
+    if link:
+        r[("test", "-L", "/usr/cnc_stage")] = ok
+    if up:
+        r[("test", "-f", "/usr/cnc/.CNC_UP")] = ok
+    return FakeHost(r)
+
+
+N29 = "netFLEX-CORE-PATCH-5.4.1.29-1.rhel8.i686.rpm"
+N30 = "netFLEX-CORE-PATCH-5.4.1.30-1.rhel8.i686.rpm"
+N31 = "netFLEX-CORE-PATCH-5.4.1.31-1.rhel8.i686.rpm"
+
+
+class TestGather(unittest.TestCase):
+    def test_gather_lists_and_evaluates(self):
+        h = _fake(files={"/d": [N30, N29]})
+        g = patches.gather(h, ["/d"])
+        self.assertEqual([(r["version"], r["status"]) for r in g["patches"]],
+                         [("5.4.1.29", "installable"), ("5.4.1.30", "out_of_sequence")])
+        self.assertEqual(g["installed"]["current_load"], 28)
+        self.assertIsNone(g["host_block"])
+        self.assertFalse(g["app_up"])
+        scripts = [c for c in h.calls if c[:3] == ["rpm", "-qp", "--scripts"]]
+        self.assertEqual(scripts, [["rpm", "-qp", "--scripts", "/d/" + N29]])
+
+    def test_multiple_installed_patch_versions_use_highest(self):
+        h = _fake(patch="5.4.1.29\n5.4.1.30\n", files={"/d": [N31]})
+        g = patches.gather(h, ["/d"])
+        self.assertEqual(g["installed"]["patch"], "5.4.1.30")
+        self.assertEqual(g["patches"][0]["status"], "installable")
+
+    def test_reboot_loads_and_app_up(self):
+        h = _fake(files={"/d": [N29]}, up=True, loads='REBOOT_LOADS="29"\n')
+        g = patches.gather(h, ["/d"])
+        self.assertTrue(g["app_up"])
+        self.assertEqual(g["patches"][0]["reboot_loads"], [29])
+        self.assertTrue(g["patches"][0]["needs_stop"])
+
+    def test_missing_dir_skipped(self):
+        h = _fake(files={"/d": [N29]})
+        g = patches.gather(h, ["/nope", "/d"])
+        self.assertEqual(len(g["patches"]), 1)
+
+    def test_core_missing_blocks(self):
+        g = patches.gather(_fake(core="", files={"/d": [N29]}), ["/d"])
+        self.assertEqual(g["host_block"], "netFLEX-CORE is not installed")
+        self.assertIsNone(g["installed"]["core"])
+
+    def test_ipatch_blocks(self):
+        g = patches.gather(_fake(ipatch=True), ["/d"])
+        self.assertEqual(g["host_block"], "an incremental patch (netFLEX-CORE-IPATCH) "
+                         "is installed \u2014 contact support")
+
+    def test_stage_link_blocks(self):
+        want = ("a staged upgrade is present (/usr/cnc_stage) \u2014 "
+                "finish or back out the upgrade first")
+        self.assertEqual(patches.gather(_fake(link=True), ["/d"])["host_block"], want)
+        self.assertEqual(patches.gather(_fake(stage=True), ["/d"])["host_block"], want)
+
+    def test_upgrade_lock_blocks(self):
+        g = patches.gather(_fake(lock=True), ["/d"])
+        self.assertEqual(g["host_block"], "an upgrade is in progress (/usr/cnc/.UPGRADE_LOCK)")
