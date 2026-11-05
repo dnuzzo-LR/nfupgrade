@@ -13,6 +13,7 @@ DIR="$(cd "$(dirname "$0")/.." && pwd)"
 . "${DIR}/test/nf_test_lib.ksh"
 
 NFP="${DIR}/nf_patch"
+REAL_MKTEMP=$(whence -p mktemp)
 ORIG_PATH="${PATH}"
 SB=""
 
@@ -210,6 +211,23 @@ print '  4242 /usr/bin/ksh /opt/nfupgrader/nf_upgrader -u' > "${SB}/ps"
 f=$(patchfile 5.4.1.29)
 run_patch -f "${f}"
 refused "other running" 'nf_upgrader is running'
+# t_refuse_nf_upgrade_running: a stage/upgrade's nf_upgrade (and the
+# netFLEX inc_upgrade/inc_upgrader it drives) also refuses
+setup
+print '  4244 /usr/bin/ksh /opt/nfupgrader/nf_upgrade -c x -s' > "${SB}/ps"
+f=$(patchfile 5.4.1.29)
+run_patch -f "${f}"
+refused "nf_upgrade running" 'nf_upgrade is running \(pid 4244\)$'
+setup
+print '  4245 /bin/ksh /usr/cnc/bin/inc_upgrade -u' > "${SB}/ps"
+f=$(patchfile 5.4.1.29)
+run_patch -f "${f}"
+refused "inc_upgrade running" 'inc_upgrade is running'
+setup
+print '  4246 /usr/cnc/bin/inc_upgrader' > "${SB}/ps"
+f=$(patchfile 5.4.1.29)
+run_patch -f "${f}"
+refused "inc_upgrader running" 'inc_upgrader is running'
 setup
 print '  4243 vi /tmp/nf_patch_notes' > "${SB}/ps"
 f=$(patchfile 5.4.1.29)
@@ -272,6 +290,52 @@ f=$(patchfile 5.4.1.31)
 run_patch -f "${f}"
 assert_rc    "multiple patch versions: rc" 0 "$rc"
 assert_match "multiple patch versions: result" 'RESULT: installed 5\.4\.1\.31$' "$(lastline)"
+
+# --- installed PATCH of another generic does not hide the current one ---------
+# 5.4.0.40 has the higher load but CORE is 5.4.1: the current load is 29.
+setup
+printf '5.4.0.40\n5.4.1.29\n' > "${SB}/rpmdb_patch"
+f=$(patchfile 5.4.1.29)
+run_patch -f "${f}"
+refused "other-generic patch: 29 installed" 'already installed \(current load 29\)$'
+setup
+printf '5.4.0.40\n5.4.1.29\n' > "${SB}/rpmdb_patch"
+f=$(patchfile 5.4.1.31)
+run_patch -f "${f}"
+refused "other-generic patch: strict next" 'install 5\.4\.1\.30 first$'
+setup
+printf '5.4.0.40\n5.4.1.29\n' > "${SB}/rpmdb_patch"
+f=$(patchfile 5.4.1.30)
+# the -Uvh stub replaces the db; keep the other-generic line for the verify
+sed -i 's/echo "\$2" > "\${NFT_SB}\/rpmdb_patch"/printf "5.4.0.40\\n%s\\n" "$2" > "${NFT_SB}\/rpmdb_patch"/' "${SB}/bin/rpm"
+run_patch -f "${f}"
+assert_rc    "other-generic patch: install rc" 0 "$rc"
+assert_match "other-generic patch: result" 'RESULT: installed 5\.4\.1\.30$' "$(lastline)"
+
+# --- the file itself always counts in the lowest-in-directory scan ------------
+# (its name need not match *PATCH*.rpm)
+setup
+patchfile 5.4.1.30 >/dev/null
+f="${SB}/depot/hotfix-29.rpm"
+: > "${f}"
+print "netFLEX-CORE-PATCH 5.4.1.29 i686" > "${SB}/meta/hotfix-29.rpm"
+run_patch -f "${f}"
+assert_rc    "own file counts: rc" 0 "$rc"
+assert_match "own file counts: result" 'RESULT: installed 5\.4\.1\.29$' "$(lastline)"
+
+# --- temp file: made with mktemp in the log dir, removed on exit -------------
+setup
+mkstub mktemp "exec ${REAL_MKTEMP} \"\$@\""
+f=$(patchfile 5.4.1.29)
+run_patch -f "${f}"
+assert_rc    "mktemp passthrough: rc" 0 "$rc"
+assert_match "mktemp used" "^mktemp ${SB}/logs/\.nfpatch\.XXXXXX\$" "$(cat "${SB}/calls")"
+assert_eq    "temp file removed" 0 "$(ls -a "${SB}/logs" | grep -c '^\.nfpatch' | tr -d ' ')"
+setup
+mkstub mktemp 'exit 1'
+f=$(patchfile 5.4.1.29)
+run_patch -f "${f}"
+refused "mktemp fails" 'cannot create a temp file in '
 
 # --- leading-zero loads (RF 2) ---------------------------------------------------
 setup

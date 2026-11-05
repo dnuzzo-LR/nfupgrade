@@ -14,7 +14,7 @@
 # Removes, in order: netFLEX systemd units, the netFLEX* RPMs, the /usr/cnc,
 # /usr/cnc_stage and /usr/cnc_saved links, the /usr4/inc* load directories, and
 # the users/group the CORE RPM creates. Refuses while the app is up or while
-# nf_install / nf_upgrader is running. Always asks for the host name first.
+# nf_install / nf_upgrader / nf_patch is running. Always asks for the host name first.
 
 # (No `set -u`: bash 4.2 on RHEL 7 treats "${empty[@]}" as unbound.)
 
@@ -102,8 +102,8 @@ fi
 # --- refusals ------------------------------------------------------------------
 [ "$(id -u)" -eq 0 ] || die "must be run as root"
 [ -e /usr/cnc/.CNC_UP ] && die "netFLEX is UP. Shut it down first (as cmm: /usr/cnc/bin/new_boot_nms shutdown)."
-if pgrep -f 'nf_install|nf_upgrader|inc_upgrader' >/dev/null 2>&1; then
-	die "an install or upgrade is running (nf_install/nf_upgrader). Wait for it to finish."
+if pgrep -f 'nf_install|nf_upgrader|inc_upgrader|nf_patch' >/dev/null 2>&1; then
+	die "an install, upgrade or patch is running (nf_install/nf_upgrader/nf_patch). Wait for it to finish."
 fi
 
 # --- banner + prompt -----------------------------------------------------------

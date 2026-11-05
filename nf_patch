@@ -20,7 +20,8 @@
 # the CORE load among the *PATCH*.rpm files in the same directory. The host is
 # refused when netFLEX-CORE is missing, a netFLEX-CORE-IPATCH is installed, an
 # upgrade holds .UPGRADE_LOCK, ${STAGEROOT} exists (dir or link), or another
-# nf_upgrader/nf_install/nf_patch is running. A patch whose REBOOT_LOADS
+# nf_upgrader/nf_upgrade/inc_upgrade/inc_upgrader/nf_install/nf_patch is
+# running. A patch whose REBOOT_LOADS
 # applies is refused while netFLEX is up (.CNC_UP).
 #
 # Trace: ${logdir}/patch_inc_${HOSTNAME}.<pid>. Its last line is always one of
@@ -113,17 +114,21 @@ function split_version
 	return 0
 }
 
-# highest_version <file> — print the line of <file> (one version per line,
-# extra words allowed) whose load is highest; nothing if none parse.
+# highest_version <file> [generic] — print the line of <file> (one version
+# per line, extra words allowed) whose load is highest; nothing if none parse.
+# With <generic>, only versions of that generic count (a leftover PATCH of
+# another release must not hide the current one).
 function highest_version
 {
-	typeset v rest best bestload
+	typeset v rest best bestload gen
+	gen="$2"
 	best=""
 	bestload=""
 	while read v rest
 	do
 		[ -n "${v}" ] || continue
 		split_version "${v}" || continue
+		[ -z "${gen}" -o "${VGEN}" = "${gen}" ] || continue
 		if [ -z "${bestload}" ] || [ "${VLOAD}" -gt "${bestload}" ]
 		then
 			best="${v} ${rest}"
@@ -170,10 +175,17 @@ fi
 
 TRACEFILE="${LOGDIR}/patch_inc_${HOSTNAME}.$$"
 exec >>"${TRACEFILE}" 2>&1
-TMP="${LOGDIR}/.nfpatch.$$"
-trap 'rm -f "${TMP}"' EXIT
+TMP=""
+trap '[ -n "${TMP}" ] && rm -f "${TMP}"' EXIT
 
 loginfo "${PROG} started on ${HOSTNAME} (pid $$, file ${FILE:-none}, dry run ${DRYRUN})"
+
+TMP=$(mktemp "${LOGDIR}/.nfpatch.XXXXXX" 2>/dev/null)
+if [ $? -ne 0 -o -z "${TMP}" ]
+then
+	TMP=""
+	refuse "cannot create a temp file in ${LOGDIR}"
+fi
 
 if [ $# -ne 0 ]
 then
@@ -254,11 +266,11 @@ fi
 # release
 [ "${PGEN}" = "${CGEN}" ] || refuse "release ${PGEN} does not match installed ${CGEN}"
 
-# installed PATCH (highest version if several) -> current load
+# installed PATCH (highest version on the CORE generic if several) -> current load
 rpm -q --qf '%{VERSION}\n' netFLEX-CORE-PATCH > "${TMP}" 2>/dev/null
 rc=$?
 PATCHVER=""
-[ ${rc} -eq 0 ] && PATCHVER=$(highest_version "${TMP}")
+[ ${rc} -eq 0 ] && PATCHVER=$(highest_version "${TMP}" "${CGEN}")
 PATCHVER=${PATCHVER%% *}
 CUR=${CLOAD}
 PATCH_ACTIVE=NO
@@ -277,8 +289,9 @@ then
 	WANT=$(expr "${CUR}" + 1)
 else
 	# lowest same-generic, same-arch netFLEX-CORE-PATCH above the CORE load
-	# among the *PATCH*.rpm files beside this one (this file included).
-	WANT=""
+	# among the *PATCH*.rpm files beside this one. Start from this file's
+	# own load so it always counts, whatever its name.
+	WANT=${PLOAD}
 	for f in "$(dirname "${FILE}")"/*PATCH*.rpm
 	do
 		[ -f "${f}" ] || continue
@@ -288,12 +301,11 @@ else
 		split_version "${v}" || continue
 		[ "${VGEN}" = "${CGEN}" ] || continue
 		[ "${VLOAD}" -gt "${CLOAD}" ] || continue
-		if [ -z "${WANT}" ] || [ "${VLOAD}" -lt "${WANT}" ]
+		if [ "${VLOAD}" -lt "${WANT}" ]
 		then
 			WANT=${VLOAD}
 		fi
 	done
-	[ -n "${WANT}" ] || WANT=${PLOAD}
 fi
 [ "${PLOAD}" -eq "${WANT}" ] || refuse "install ${CGEN}.${WANT} first"
 loginfo "Sequence OK: ${PVER} is the next patch"
@@ -308,7 +320,7 @@ do
 	for w in "${w1}" "${w2}"
 	do
 		case "${w##*/}" in
-		nf_upgrader|nf_install|nf_patch)
+		nf_upgrader|nf_upgrade|inc_upgrade|inc_upgrader|nf_install|nf_patch)
 			OTHER="${w##*/} is running (pid ${pid})"
 			break 2
 			;;
@@ -356,7 +368,7 @@ rc=$?
 [ ${rc} -eq 0 ] || fail "rpm -Uvh exited ${rc}"
 
 rpm -q --qf '%{VERSION}\n' netFLEX-CORE-PATCH > "${TMP}" 2>/dev/null
-NOW=$(highest_version "${TMP}")
+NOW=$(highest_version "${TMP}" "${CGEN}")
 NOW=${NOW%% *}
 [ "${NOW}" = "${PVER}" ] || fail "rpm reports ${NOW:-no netFLEX-CORE-PATCH} after install"
 loginfo "patch ${PVER} installed"
