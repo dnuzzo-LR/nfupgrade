@@ -1,0 +1,364 @@
+#! /usr/bin/ksh
+#
+# nf_patch — guarded install of a netFLEX-CORE-PATCH RPM on the local host.
+#
+#   Usage: nf_patch -f <patch rpm> [-l <log dir>] [-n] [-h]
+#
+#     -f: the patch RPM file to install
+#     -l: log dir for the trace (default $INCLOGDIR, else /usr/cnc/logs)
+#     -n: check only - exit 0 if the patch could be installed now
+#     -h: show this help
+#
+# Runs as root, in the foreground. Every check runs before rpm is touched;
+# the patch then goes in with `rpm -Uvh` while netFLEX keeps running (the
+# patch's own scriptlets restart its processes).
+#
+# Rules (the same as nfupgrader/patches.py): NAME must be netFLEX-CORE-PATCH;
+# its generic and ARCH must match the installed netFLEX-CORE; sequence is
+# strict - with a PATCH on the CORE generic installed only current load + 1,
+# otherwise only the lowest netFLEX-CORE-PATCH of the same generic/arch above
+# the CORE load among the *PATCH*.rpm files in the same directory. The host is
+# refused when netFLEX-CORE is missing, a netFLEX-CORE-IPATCH is installed, an
+# upgrade holds .UPGRADE_LOCK, ${STAGEROOT} exists (dir or link), or another
+# nf_upgrader/nf_install/nf_patch is running. A patch whose REBOOT_LOADS
+# applies is refused while netFLEX is up (.CNC_UP).
+#
+# Trace: ${logdir}/patch_inc_${HOSTNAME}.<pid>. Its last line is always one of
+#   INFO  RESULT: installed <version>     (exit 0)
+#   INFO  RESULT: eligible <version>      (exit 0, -n)
+#   ERROR RESULT: refused: <reason>       (exit 1, rpm never invoked)
+#   ERROR RESULT: failed: <reason>        (exit 2, rpm -Uvh or verify failed)
+#
+# Loads are compared as decimal integers with leading zeros stripped ("08"
+# would be invalid octal in shell arithmetic).
+#
+# ksh88-safe: no arrays, no PIPESTATUS, no pipefail.
+
+trap '' HUP
+umask 022
+
+PATH=${PATH}:/usr/sbin:/sbin
+export PATH
+NF_LOG_LIB="$(dirname "$0")/nf_log.ksh"
+if [ ! -r "${NF_LOG_LIB}" ]
+then
+	print -u2 "nf_patch: cannot read ${NF_LOG_LIB}"
+	exit 1
+fi
+. "${NF_LOG_LIB}"
+
+PROG=${0##*/}
+
+# Roots: overridable so the test suite can run in a sandbox.
+INCROOT=${NFP_INCROOT:-/usr/cnc}
+STAGEROOT=${NFP_STAGEROOT:-/usr/cnc_stage}
+
+SUPPORTED_PKG=netFLEX-CORE-PATCH
+
+function print_usage
+{
+	print -u2 "Usage: ${PROG} -f <patch rpm> [-l <log dir>] [-n] [-h]"
+	print -u2 "   -f: patch RPM file to install"
+	print -u2 "   -l: log dir (default \$INCLOGDIR, else /usr/cnc/logs)"
+	print -u2 "   -n: check only, do not install"
+	print -u2 "   -h: show this help"
+}
+
+# refuse <reason> — a check failed; rpm has not been touched.
+function refuse
+{
+	logerror "RESULT: refused: $1"
+	exit 1
+}
+
+# fail <reason> — rpm -Uvh ran and it (or the verify after it) failed.
+function fail
+{
+	logerror "RESULT: failed: $1"
+	exit 2
+}
+
+# dec <digits> — the digits with leading zeros stripped ("08" -> "8", "0" -> "0").
+function dec
+{
+	typeset v="$1"
+	while :
+	do
+		case "${v}" in
+		0?*) v=${v#0} ;;
+		*) break ;;
+		esac
+	done
+	print -r -- "${v}"
+}
+
+# split_version <version> — set VGEN and VLOAD (decimal, zeros stripped) from
+# X.Y.Z.LL. Returns 1 when there are fewer than 4 dotted parts or the load is
+# not all digits.
+function split_version
+{
+	typeset v="$1"
+	VGEN=""
+	VLOAD=""
+	case "${v}" in
+	*.*.*.*) ;;
+	*) return 1 ;;
+	esac
+	VGEN=${v%.*}
+	VLOAD=${v##*.}
+	case "${VLOAD}" in
+	""|*[!0-9]*) VGEN=""; VLOAD=""; return 1 ;;
+	esac
+	VLOAD=$(dec "${VLOAD}")
+	return 0
+}
+
+# highest_version <file> — print the line of <file> (one version per line,
+# extra words allowed) whose load is highest; nothing if none parse.
+function highest_version
+{
+	typeset v rest best bestload
+	best=""
+	bestload=""
+	while read v rest
+	do
+		[ -n "${v}" ] || continue
+		split_version "${v}" || continue
+		if [ -z "${bestload}" ] || [ "${VLOAD}" -gt "${bestload}" ]
+		then
+			best="${v} ${rest}"
+			bestload=${VLOAD}
+		fi
+	done < "$1"
+	[ -n "${best}" ] && print -r -- "${best}"
+	return 0
+}
+
+# --- options -------------------------------------------------------------------
+
+FILE=""
+LOGDIR=""
+DRYRUN=NO
+while getopts "f:l:nh" c
+do
+	case $c in
+	f) FILE=${OPTARG} ;;
+	l) LOGDIR=${OPTARG} ;;
+	n) DRYRUN=YES ;;
+	h) print_usage; exit 0 ;;
+	*) print_usage; exit 1 ;;
+	esac
+done
+shift $((OPTIND - 1))
+
+LOGDIR=${LOGDIR:-${INCLOGDIR:-/usr/cnc/logs}}
+if [ ! -d "${LOGDIR}" -o ! -w "${LOGDIR}" ]
+then
+	print -u2 "${PROG}: log dir [${LOGDIR}] is not a writable directory"
+	print_usage
+	exit 1
+fi
+INCLOGDIR=${LOGDIR}
+export INCLOGDIR
+
+HOSTNAME=$(hostname)
+if [ -z "${HOSTNAME}" ]
+then
+	print -u2 "${PROG}: cannot determine host name"
+	exit 1
+fi
+
+TRACEFILE="${LOGDIR}/patch_inc_${HOSTNAME}.$$"
+exec >>"${TRACEFILE}" 2>&1
+TMP="${LOGDIR}/.nfpatch.$$"
+trap 'rm -f "${TMP}"' EXIT
+
+loginfo "${PROG} started on ${HOSTNAME} (pid $$, file ${FILE:-none}, dry run ${DRYRUN})"
+
+if [ $# -ne 0 ]
+then
+	print_usage
+	refuse "unexpected arguments: $*"
+fi
+if [ -z "${FILE}" ]
+then
+	print_usage
+	refuse "no patch file given (-f)"
+fi
+
+# --- checks (each refusal exits 1 before rpm is touched) ------------------------
+
+# root
+if [ "${NFP_SKIP_ROOT}" = "YES" ]
+then
+	loginfo "Root check skipped (NFP_SKIP_ROOT=YES)"
+elif [ "$(id -u)" != "0" ]
+then
+	refuse "must be run as root"
+fi
+
+# readable
+case "${FILE}" in
+/*) ;;
+*) FILE="$(pwd)/${FILE}" ;;
+esac
+[ -f "${FILE}" -a -r "${FILE}" ] || refuse "cannot read ${FILE}"
+
+# identity, from the file's own header (never its name)
+out=$(rpm -qp --qf '%{NAME} %{VERSION} %{ARCH}\n' "${FILE}" 2>/dev/null)
+rc=$?
+PNAME=""; PVER=""; PARCH=""
+print -r -- "${out}" | read PNAME PVER PARCH junk
+if [ ${rc} -ne 0 -o -z "${PARCH}" ]
+then
+	refuse "rpm could not read ${FILE}"
+fi
+loginfo "Patch file: ${PNAME} ${PVER} ${PARCH}"
+
+# supported name
+[ "${PNAME}" = "${SUPPORTED_PKG}" ] \
+	|| refuse "${PNAME} is not a ${SUPPORTED_PKG} package - not supported"
+split_version "${PVER}" || refuse "rpm could not read a version from ${FILE} (${PVER})"
+PGEN=${VGEN}
+PLOAD=${VLOAD}
+
+# CORE installed (highest version if several)
+rpm -q --qf '%{VERSION} %{ARCH}\n' netFLEX-CORE > "${TMP}" 2>/dev/null
+rc=$?
+CORE=""
+[ ${rc} -eq 0 ] && CORE=$(highest_version "${TMP}")
+[ -n "${CORE}" ] || refuse "netFLEX-CORE is not installed"
+print -r -- "${CORE}" | read CVER CARCH junk
+split_version "${CVER}"
+CGEN=${VGEN}
+CLOAD=${VLOAD}
+loginfo "Installed netFLEX-CORE: ${CVER} ${CARCH}"
+
+# arch
+[ "${PARCH}" = "${CARCH}" ] || refuse "arch ${PARCH} does not match installed ${CARCH}"
+
+# no incremental patch installed
+if rpm -q netFLEX-CORE-IPATCH >/dev/null 2>&1
+then
+	refuse "an incremental patch (netFLEX-CORE-IPATCH) is installed - contact support"
+fi
+
+# no upgrade in progress / staged
+[ -f "${INCROOT}/.UPGRADE_LOCK" ] \
+	&& refuse "an upgrade is in progress (${INCROOT}/.UPGRADE_LOCK)"
+if [ -e "${STAGEROOT}" -o -L "${STAGEROOT}" ]
+then
+	refuse "a staged upgrade is present (${STAGEROOT}) - finish or back out the upgrade first"
+fi
+
+# release
+[ "${PGEN}" = "${CGEN}" ] || refuse "release ${PGEN} does not match installed ${CGEN}"
+
+# installed PATCH (highest version if several) -> current load
+rpm -q --qf '%{VERSION}\n' netFLEX-CORE-PATCH > "${TMP}" 2>/dev/null
+rc=$?
+PATCHVER=""
+[ ${rc} -eq 0 ] && PATCHVER=$(highest_version "${TMP}")
+PATCHVER=${PATCHVER%% *}
+CUR=${CLOAD}
+PATCH_ACTIVE=NO
+if [ -n "${PATCHVER}" ] && split_version "${PATCHVER}" && [ "${VGEN}" = "${CGEN}" ]
+then
+	CUR=${VLOAD}
+	PATCH_ACTIVE=YES
+fi
+loginfo "Installed netFLEX-CORE-PATCH: ${PATCHVER:-none}; current load ${CUR}"
+
+# sequence (strict)
+[ "${PLOAD}" -gt "${CUR}" ] \
+	|| refuse "${PVER} is already installed (current load ${CUR})"
+if [ "${PATCH_ACTIVE}" = "YES" ]
+then
+	WANT=$(expr "${CUR}" + 1)
+else
+	# lowest same-generic, same-arch netFLEX-CORE-PATCH above the CORE load
+	# among the *PATCH*.rpm files beside this one (this file included).
+	WANT=""
+	for f in "$(dirname "${FILE}")"/*PATCH*.rpm
+	do
+		[ -f "${f}" ] || continue
+		out=$(rpm -qp --qf '%{NAME} %{VERSION} %{ARCH}\n' "${f}" 2>/dev/null) || continue
+		print -r -- "${out}" | read n v a junk
+		[ "${n}" = "${SUPPORTED_PKG}" -a "${a}" = "${CARCH}" ] || continue
+		split_version "${v}" || continue
+		[ "${VGEN}" = "${CGEN}" ] || continue
+		[ "${VLOAD}" -gt "${CLOAD}" ] || continue
+		if [ -z "${WANT}" ] || [ "${VLOAD}" -lt "${WANT}" ]
+		then
+			WANT=${VLOAD}
+		fi
+	done
+	[ -n "${WANT}" ] || WANT=${PLOAD}
+fi
+[ "${PLOAD}" -eq "${WANT}" ] || refuse "install ${CGEN}.${WANT} first"
+loginfo "Sequence OK: ${PVER} is the next patch"
+
+# no other install/upgrade/patch running (pid $$ is us; $PPID may be a
+# wrapper such as sudo naming this script)
+ps -eo pid,args > "${TMP}" 2>/dev/null
+OTHER=""
+while read pid w1 w2 rest
+do
+	[ "${pid}" = "$$" -o "${pid}" = "${PPID}" ] && continue
+	for w in "${w1}" "${w2}"
+	do
+		case "${w##*/}" in
+		nf_upgrader|nf_install|nf_patch)
+			OTHER="${w##*/} is running (pid ${pid})"
+			break 2
+			;;
+		esac
+	done
+done < "${TMP}"
+[ -z "${OTHER}" ] || refuse "${OTHER}"
+
+# reboot-required patch while netFLEX is up (the scriptlet's own rule:
+# a reboot load applies when current < it or the load installed equals it)
+rpm -qp --scripts "${FILE}" > "${TMP}" 2>/dev/null \
+	|| logwarn "rpm -qp --scripts ${FILE} failed - REBOOT_LOADS not checked"
+RLOADS=$(sed -n 's/^[[:space:]]*REBOOT_LOADS="\([^"]*\)".*/\1/p' "${TMP}" | sed -n '1p')
+REBOOT=""
+for rl in ${RLOADS}
+do
+	case "${rl}" in
+	""|*[!0-9]*) continue ;;
+	esac
+	rl=$(dec "${rl}")
+	if [ "${CUR}" -lt "${rl}" -o "${PLOAD}" -eq "${rl}" ]
+	then
+		REBOOT=${rl}
+		break
+	fi
+done
+if [ -n "${REBOOT}" ]
+then
+	loginfo "REBOOT_LOADS [${RLOADS}] applies (load ${REBOOT})"
+	[ -f "${INCROOT}/.CNC_UP" ] \
+		&& refuse "${PVER} requires a reboot load (${REBOOT}) - netFLEX must be stopped (Boot menu tab)"
+fi
+
+if [ "${DRYRUN}" = "YES" ]
+then
+	loginfo "RESULT: eligible ${PVER}"
+	exit 0
+fi
+
+# --- install --------------------------------------------------------------------
+
+loginfo "Installing ${FILE}"
+run_logged rpm rpm -Uvh "${FILE}"
+rc=$?
+[ ${rc} -eq 0 ] || fail "rpm -Uvh exited ${rc}"
+
+rpm -q --qf '%{VERSION}\n' netFLEX-CORE-PATCH > "${TMP}" 2>/dev/null
+NOW=$(highest_version "${TMP}")
+NOW=${NOW%% *}
+[ "${NOW}" = "${PVER}" ] || fail "rpm reports ${NOW:-no netFLEX-CORE-PATCH} after install"
+loginfo "patch ${PVER} installed"
+loginfo "RESULT: installed ${PVER}"
+exit 0
