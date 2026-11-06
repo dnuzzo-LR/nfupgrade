@@ -157,6 +157,22 @@ def _norm_expiry(s):
     return norm if t.tm_year >= 1970 else None
 
 
+def expiry_error(s):
+    """Why s is not a usable expiry ("" when it is): wrong format, a date that
+    does not exist (04/31), or a year before 1970."""
+    m = _EXP_RE.match(s.strip()) if isinstance(s, str) else None
+    if not m:
+        return "use MM/DD/YYYY"
+    norm = "{:02d}/{:02d}/{}".format(int(m.group(1)), int(m.group(2)), m.group(3))
+    try:
+        t = time.strptime(norm, "%m/%d/%Y")
+    except ValueError:
+        return "{} is not a real date".format(norm)
+    if t.tm_year < 1970:
+        return "the year must be 1970 or later"
+    return ""
+
+
 def _as_int(v):
     """Non-negative int from an int or decimal string, else None."""
     if isinstance(v, bool):
@@ -233,7 +249,7 @@ def validate(values, expiry, ne_on):
                 err(key, "must be plain ASCII text (no accented or "
                     "special characters)")
     if expiry not in ("", None) and _norm_expiry(expiry) is None:
-        err("expiry", "must be a valid MM/DD/YYYY date, 1970 or later")
+        err("expiry", expiry_error(expiry))
     if ne_on is not None:
         try:
             items = list(ne_on)
@@ -613,7 +629,7 @@ def repair(host, password, expiry, lic_path=LIC_PATH):
         return fail(pw_err)
     exp = _norm_expiry(expiry)
     if exp is None:
-        return fail("expiry must be a date as MM/DD/YYYY (year 1970 or later)")
+        return fail("expiry: " + expiry_error(expiry))
     if len(lic_path.encode("utf-8")) > LFILE_MAX_BYTES:
         return fail("license path too long for license -n")
     un = unlock(host, password, lic_path)

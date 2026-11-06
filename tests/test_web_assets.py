@@ -354,6 +354,11 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn("licBusy", fn)
         self.assertIn("refreshLicense()", fn)
 
+    def test_repair_checks_date_before_confirm(self):
+        fn = self._fn("repairLicense")
+        self.assertLess(fn.index("expiryError(exp)"), fn.index("showConfirm("))
+        self.assertIn("is not a real date", self._fn("expiryError"))
+
     def test_license_flow_wiring(self):
         for s in ('"/api/license/unlock"', '"/api/license/review"', '"/api/license/save"',
                   '"/api/license/create"', '"/api/license/migrate"', 'getJSON("/api/license"'):

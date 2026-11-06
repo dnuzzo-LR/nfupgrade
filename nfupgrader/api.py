@@ -349,7 +349,7 @@ def _license_repair(payload, client_ip, ctx, lp):
         return _json(400, {"errors": [{"field": "password/expiry", "message": "required"}]})
     if licmod._norm_expiry(expiry) is None:
         return _json(400, {"errors": [{"field": "expiry",
-                                       "message": "use MM/DD/YYYY (year 1970 or later)"}]})
+                                       "message": licmod.expiry_error(expiry)}]})
     if not _FIX_LOCK.acquire(False):
         return _json(409, {"error": "another change is in progress"})
     try:

@@ -1960,9 +1960,27 @@ function migrateLicense() {
       return d.ok ? "Converted." : "license-migrate failed (exit " + d.rc + ").";
     });
 }
+// Mirrors license.expiry_error: catches a date that does not exist (04/31)
+// before the confirm, instead of after a round trip.
+function expiryError(s) {
+  var m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(s).trim());
+  if (!m) return "use MM/DD/YYYY";
+  var mo = +m[1], d = +m[2], y = +m[3];
+  var dt = new Date(y, mo - 1, d);
+  if (mo < 1 || mo > 12 || dt.getMonth() !== mo - 1 || dt.getDate() !== d) {
+    return (mo < 10 ? "0" : "") + mo + "/" + (d < 10 ? "0" : "") + d + "/" + m[3] +
+           " is not a real date";
+  }
+  if (y < 1970) return "the year must be 1970 or later";
+  return "";
+}
+
 function repairLicense() {
   var exp = document.getElementById("lic-repair-expiry").value;
   var msg = document.getElementById("lic-repair-msg");
+  var bad = expiryError(exp);
+  if (bad) { msg.textContent = "Not repaired: " + bad; return; }
+  msg.textContent = "";
   showConfirm({ title: "Repair the license?", ok: "Repair",
                 body: "Backs up /usr/cnc/data/lic.ucs, then sets its expiry date to " + exp +
                       " with license -M." }, function () {

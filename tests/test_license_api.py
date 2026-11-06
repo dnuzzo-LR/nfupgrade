@@ -494,6 +494,15 @@ class TestLicenseRepairApi(unittest.TestCase):
         self.assertEqual(st, 400)
         rp.assert_not_called()
 
+    def test_repair_impossible_date_says_so(self):
+        with mock.patch.object(lic, "read_license", return_value=dict(self.NEEDS)), \
+                mock.patch.object(lic, "repair") as rp:
+            st, b = self.call("POST", "/api/license/repair",
+                              {"password": PW, "expiry": "04/31/2029"})
+        self.assertEqual(st, 400)
+        self.assertEqual(b["errors"][0]["message"], "04/31/2029 is not a real date")
+        rp.assert_not_called()
+
     def test_repair_refused_in_preview(self):
         self.ctx.state["preview"] = "before"
         st, _ = self.call("POST", "/api/license/repair",

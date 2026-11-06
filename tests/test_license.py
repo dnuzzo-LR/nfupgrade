@@ -58,6 +58,14 @@ class TestLicense(unittest.TestCase):
                          (3, 12, False))
         self.assertEqual(rows[2]["type"], 254)
 
+    def test_expiry_error(self):
+        self.assertEqual(L.expiry_error("04/30/2029"), "")
+        self.assertEqual(L.expiry_error("4/31/2029"), "04/31/2029 is not a real date")
+        self.assertEqual(L.expiry_error("02/29/2027"), "02/29/2027 is not a real date")
+        self.assertEqual(L.expiry_error("2029-04-30"), "use MM/DD/YYYY")
+        self.assertEqual(L.expiry_error(None), "use MM/DD/YYYY")
+        self.assertEqual(L.expiry_error("01/01/1969"), "the year must be 1970 or later")
+
     def test_expiry_of(self):
         self.assertEqual(L.expiry_of(LIC), "12/31/2026")
         self.assertEqual(L.expiry_of({"MaintExpireDate": "junk"}), "")
