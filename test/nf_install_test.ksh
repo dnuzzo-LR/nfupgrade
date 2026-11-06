@@ -244,6 +244,9 @@ assert_eq    "guide: httpd restarted" 1 "$(ncalls systemctl restart)"
 assert_match "guide 11: host key for cmm" '^h1 ssh-ed25519 ' "$(cat "${SB}/usr/cnc/cmm/.ssh/known_hosts" 2>/dev/null)"
 assert_match "guide 11: copied to console" '^h1 ssh-ed25519 ' "$(cat "${SB}/usr/cnc/login/console/.ssh/known_hosts" 2>/dev/null)"
 assert_eq    "guide 11: console .profile" profile "$(cat "${SB}/usr/cnc/login/console/.profile" 2>/dev/null)"
+assert_match "guide 11: copied as root, owned by console" '^chown -R console:cmm .*/login/console/\.ssh .*/login/console/\.profile$' "$(grep '^chown -R console' "${SB}/calls")"
+assert_eq    "guide 11: no copy as cmm" "" "$(grep '^su cmm -c cp ' "${SB}/calls")"
+assert_eq    "guide 11: .profile mode" 755 "$(stat -c %a "${SB}/usr/cnc/login/console/.profile" 2>/dev/null)"
 assert_eq    "guide: no WARN" "" "$(trace | grep ' WARN ' | grep -v cpjsmap)"
 
 # Already configured: nothing edited, no backups, no second host key.

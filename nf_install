@@ -408,6 +408,10 @@ EOF
 # key (the GUI logs in as console over ssh to the Interfaces host, the short
 # name; the FQDN is added too), then copy cmm's .ssh and login/.profile into
 # login/console. ssh-keyscan replaces the guide's interactive "ssh `hostname`".
+# The copy runs as root and hands the files to console: the RPM creates
+# login/console as console-owned mode 700, so cmm (the guide's user) cannot
+# write there. Without .profile, console's shell ish fails at login. The
+# .profile mode is 755, as newusr installs it.
 # Returns non-zero at the first failure (the caller warns).
 function console_ssh_setup
 {
@@ -428,10 +432,12 @@ function console_ssh_setup
 		ssh-keygen -F "${h}" -f "${kh}" >/dev/null 2>&1 || return 1
 		loginfo "Added ${h}'s ssh host key to ${kh}"
 	done
-	run_logged consolessh su cmm -c \
-		"cp -rp '${sshdir}' '${INCROOT}/login/console/' && cp -p '${INCROOT}/login/.profile' '${INCROOT}/login/console/'" \
+	run_logged consolessh cp -rp "${sshdir}" "${INCROOT}/login/console/" || return 1
+	run_logged consoleprof cp -p "${INCROOT}/login/.profile" "${INCROOT}/login/console/.profile" || return 1
+	run_logged consoleown chown -R console:cmm "${INCROOT}/login/console/.ssh" "${INCROOT}/login/console/.profile" \
 		|| return 1
-	loginfo "Copied ${sshdir} and login/.profile to ${INCROOT}/login/console"
+	chmod 700 "${INCROOT}/login/console/.ssh" && chmod 755 "${INCROOT}/login/console/.profile" || return 1
+	loginfo "Copied ${sshdir} and login/.profile to ${INCROOT}/login/console (owner console)"
 	return 0
 }
 
