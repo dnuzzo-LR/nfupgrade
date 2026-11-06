@@ -1736,6 +1736,17 @@ function refreshLicense() {
   });
 }
 
+// A read that came back not editable is re-read while the tab is shown, so the
+// buttons come back on their own once a transient block (a launch grace window,
+// a running install, an open boot menu) ends. Inputs are disabled while not
+// editable, so re-rendering cannot drop any typing.
+function pollLicense() {
+  var panel = document.getElementById("tab-license");
+  if (!panel || !panel.classList.contains("active")) return;
+  if (!lic || lic.editable || licBusy) return;
+  refreshLicense();
+}
+
 function licNumber(kind, s) {
   var t = String(s).trim();
   if (kind === "int" && /^[0-9]{1,10}$/.test(t)) return parseInt(t, 10);
@@ -2144,3 +2155,4 @@ setInterval(refreshPostflight, 15000);
 setInterval(refreshReportsJob, 3000);
 setInterval(refreshReports, 30000);
 setInterval(refreshBootMenu, 3000);
+setInterval(pollLicense, 5000);

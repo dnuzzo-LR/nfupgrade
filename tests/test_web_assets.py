@@ -346,6 +346,14 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn("clearLicensePassword()", self._fn("initTabs"))
         self.assertIn('getElementById("lic-password").value = ""', self._fn("clearLicensePassword"))
 
+    def test_license_repolled_while_not_editable(self):
+        self.assertIn("setInterval(pollLicense, 5000)", self.js)
+        fn = self._fn("pollLicense")
+        self.assertIn('"tab-license"', fn)
+        self.assertIn("lic.editable", fn)
+        self.assertIn("licBusy", fn)
+        self.assertIn("refreshLicense()", fn)
+
     def test_license_flow_wiring(self):
         for s in ('"/api/license/unlock"', '"/api/license/review"', '"/api/license/save"',
                   '"/api/license/create"', '"/api/license/migrate"', 'getJSON("/api/license"'):
