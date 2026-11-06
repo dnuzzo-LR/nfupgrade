@@ -43,6 +43,11 @@ INCROOT=${NFI_INCROOT:-/usr/cnc}
 STAGEROOT=${NFI_STAGEROOT:-/usr/cnc_stage}
 LOADROOT=${NFI_LOADROOT:-/usr4}
 MSGMNB_FILE=${NFI_MSGMNB_FILE:-/proc/sys/kernel/msgmnb}
+HTTPD_CONFD=${NFI_HTTPD_CONFD:-/etc/httpd/conf.d}
+# Our own Apache file (see grant_webgui_access); the marker line lets reset
+# and nf_uninstall.sh prove it is ours before removing it.
+WEBACCESS_CONF="${HTTPD_CONFD}/nfupgrader-webgui.conf"
+WEBACCESS_MARK="# Written by nf_install (nfupgrader)."
 
 # All valid states, in order. The state file holds the step to run next.
 INSTALL_STATES="isstart isprepare isrpm isunstage iscnfg ispackages iscmmperm islicmigrate ispostinstall isdatabase iswebgui islicense isdone"
@@ -397,6 +402,51 @@ EOF
 	return 0
 }
 
+# grant_webgui_access — netFLEX's webgui.conf maps /app and /cgi to
+# ${INCROOT}/web but never grants access to it, so with a stock httpd.conf
+# (<Directory /> Require all denied) every GUI page is 403. Grant ${INCROOT}/web
+# in a conf.d file of our own instead of editing httpd.conf; webgui.conf's SSO
+# dirs keep their "Deny from all" (both must pass). A failed configtest removes
+# the file again so Apache is never left unstartable. Only ever warns.
+function grant_webgui_access
+{
+	if [ ! -d "${HTTPD_CONFD}" ]
+	then
+		logwarn "No ${HTTPD_CONFD} - Apache access to ${INCROOT}/web not granted"
+		return 0
+	fi
+	{
+		print -r -- "${WEBACCESS_MARK}"
+		print -r -- "# netFLEX's webgui.conf maps /app and /cgi here but grants no access, and a"
+		print -r -- "# stock httpd.conf denies <Directory />, which makes every GUI page 403."
+		print -r -- "<Directory ${INCROOT}/web>"
+		print -r -- "    Require all granted"
+		print -r -- "</Directory>"
+	} > "${WEBACCESS_CONF}"
+	if [ $? -ne 0 ]
+	then
+		logwarn "Cannot write ${WEBACCESS_CONF} - the web GUI may answer 403"
+		return 0
+	fi
+	chmod 644 "${WEBACCESS_CONF}"
+	if run_logged apachectl apachectl configtest
+	then
+		loginfo "Granted Apache access to ${INCROOT}/web in ${WEBACCESS_CONF}"
+	else
+		rm -f "${WEBACCESS_CONF}"
+		logwarn "apachectl configtest failed - removed ${WEBACCESS_CONF}; the web GUI may answer 403"
+		return 0
+	fi
+	if systemctl is-active httpd >/dev/null 2>&1
+	then
+		run_logged httpd systemctl reload httpd \
+			|| logwarn "systemctl reload httpd failed - restart httpd to serve the web GUI"
+	else
+		logwarn "httpd is not running - start it to serve the web GUI"
+	fi
+	return 0
+}
+
 function do_iswebgui
 {
 	if [ "${INSTALLWEBGUI}" = "NO" ]
@@ -407,6 +457,7 @@ function do_iswebgui
 	if ( webgui_setup )
 	then
 		loginfo "Web GUI install complete"
+		grant_webgui_access
 	else
 		logwarn "Web GUI install failed - continuing without it"
 	fi
@@ -611,6 +662,11 @@ function do_reset
 	then
 		run_logged loaddir rm -rf "${LOADDIR}" || die "cannot remove ${LOADDIR}"
 		loginfo "Removed ${LOADDIR}"
+	fi
+	if [ -f "${WEBACCESS_CONF}" ] && grep -qxF "${WEBACCESS_MARK}" "${WEBACCESS_CONF}"
+	then
+		run_logged webaccess rm -f "${WEBACCESS_CONF}" || die "cannot remove ${WEBACCESS_CONF}"
+		loginfo "Removed ${WEBACCESS_CONF}"
 	fi
 	ts=$(date '+%Y%m%d%H%M%S')
 	run_logged archive mv "${STATEFILE}" "${STATEFILE}.${ts}" || die "cannot archive ${STATEFILE}"

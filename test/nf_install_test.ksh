@@ -38,6 +38,9 @@ EOF
 	mkstub hostname 'echo h1'
 	mkstub mountpoint 'exit 0'
 	mkstub chown 'exit 0'
+	mkstub apachectl 'exit ${FAIL_APACHECTL:-0}'
+	mkstub systemctl '[ "$1" = is-active ] && exit ${HTTPD_DOWN:-0}; exit 0'
+	mkdir -p "${SB}/conf.d"
 	mkstub su 'exec sh -c "$3"'
 	mkstub rpm '
 case "$1" in
@@ -77,7 +80,9 @@ exit 0'
 	export NFI_PKGTOOL="${SB}/bin/dnf"
 	print 4194304 > "${SB}/msgmnb"
 	export NFI_MSGMNB_FILE="${SB}/msgmnb"
-	unset NFI_CHILD FAIL_POSTINSTALL FAIL_LICMIG STAGE_REAL STAGE_FOREIGN NO_CPJSMAP STUB_IQS
+	export NFI_HTTPD_CONFD="${SB}/conf.d"
+	unset NFI_CHILD FAIL_POSTINSTALL FAIL_LICMIG STAGE_REAL STAGE_FOREIGN NO_CPJSMAP STUB_IQS \
+		FAIL_APACHECTL HTTPD_DOWN
 }
 
 cleanup() {
@@ -196,12 +201,46 @@ print junk > "${SB}/msgmnb"
 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
 assert_eq    "inc queue: unreadable msgmnb uses 4194304" 4194304 "$(iqs)"
 
+# --- web GUI Apache grant (webgui.conf grants nothing; stock httpd.conf denies /) ---
+WA() { print "${SB}/conf.d/nfupgrader-webgui.conf"; }
+setup
+"${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+assert_rc    "web access: rc" 0 "$rc"
+assert_match "web access: marker" '^# Written by nf_install \(nfupgrader\)\.$' "$(cat "$(WA)" 2>/dev/null)"
+assert_match "web access: grants web dir" "^<Directory ${SB}/usr/cnc/web>\$" "$(cat "$(WA)" 2>/dev/null)"
+assert_match "web access: require granted" '^    Require all granted$' "$(cat "$(WA)" 2>/dev/null)"
+assert_eq    "web access: configtest ran" 1 "$(awk '$1 == "apachectl" && $2 == "configtest"' "${SB}/calls" | wc -l | tr -d ' ')"
+assert_eq    "web access: httpd reloaded" 1 "$(awk '$1 == "systemctl" && $2 == "reload" && $3 == "httpd"' "${SB}/calls" | wc -l | tr -d ' ')"
+assert_match "web access: logged" ' INFO  .*Granted Apache access' "$(trace)"
+
+setup
+FAIL_APACHECTL=1 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+assert_rc    "web access bad configtest: rc" 0 "$rc"
+assert_eq    "web access bad configtest: state" isdone "$(state)"
+assert_eq    "web access bad configtest: file removed" no "$(exists "$(WA)")"
+assert_match "web access bad configtest: WARN" ' WARN  .*configtest failed' "$(trace)"
+assert_eq    "web access bad configtest: no reload" 0 "$(awk '$1 == "systemctl" && $2 == "reload"' "${SB}/calls" | wc -l | tr -d ' ')"
+
+setup
+HTTPD_DOWN=3 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+assert_rc    "web access httpd down: rc" 0 "$rc"
+assert_eq    "web access httpd down: file kept" yes "$(exists "$(WA)")"
+assert_match "web access httpd down: WARN" ' WARN  .*httpd is not running' "$(trace)"
+assert_eq    "web access httpd down: no reload" 0 "$(awk '$1 == "systemctl" && $2 == "reload"' "${SB}/calls" | wc -l | tr -d ' ')"
+
+setup
+rmdir "${SB}/conf.d"
+"${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+assert_rc    "web access no conf.d: rc" 0 "$rc"
+assert_match "web access no conf.d: WARN" ' WARN  .*not granted' "$(trace)"
+
 # --- webgui off --------------------------------------------------------------
 setup NO
 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
 assert_rc    "webgui off: rc" 0 "$rc"
 assert_eq    "webgui off: no lwebsetup" 0 "$(count_of lwebsetup)"
 assert_eq    "webgui off: state" isdone "$(state)"
+assert_eq    "webgui off: no Apache grant" no "$(exists "${SB}/conf.d/nfupgrader-webgui.conf")"
 
 # --- unfinished refuses -i ---------------------------------------------------
 setup
@@ -232,8 +271,11 @@ setup
 FAIL_POSTINSTALL=1 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
 assert_rc    "reset after failure: install rc" 1 "$rc"
 assert_eq    "reset after failure: rpm installed first" yes "$(exists "${SB}/rpmdb")"
+# As if an earlier attempt got as far as the web GUI step.
+printf '# Written by nf_install (nfupgrader).\n<Directory x>\n</Directory>\n' > "${SB}/conf.d/nfupgrader-webgui.conf"
 "${NFI}" -c "${SB}/test.cfg" -x; rc=$?
 assert_rc    "reset after failure: rc" 0 "$rc"
+assert_eq    "reset after failure: Apache grant removed" no "$(exists "${SB}/conf.d/nfupgrader-webgui.conf")"
 assert_eq    "reset after failure: rpm -e ran" 1 "$(awk '$1 == "rpm" && $2 == "-e"' "${SB}/calls" | wc -l | tr -d ' ')"
 assert_eq    "reset after failure: rpmdb gone" no "$(exists "${SB}/rpmdb")"
 assert_eq    "reset after failure: /usr/cnc gone" no "$(exists "${SB}/usr/cnc")"
@@ -261,8 +303,10 @@ ln -s "${SB}/usr4/inc5.3.002" "${SB}/usr/cnc"
 ln -s "${SB}/usr4/inc5.3.002" "${SB}/usr/cnc_stage"
 print isrpm > "${SB}/logs/.h1_INSTALL_STATE"
 printf 'LOADDIR=%s\nLOADDIR_CREATED=yes\n' "${SB}/usr4/inc5.3.002" > "${SB}/logs/.h1_INSTALL_INFO"
+print "# someone else's file" > "${SB}/conf.d/nfupgrader-webgui.conf"
 "${NFI}" -c "${SB}/test.cfg" -x; rc=$?
 assert_rc    "reset no rpm: rc" 0 "$rc"
+assert_eq    "reset no rpm: unmarked Apache file kept" yes "$(exists "${SB}/conf.d/nfupgrader-webgui.conf")"
 assert_match "reset no rpm: probe logged" 'rpm -q netFLEX-CORE \(rc 1\)' "$(rtrace)"
 assert_eq    "reset no rpm: no rpm -e" 0 "$(awk '$1 == "rpm" && $2 == "-e"' "${SB}/calls" | wc -l | tr -d ' ')"
 assert_eq    "reset no rpm: /usr/cnc gone" no "$(exists "${SB}/usr/cnc")"

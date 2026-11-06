@@ -172,6 +172,15 @@ nf_install -c <config file> -x     # reset a failed install
 nf_install -h                      # help
 ```
 
+With the web GUI selected, the web GUI step also writes
+`/etc/httpd/conf.d/nfupgrader-webgui.conf`, granting Apache access to `/usr/cnc/web`,
+then checks the config (`apachectl configtest`) and reloads httpd. netFLEX's own
+`webgui.conf` maps `/app` and `/cgi` there but grants no access, so on a stock
+`httpd.conf` (`<Directory />` → `Require all denied`) every GUI page answers 403.
+`httpd.conf` itself is not edited; the SSO directories keep their own `Deny from all`.
+If the configtest fails the file is removed again and the step only warns. Reset
+and `tools/nf_uninstall.sh` remove the file (only if it carries nf_install's marker line).
+
 Files, all in the config's `INCLOGDIR`:
 
 | File | What |

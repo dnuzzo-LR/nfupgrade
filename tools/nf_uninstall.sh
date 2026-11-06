@@ -13,8 +13,8 @@
 #
 # Removes, in order: netFLEX systemd units, the netFLEX* RPMs, the /usr/cnc,
 # /usr/cnc_stage and /usr/cnc_saved links, the /usr4/inc* load directories, and
-# the users/group the CORE RPM creates. Refuses while the app is up or while
-# nf_install / nf_upgrader / nf_patch is running. Always asks for the host name first.
+# the users/group the CORE RPM creates, then nf_install's Apache grant file. Refuses while
+# the app is up or nf_install / nf_upgrader / nf_patch runs. Always asks for the host name.
 
 # (No `set -u`: bash 4.2 on RHEL 7 treats "${empty[@]}" as unbound.)
 
@@ -26,6 +26,8 @@ LINKS="/usr/cnc /usr/cnc_stage /usr/cnc_saved"
 USERS="lrs_support console cpymem ss_user tftp cmm"   # cmm last: others share its uid
 UNITS="netFLEX netFLEX-md netFLEX-md_cnc netFLEX-mux_in netFLEX-mux_out inc-ts web-session-gc"
 PGDATA=/var/lib/pgsql/data
+WEBACCESS_CONF=/etc/httpd/conf.d/nfupgrader-webgui.conf   # nf_install's Apache grant
+WEBACCESS_MARK="# Written by nf_install (nfupgrader)."
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -63,6 +65,10 @@ for u in ${UNITS}; do
 done
 USERS_FOUND=()
 for u in ${USERS}; do getent passwd "$u" >/dev/null && USERS_FOUND+=("$u"); done
+CONF_FILES=()
+if [ -f "${WEBACCESS_CONF}" ] && grep -qxF "${WEBACCESS_MARK}" "${WEBACCESS_CONF}"; then
+	CONF_FILES+=("${WEBACCESS_CONF}")
+fi
 STATE_FILES=()
 if [ -d "${LOGDIR}" ]; then
 	for f in "${LOGDIR}"/.*_INSTALL_STATE "${LOGDIR}"/.*_INSTALL_INFO; do
@@ -84,6 +90,7 @@ show "links (/usr/cnc*):"               "${LINKS_FOUND[@]}"
 show "load dirs (rm -rf):"               "${LOADDIRS[@]}"
 show "systemd units (stop, disable, rm):" "${UNIT_FILES[@]}"
 show "users (userdel), + group cmm:"     "${USERS_FOUND[@]}"
+show "nf_install Apache grant (rm):"      "${CONF_FILES[@]}"
 if [ "${PURGE_DB}" = yes ]; then
 	show "postgres data (emptied):" "${PGDATA}"
 else
@@ -93,7 +100,8 @@ show "nfupgrader install state (archived):" "${STATE_FILES[@]}"
 echo
 
 if [ ${#PKGS[@]} -eq 0 ] && [ ${#LINKS_FOUND[@]} -eq 0 ] && [ ${#LOADDIRS[@]} -eq 0 ] \
-   && [ ${#UNIT_FILES[@]} -eq 0 ] && [ ${#USERS_FOUND[@]} -eq 0 ] && [ "${PURGE_DB}" = no ]; then
+   && [ ${#UNIT_FILES[@]} -eq 0 ] && [ ${#USERS_FOUND[@]} -eq 0 ] && [ ${#CONF_FILES[@]} -eq 0 ] \
+   && [ "${PURGE_DB}" = no ]; then
 	echo "Nothing to remove - netFLEX is not installed here."
 	exit 0
 fi
@@ -187,6 +195,9 @@ if [ "${PURGE_DB}" = yes ]; then
 		run find "${PGDATA}" -mindepth 1 -delete
 	fi
 fi
+
+# --- 6b. nf_install's Apache grant (it points at the /usr/cnc just removed) -----
+for f in "${CONF_FILES[@]}"; do run rm -f "$f"; done
 
 # --- 7. nfupgrader install state ------------------------------------------------------
 TS=$(date +%Y%m%d%H%M%S)
