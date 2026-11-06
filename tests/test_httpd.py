@@ -3,6 +3,7 @@ import os
 import tempfile
 import time
 import unittest
+from unittest import mock
 from nfupgrader import api, httpd, snapjobs
 from nfupgrader.audit import AuditLog
 from nfupgrader.host import FakeHost, RunResult
@@ -317,10 +318,18 @@ class TestLaunchSideEffect(unittest.TestCase):
 
     def test_accepted_direct_launch_records_launched_at(self):
         ctx = launch_ctx(self.tmp)._replace(state={})
-        before = time.time()
+        before = api._now()
         httpd.launch_side_effect(ctx, "stage", "ip", perform=self.perform)
         self.assertGreaterEqual(ctx.state["launched_at"], before)
-        self.assertLessEqual(ctx.state["launched_at"], time.time())
+        self.assertLessEqual(ctx.state["launched_at"], api._now())
+
+    def test_launch_grace_ignores_wall_clock(self):
+        # An install can step the system clock back; the grace must not follow it.
+        self.assertIs(api._now, time.monotonic)
+        ctx = launch_ctx(self.tmp)._replace(state={})
+        with mock.patch.object(time, "time", return_value=0.0):
+            httpd.launch_side_effect(ctx, "stage", "ip", perform=self.perform)
+        self.assertGreater(ctx.state["launched_at"], 0.0)
 
     def test_accepted_upgrade_launch_records_launched_at(self):
         def begin(runner, launch, read_status, client, audit=None, **kw):

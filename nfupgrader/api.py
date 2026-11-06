@@ -40,7 +40,10 @@ _FIX_LOCK = threading.Lock()
 FIX_LAUNCH_GRACE = 120
 
 # Injectable clock: tests patch api._now to move time without sleeping.
-_now = time.time
+# Monotonic, not wall-clock: a netFLEX install can step the system clock
+# (time sync), and a backward step would hold the launch grace open for as long
+# as the step was. launched_at is stamped with this same clock.
+_now = time.monotonic
 
 
 def fix_in_progress():

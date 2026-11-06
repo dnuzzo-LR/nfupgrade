@@ -180,7 +180,7 @@ def launch_side_effect(ctx, mode, ip, perform=None, begin=None, action=None, per
         else:
             status, body = _launch_locked(ctx, mode, ip, perform, begin, has_state)
         if has_state and status == 202:
-            ctx.state["launched_at"] = time.time()
+            ctx.state["launched_at"] = api._now()
         return status, body
     finally:
         api._FIX_LOCK.release()

@@ -289,7 +289,7 @@ class TestLicenseApi(unittest.TestCase):
         self.assertEqual(seen, [(True, True)])
 
     def test_save_refused_in_launch_grace(self):
-        self.ctx.state["launched_at"] = time.time()
+        self.ctx.state["launched_at"] = api._now()
         with mock.patch.object(lic, "read_license", _read_ok), \
                 mock.patch.object(lic, "apply") as ap, \
                 mock.patch.object(lic, "backup") as bk:
