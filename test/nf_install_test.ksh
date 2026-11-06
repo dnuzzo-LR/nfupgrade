@@ -201,6 +201,15 @@ print junk > "${SB}/msgmnb"
 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
 assert_eq    "inc queue: unreadable msgmnb uses 4194304" 4194304 "$(iqs)"
 
+# --- Interfaces uses the short host name (the GUI splits keys at the first dot) ---
+setup
+mkstub hostname 'echo h1.example.com'
+"${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+assert_rc    "fqdn host: rc" 0 "$rc"
+assert_eq    "fqdn host: Interfaces short name" "[h1_i]
+   host=h1
+   protocol=ssh" "$(cat "${SB}/usr/cnc/web/data/Interfaces" 2>/dev/null)"
+
 # --- web GUI Apache grant (webgui.conf grants nothing; stock httpd.conf denies /) ---
 WA() { print "${SB}/conf.d/nfupgrader-webgui.conf"; }
 setup

@@ -397,7 +397,12 @@ EOF
 	fi
 	run_logged sysconfig cp -p def.sys_config.flx sys_config || return 1
 	run_logged sysdefines cp -p def.system_defines.flx system_defines || return 1
-	printf '[%s_i]\n   host=%s\n   protocol=ssh\n' "${HOSTNAME}" "${HOSTNAME}" > ./Interfaces || return 1
+	# Short host name only: the web GUI looks up "<section>.host" and splits it
+	# at the FIRST dot (fndprop, gui/src/web/prop.c), so an FQDN section such as
+	# [h.example.com_i] reads back as no host and protocol telnet, and every
+	# GUI login fails.
+	typeset shorthost="${HOSTNAME%%.*}"
+	printf '[%s_i]\n   host=%s\n   protocol=ssh\n' "${shorthost}" "${shorthost}" > ./Interfaces || return 1
 	run_logged webchown chown cmm:cmm sys_config system_defines Interfaces || return 1
 	return 0
 }
