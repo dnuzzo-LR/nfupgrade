@@ -39,8 +39,18 @@ EOF
 	mkstub mountpoint 'exit 0'
 	mkstub chown 'exit 0'
 	mkstub apachectl 'exit ${FAIL_APACHECTL:-0}'
-	mkstub systemctl '[ "$1" = is-active ] && exit ${HTTPD_DOWN:-0}; exit 0'
-	mkdir -p "${SB}/conf.d"
+	mkstub systemctl 'exit 0'
+	mkstub ssh-keyscan '[ -n "${FAIL_KEYSCAN}" ] && exit 1; echo "$1 ssh-ed25519 AAAAstubkey"'
+	mkstub ssh-keygen 'grep "^$2 " "$4" >/dev/null 2>&1'
+	mkdir -p "${SB}/httpd"
+	printf '%s\n' 'ServerRoot "/etc/httpd"' 'User apache' 'Group apache' '<Directory />' \
+		'    AllowOverride none' '    Require all denied' '</Directory>' '<Directory "/var/private">' \
+		'    Require all denied' '</Directory>' > "${SB}/httpd/httpd.conf"
+	printf '%s\n' '#LoadModule mpm_prefork_module modules/mod_mpm_prefork.so' \
+		'#LoadModule mpm_worker_module modules/mod_mpm_worker.so' \
+		'LoadModule mpm_event_module modules/mod_mpm_event.so' > "${SB}/httpd/00-mpm.conf"
+	cp -p "${SB}/httpd/httpd.conf" "${SB}/httpd/httpd.conf.orig"
+	cp -p "${SB}/httpd/00-mpm.conf" "${SB}/httpd/00-mpm.conf.orig"
 	mkstub su 'exec sh -c "$3"'
 	mkstub rpm '
 case "$1" in
@@ -58,6 +68,8 @@ R="${NFI_STAGEROOT}"
 mkdir -p "$R/bin" "$R/mbin" "$R/features" "$R/GUI_REL" "${NFT_SB}/tarsrc"
 mk() { printf "#!/bin/sh\necho \"\$(basename \"\$0\") \$*\" >> \"${NFT_SB}/calls\"\n%s\n" "$2" > "$1"; chmod +x "$1"; }
 mk "$R/bin/linux_packages" "exit 0"
+mkdir -p "$R/login/console"
+echo profile > "$R/login/.profile"
 mk "$R/bin/cmmperm" "exit 0"
 mk "$R/bin/post-install.sh" "exit \${FAIL_POSTINSTALL:-0}"
 mk "$R/bin/nf_upgrade_pg.sh" "exit 0"
@@ -80,9 +92,10 @@ exit 0'
 	export NFI_PKGTOOL="${SB}/bin/dnf"
 	print 4194304 > "${SB}/msgmnb"
 	export NFI_MSGMNB_FILE="${SB}/msgmnb"
-	export NFI_HTTPD_CONFD="${SB}/conf.d"
+	export NFI_HTTPD_CONF="${SB}/httpd/httpd.conf"
+	export NFI_MPM_CONF="${SB}/httpd/00-mpm.conf"
 	unset NFI_CHILD FAIL_POSTINSTALL FAIL_LICMIG STAGE_REAL STAGE_FOREIGN NO_CPJSMAP STUB_IQS \
-		FAIL_APACHECTL HTTPD_DOWN
+		FAIL_APACHECTL FAIL_KEYSCAN
 }
 
 cleanup() {
@@ -210,38 +223,73 @@ assert_eq    "fqdn host: Interfaces short name" "[h1_i]
    host=h1
    protocol=ssh" "$(cat "${SB}/usr/cnc/web/data/Interfaces" 2>/dev/null)"
 
-# --- web GUI Apache grant (webgui.conf grants nothing; stock httpd.conf denies /) ---
-WA() { print "${SB}/conf.d/nfupgrader-webgui.conf"; }
+# --- install guide step 11 (console ssh) and 16-17 (Apache) ----------------------
+H() { cat "${SB}/httpd/httpd.conf"; }
+M() { cat "${SB}/httpd/00-mpm.conf"; }
+ncalls() { awk -v a="$1" -v b="$2" '$1 == a && $2 == b' "${SB}/calls" | wc -l | tr -d ' '; }
 setup
 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
-assert_rc    "web access: rc" 0 "$rc"
-assert_match "web access: marker" '^# Written by nf_install \(nfupgrader\)\.$' "$(cat "$(WA)" 2>/dev/null)"
-assert_match "web access: grants web dir" "^<Directory ${SB}/usr/cnc/web>\$" "$(cat "$(WA)" 2>/dev/null)"
-assert_match "web access: require granted" '^    Require all granted$' "$(cat "$(WA)" 2>/dev/null)"
-assert_eq    "web access: configtest ran" 1 "$(awk '$1 == "apachectl" && $2 == "configtest"' "${SB}/calls" | wc -l | tr -d ' ')"
-assert_eq    "web access: httpd reloaded" 1 "$(awk '$1 == "systemctl" && $2 == "reload" && $3 == "httpd"' "${SB}/calls" | wc -l | tr -d ' ')"
-assert_match "web access: logged" ' INFO  .*Granted Apache access' "$(trace)"
+assert_rc    "guide: rc" 0 "$rc"
+assert_match "guide 16: User cmm" '^User cmm$' "$(H)"
+assert_match "guide 16: Group cmm" '^Group cmm$' "$(H)"
+assert_eq    "guide 16: <Directory /> granted" "    Require all granted" "$(sed -n '/^<Directory \/>/,/^<\/Directory>/p' "${SB}/httpd/httpd.conf" | grep Require)"
+assert_eq    "guide 16: other Directory untouched" "    Require all denied" "$(sed -n '/^<Directory "\/var\/private">/,/^<\/Directory>/p' "${SB}/httpd/httpd.conf" | grep Require)"
+assert_eq    "guide 16: backup is the original" "" "$(cmp "${SB}/httpd/httpd.conf.orig" "${SB}"/httpd/httpd.conf.pre-nfinstall.* 2>&1)"
+assert_match "guide 17: prefork loaded" '^LoadModule mpm_prefork_module' "$(M)"
+assert_match "guide 17: event commented" '^#LoadModule mpm_event_module' "$(M)"
+assert_eq    "guide 17: one MPM" 1 "$(grep -c '^LoadModule mpm_' "${SB}/httpd/00-mpm.conf")"
+assert_eq    "guide 17: backup is the original" "" "$(cmp "${SB}/httpd/00-mpm.conf.orig" "${SB}"/httpd/00-mpm.conf.pre-nfinstall.* 2>&1)"
+assert_eq    "guide: configtest ran" 1 "$(ncalls apachectl configtest)"
+assert_eq    "guide: httpd restarted" 1 "$(ncalls systemctl restart)"
+assert_match "guide 11: host key for cmm" '^h1 ssh-ed25519 ' "$(cat "${SB}/usr/cnc/cmm/.ssh/known_hosts" 2>/dev/null)"
+assert_match "guide 11: copied to console" '^h1 ssh-ed25519 ' "$(cat "${SB}/usr/cnc/login/console/.ssh/known_hosts" 2>/dev/null)"
+assert_eq    "guide 11: console .profile" profile "$(cat "${SB}/usr/cnc/login/console/.profile" 2>/dev/null)"
+assert_eq    "guide: no WARN" "" "$(trace | grep ' WARN ' | grep -v cpjsmap)"
 
+# Already configured: nothing edited, no backups, no second host key.
+setup
+"${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+rm -f "${SB}"/httpd/*.pre-nfinstall.*
+print iswebgui > "${SB}/logs/.h1_INSTALL_STATE"
+"${NFI}" -c "${SB}/test.cfg" -r; rc=$?
+assert_rc    "guide rerun: rc" 0 "$rc"
+assert_eq    "guide rerun: no backups" "" "$(ls "${SB}"/httpd/*.pre-nfinstall.* 2>/dev/null)"
+assert_match "guide rerun: already set" 'already set \(step 16' "$(trace)"
+assert_eq    "guide rerun: one host key" 1 "$(grep -c '^h1 ' "${SB}/usr/cnc/cmm/.ssh/known_hosts")"
+
+# configtest fails: both files put back, no restart, install still finishes.
 setup
 FAIL_APACHECTL=1 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
-assert_rc    "web access bad configtest: rc" 0 "$rc"
-assert_eq    "web access bad configtest: state" isdone "$(state)"
-assert_eq    "web access bad configtest: file removed" no "$(exists "$(WA)")"
-assert_match "web access bad configtest: WARN" ' WARN  .*configtest failed' "$(trace)"
-assert_eq    "web access bad configtest: no reload" 0 "$(awk '$1 == "systemctl" && $2 == "reload"' "${SB}/calls" | wc -l | tr -d ' ')"
+assert_rc    "guide bad configtest: rc" 0 "$rc"
+assert_eq    "guide bad configtest: state" isdone "$(state)"
+assert_eq    "guide bad configtest: httpd.conf restored" "" "$(cmp "${SB}/httpd/httpd.conf.orig" "${SB}/httpd/httpd.conf" 2>&1)"
+assert_eq    "guide bad configtest: 00-mpm.conf restored" "" "$(cmp "${SB}/httpd/00-mpm.conf.orig" "${SB}/httpd/00-mpm.conf" 2>&1)"
+assert_eq    "guide bad configtest: no restart" 0 "$(ncalls systemctl restart)"
+assert_match "guide bad configtest: WARN" ' WARN  .*Apache setup' "$(trace)"
 
+# An httpd.conf without the expected lines: the check fails, it is put back.
 setup
-HTTPD_DOWN=3 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
-assert_rc    "web access httpd down: rc" 0 "$rc"
-assert_eq    "web access httpd down: file kept" yes "$(exists "$(WA)")"
-assert_match "web access httpd down: WARN" ' WARN  .*httpd is not running' "$(trace)"
-assert_eq    "web access httpd down: no reload" 0 "$(awk '$1 == "systemctl" && $2 == "reload"' "${SB}/calls" | wc -l | tr -d ' ')"
-
-setup
-rmdir "${SB}/conf.d"
+grep -v '^User ' "${SB}/httpd/httpd.conf.orig" > "${SB}/httpd/httpd.conf"
+cp "${SB}/httpd/httpd.conf" "${SB}/httpd/httpd.conf.orig"
 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
-assert_rc    "web access no conf.d: rc" 0 "$rc"
-assert_match "web access no conf.d: WARN" ' WARN  .*not granted' "$(trace)"
+assert_rc    "guide odd httpd.conf: rc" 0 "$rc"
+assert_match "guide odd httpd.conf: WARN" " WARN  .*no 'User cmm'" "$(trace)"
+assert_eq    "guide odd httpd.conf: restored" "" "$(cmp "${SB}/httpd/httpd.conf.orig" "${SB}/httpd/httpd.conf" 2>&1)"
+assert_eq    "guide odd httpd.conf: no configtest" 0 "$(ncalls apachectl configtest)"
+
+# ssh-keyscan fails: warn for step 11, Apache still configured.
+setup
+FAIL_KEYSCAN=1 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+assert_rc    "guide keyscan fails: rc" 0 "$rc"
+assert_match "guide keyscan fails: WARN" ' WARN  .*console ssh setup' "$(trace)"
+assert_match "guide keyscan fails: Apache still done" '^User cmm$' "$(H)"
+
+# FQDN hostname: both the short name and the FQDN are known hosts.
+setup
+mkstub hostname 'echo h1.example.com'
+"${NFI}" -c "${SB}/test.cfg" -i; rc=$?
+assert_match "guide fqdn: short name" '^h1 ' "$(cat "${SB}/usr/cnc/cmm/.ssh/known_hosts" 2>/dev/null)"
+assert_match "guide fqdn: fqdn" '^h1\.example\.com ' "$(cat "${SB}/usr/cnc/cmm/.ssh/known_hosts" 2>/dev/null)"
 
 # --- webgui off --------------------------------------------------------------
 setup NO
@@ -249,7 +297,8 @@ setup NO
 assert_rc    "webgui off: rc" 0 "$rc"
 assert_eq    "webgui off: no lwebsetup" 0 "$(count_of lwebsetup)"
 assert_eq    "webgui off: state" isdone "$(state)"
-assert_eq    "webgui off: no Apache grant" no "$(exists "${SB}/conf.d/nfupgrader-webgui.conf")"
+assert_eq    "webgui off: httpd.conf untouched" "" "$(cmp "${SB}/httpd/httpd.conf.orig" "${SB}/httpd/httpd.conf" 2>&1)"
+assert_eq    "webgui off: no known_hosts" no "$(exists "${SB}/usr/cnc/cmm/.ssh/known_hosts")"
 
 # --- unfinished refuses -i ---------------------------------------------------
 setup
@@ -280,11 +329,8 @@ setup
 FAIL_POSTINSTALL=1 "${NFI}" -c "${SB}/test.cfg" -i; rc=$?
 assert_rc    "reset after failure: install rc" 1 "$rc"
 assert_eq    "reset after failure: rpm installed first" yes "$(exists "${SB}/rpmdb")"
-# As if an earlier attempt got as far as the web GUI step.
-printf '# Written by nf_install (nfupgrader).\n<Directory x>\n</Directory>\n' > "${SB}/conf.d/nfupgrader-webgui.conf"
 "${NFI}" -c "${SB}/test.cfg" -x; rc=$?
 assert_rc    "reset after failure: rc" 0 "$rc"
-assert_eq    "reset after failure: Apache grant removed" no "$(exists "${SB}/conf.d/nfupgrader-webgui.conf")"
 assert_eq    "reset after failure: rpm -e ran" 1 "$(awk '$1 == "rpm" && $2 == "-e"' "${SB}/calls" | wc -l | tr -d ' ')"
 assert_eq    "reset after failure: rpmdb gone" no "$(exists "${SB}/rpmdb")"
 assert_eq    "reset after failure: /usr/cnc gone" no "$(exists "${SB}/usr/cnc")"
@@ -312,10 +358,8 @@ ln -s "${SB}/usr4/inc5.3.002" "${SB}/usr/cnc"
 ln -s "${SB}/usr4/inc5.3.002" "${SB}/usr/cnc_stage"
 print isrpm > "${SB}/logs/.h1_INSTALL_STATE"
 printf 'LOADDIR=%s\nLOADDIR_CREATED=yes\n' "${SB}/usr4/inc5.3.002" > "${SB}/logs/.h1_INSTALL_INFO"
-print "# someone else's file" > "${SB}/conf.d/nfupgrader-webgui.conf"
 "${NFI}" -c "${SB}/test.cfg" -x; rc=$?
 assert_rc    "reset no rpm: rc" 0 "$rc"
-assert_eq    "reset no rpm: unmarked Apache file kept" yes "$(exists "${SB}/conf.d/nfupgrader-webgui.conf")"
 assert_match "reset no rpm: probe logged" 'rpm -q netFLEX-CORE \(rc 1\)' "$(rtrace)"
 assert_eq    "reset no rpm: no rpm -e" 0 "$(awk '$1 == "rpm" && $2 == "-e"' "${SB}/calls" | wc -l | tr -d ' ')"
 assert_eq    "reset no rpm: /usr/cnc gone" no "$(exists "${SB}/usr/cnc")"

@@ -172,14 +172,24 @@ nf_install -c <config file> -x     # reset a failed install
 nf_install -h                      # help
 ```
 
-With the web GUI selected, the web GUI step also writes
-`/etc/httpd/conf.d/nfupgrader-webgui.conf`, granting Apache access to `/usr/cnc/web`,
-then checks the config (`apachectl configtest`) and reloads httpd. netFLEX's own
-`webgui.conf` maps `/app` and `/cgi` there but grants no access, so on a stock
-`httpd.conf` (`<Directory />` → `Require all denied`) every GUI page answers 403.
-`httpd.conf` itself is not edited; the SSO directories keep their own `Deny from all`.
-If the configtest fails the file is removed again and the step only warns. Reset
-and `tools/nf_uninstall.sh` remove the file (only if it carries nf_install's marker line).
+With the web GUI selected, the web GUI step also does the netFLEX install guide's
+manual steps 11, 16 and 17 (a failure in any of them only warns, naming the step to
+do by hand):
+
+- **11, console ssh**: adds this host's ssh key (short name and FQDN, via
+  `ssh-keyscan`) to cmm's `known_hosts`, then copies `/usr/cnc/cmm/.ssh` and
+  `/usr/cnc/login/.profile` into `/usr/cnc/login/console/`. The GUI logs in as
+  `console` over ssh to its own host.
+- **16, `httpd.conf`**: `User cmm` / `Group cmm` and `Require all granted` in
+  `<Directory />`. netFLEX's `webgui.conf` grants no access itself (stock Apache
+  answers 403), and the setuid-`cmm` `web_intrfc` cannot open its ssh pseudo-terminal
+  (`grantpt()` EPERM) unless Apache's real user is `cmm`.
+- **17, `00-mpm.conf`**: prefork instead of event; with event, CGIs go through
+  `mod_cgid`'s socket in `/run/httpd`, which a `cmm` worker cannot reach.
+
+Each file it changes is backed up as `<file>.pre-nfinstall.<timestamp>`; already-set
+files are left alone. If the result does not check out or `apachectl configtest`
+fails, both files are put back. httpd is then restarted. Reset does not undo these.
 
 Files, all in the config's `INCLOGDIR`:
 

@@ -43,11 +43,8 @@ INCROOT=${NFI_INCROOT:-/usr/cnc}
 STAGEROOT=${NFI_STAGEROOT:-/usr/cnc_stage}
 LOADROOT=${NFI_LOADROOT:-/usr4}
 MSGMNB_FILE=${NFI_MSGMNB_FILE:-/proc/sys/kernel/msgmnb}
-HTTPD_CONFD=${NFI_HTTPD_CONFD:-/etc/httpd/conf.d}
-# Our own Apache file (see grant_webgui_access); the marker line lets reset
-# and nf_uninstall.sh prove it is ours before removing it.
-WEBACCESS_CONF="${HTTPD_CONFD}/nfupgrader-webgui.conf"
-WEBACCESS_MARK="# Written by nf_install (nfupgrader)."
+HTTPD_CONF=${NFI_HTTPD_CONF:-/etc/httpd/conf/httpd.conf}
+MPM_CONF=${NFI_MPM_CONF:-/etc/httpd/conf.modules.d/00-mpm.conf}
 
 # All valid states, in order. The state file holds the step to run next.
 INSTALL_STATES="isstart isprepare isrpm isunstage iscnfg ispackages iscmmperm islicmigrate ispostinstall isdatabase iswebgui islicense isdone"
@@ -407,48 +404,135 @@ EOF
 	return 0
 }
 
-# grant_webgui_access — netFLEX's webgui.conf maps /app and /cgi to
-# ${INCROOT}/web but never grants access to it, so with a stock httpd.conf
-# (<Directory /> Require all denied) every GUI page is 403. Grant ${INCROOT}/web
-# in a conf.d file of our own instead of editing httpd.conf; webgui.conf's SSO
-# dirs keep their "Deny from all" (both must pass). A failed configtest removes
-# the file again so Apache is never left unstartable. Only ever warns.
-function grant_webgui_access
+# console_ssh_setup — install guide step 11: as cmm, accept this host's ssh
+# key (the GUI logs in as console over ssh to the Interfaces host, the short
+# name; the FQDN is added too), then copy cmm's .ssh and login/.profile into
+# login/console. ssh-keyscan replaces the guide's interactive "ssh `hostname`".
+# Returns non-zero at the first failure (the caller warns).
+function console_ssh_setup
 {
-	if [ ! -d "${HTTPD_CONFD}" ]
+	typeset sshdir kh h names
+	sshdir="${INCROOT}/cmm/.ssh"
+	kh="${sshdir}/known_hosts"
+	names="${HOSTNAME%%.*}"
+	[ "${HOSTNAME}" != "${names}" ] && names="${names} ${HOSTNAME}"
+	run_logged sshdir su cmm -c "mkdir -p '${sshdir}' && chmod 700 '${sshdir}'" || return 1
+	for h in ${names}
+	do
+		if ssh-keygen -F "${h}" -f "${kh}" >/dev/null 2>&1
+		then
+			loginfo "${h} already in ${kh}"
+			continue
+		fi
+		run_logged keyscan su cmm -c "ssh-keyscan '${h}' >> '${kh}'" || return 1
+		ssh-keygen -F "${h}" -f "${kh}" >/dev/null 2>&1 || return 1
+		loginfo "Added ${h}'s ssh host key to ${kh}"
+	done
+	run_logged consolessh su cmm -c \
+		"cp -rp '${sshdir}' '${INCROOT}/login/console/' && cp -p '${INCROOT}/login/.profile' '${INCROOT}/login/console/'" \
+		|| return 1
+	loginfo "Copied ${sshdir} and login/.profile to ${INCROOT}/login/console"
+	return 0
+}
+
+# edit_conf <file> <label> <sed args...> — apply the sed edit; if it changes
+# the file, keep a timestamped backup and rewrite the file in place (cat >, so
+# owner, mode and SELinux label stay). Sets EDIT_BAK to the backup ("" when
+# already configured). Non-zero on failure, file untouched.
+function edit_conf
+{
+	typeset f="$1" label="$2" tmp
+	shift 2
+	EDIT_BAK=""
+	tmp="${f}.nfinstall.$$"
+	sed "$@" "${f}" > "${tmp}" || { rm -f "${tmp}"; return 1; }
+	if cmp -s "${f}" "${tmp}"
 	then
-		logwarn "No ${HTTPD_CONFD} - Apache access to ${INCROOT}/web not granted"
+		rm -f "${tmp}"
+		loginfo "${f} already set (${label})"
 		return 0
 	fi
-	{
-		print -r -- "${WEBACCESS_MARK}"
-		print -r -- "# netFLEX's webgui.conf maps /app and /cgi here but grants no access, and a"
-		print -r -- "# stock httpd.conf denies <Directory />, which makes every GUI page 403."
-		print -r -- "<Directory ${INCROOT}/web>"
-		print -r -- "    Require all granted"
-		print -r -- "</Directory>"
-	} > "${WEBACCESS_CONF}"
-	if [ $? -ne 0 ]
+	EDIT_BAK="${f}.pre-nfinstall.$(date '+%Y%m%d%H%M%S')"
+	if cp -p "${f}" "${EDIT_BAK}" && cat "${tmp}" > "${f}"
 	then
-		logwarn "Cannot write ${WEBACCESS_CONF} - the web GUI may answer 403"
+		rm -f "${tmp}"
+		loginfo "Edited ${f} (${label}); backup ${EDIT_BAK}"
 		return 0
 	fi
-	chmod 644 "${WEBACCESS_CONF}"
+	rm -f "${tmp}"
+	EDIT_BAK=""
+	return 1
+}
+
+# apache_setup — install guide steps 16 and 17, which a stock RHEL httpd
+# needs before the GUI works:
+#  16 httpd.conf: User/Group cmm (web_intrfc is setuid cmm and grantpt() on
+#     its ssh pty fails unless Apache's real uid is cmm too) and "Require all
+#     granted" in <Directory /> (netFLEX's webgui.conf grants nothing itself).
+#  17 00-mpm.conf: prefork instead of event (with event, CGIs go through
+#     mod_cgid's socket in /run/httpd, which a cmm worker cannot reach).
+# Each changed file is backed up; a failed check or configtest puts both back.
+# Returns non-zero on failure (the caller warns).
+function apache_setup
+{
+	typeset hbak mbak
+	if [ ! -f "${HTTPD_CONF}" -o ! -f "${MPM_CONF}" ]
+	then
+		logwarn "No ${HTTPD_CONF} or ${MPM_CONF} - is httpd installed?"
+		return 1
+	fi
+	edit_conf "${HTTPD_CONF}" "step 16: User/Group cmm, <Directory /> granted" \
+		-e 's/^User .*/User cmm/' -e 's/^Group .*/Group cmm/' \
+		-e '/^<Directory \/>/,/^<\/Directory>/s/Require all denied/Require all granted/' \
+		|| return 1
+	hbak="${EDIT_BAK}"
+	edit_conf "${MPM_CONF}" "step 17: prefork MPM" \
+		-e 's/^LoadModule mpm_event_module/#&/' -e 's/^LoadModule mpm_worker_module/#&/' \
+		-e 's/^#[[:space:]]*\(LoadModule mpm_prefork_module\)/\1/' \
+		|| { apache_restore "${hbak}" ""; return 1; }
+	mbak="${EDIT_BAK}"
+	apache_check || { apache_restore "${hbak}" "${mbak}"; return 1; }
 	if run_logged apachectl apachectl configtest
 	then
-		loginfo "Granted Apache access to ${INCROOT}/web in ${WEBACCESS_CONF}"
+		:
 	else
-		rm -f "${WEBACCESS_CONF}"
-		logwarn "apachectl configtest failed - removed ${WEBACCESS_CONF}; the web GUI may answer 403"
-		return 0
+		logwarn "apachectl configtest failed - restoring the Apache config"
+		apache_restore "${hbak}" "${mbak}"
+		return 1
 	fi
-	if systemctl is-active httpd >/dev/null 2>&1
+	run_logged httpd systemctl restart httpd || return 1
+	loginfo "Apache configured (install guide steps 16-17) and restarted"
+	return 0
+}
+
+# apache_check — the edits took: User/Group cmm, <Directory /> not denied,
+# exactly one MPM loaded and it is prefork. Logs what is wrong.
+function apache_check
+{
+	typeset ok=0
+	grep '^User cmm$' "${HTTPD_CONF}" >/dev/null 2>&1 || { logwarn "${HTTPD_CONF}: no 'User cmm'"; ok=1; }
+	grep '^Group cmm$' "${HTTPD_CONF}" >/dev/null 2>&1 || { logwarn "${HTTPD_CONF}: no 'Group cmm'"; ok=1; }
+	if [ -n "$(sed -n '/^<Directory \/>/,/^<\/Directory>/p' "${HTTPD_CONF}" | grep 'Require all denied')" ]
 	then
-		run_logged httpd systemctl reload httpd \
-			|| logwarn "systemctl reload httpd failed - restart httpd to serve the web GUI"
-	else
-		logwarn "httpd is not running - start it to serve the web GUI"
+		logwarn "${HTTPD_CONF}: <Directory /> still denies"
+		ok=1
 	fi
+	# (no "!": ksh88 has no pipeline negation)
+	if [ "$(grep -c '^LoadModule mpm_' "${MPM_CONF}")" != 1 \
+		-o "$(grep -c '^LoadModule mpm_prefork_module' "${MPM_CONF}")" != 1 ]
+	then
+		logwarn "${MPM_CONF}: prefork is not the only MPM loaded"
+		ok=1
+	fi
+	return ${ok}
+}
+
+# apache_restore <httpd.conf backup> <00-mpm.conf backup> — put back whichever
+# file edit_conf changed ("" = unchanged).
+function apache_restore
+{
+	[ -n "$1" ] && cat "$1" > "${HTTPD_CONF}" && loginfo "Restored ${HTTPD_CONF} from $1"
+	[ -n "$2" ] && cat "$2" > "${MPM_CONF}" && loginfo "Restored ${MPM_CONF} from $2"
 	return 0
 }
 
@@ -462,9 +546,21 @@ function do_iswebgui
 	if ( webgui_setup )
 	then
 		loginfo "Web GUI install complete"
-		grant_webgui_access
 	else
 		logwarn "Web GUI install failed - continuing without it"
+		return 0
+	fi
+	if console_ssh_setup
+	then
+		:
+	else
+		logwarn "console ssh setup (install guide step 11) failed - GUI logins may fail; do it by hand"
+	fi
+	if apache_setup
+	then
+		:
+	else
+		logwarn "Apache setup (install guide steps 16-17) failed - the GUI may answer 403 or refuse logins; do it by hand"
 	fi
 }
 
@@ -667,11 +763,6 @@ function do_reset
 	then
 		run_logged loaddir rm -rf "${LOADDIR}" || die "cannot remove ${LOADDIR}"
 		loginfo "Removed ${LOADDIR}"
-	fi
-	if [ -f "${WEBACCESS_CONF}" ] && grep -qxF "${WEBACCESS_MARK}" "${WEBACCESS_CONF}"
-	then
-		run_logged webaccess rm -f "${WEBACCESS_CONF}" || die "cannot remove ${WEBACCESS_CONF}"
-		loginfo "Removed ${WEBACCESS_CONF}"
 	fi
 	ts=$(date '+%Y%m%d%H%M%S')
 	run_logged archive mv "${STATEFILE}" "${STATEFILE}.${ts}" || die "cannot archive ${STATEFILE}"
