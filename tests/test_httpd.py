@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import time
+import threading
 import unittest
 from unittest import mock
 from nfupgrader import api, httpd, snapjobs
@@ -475,25 +476,67 @@ class TestInstallSideEffect(unittest.TestCase):
         self.assertIn("launch_error", self.events())
 
 
+class BlockingPopen(object):
+    """A Popen stand-in whose process 'exits' (with rc) when finish() is called."""
+
+    def __init__(self, rc):
+        self.rc = rc
+        self.waited = False
+        self._done = threading.Event()
+
+    def finish(self):
+        self._done.set()
+
+    def poll(self):
+        return self.rc if self._done.is_set() else None
+
+    def wait(self, timeout=None):
+        self._done.wait()
+        self.waited = True
+        return self.rc
+
+
 class TestPatchSideEffect(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
 
     def test_accepted_sets_job_and_follow(self):
         calls = []
+        popen = BlockingPopen(0)
+        self.addCleanup(popen.finish)
         ctx = launch_ctx(self.tmp)._replace(state={"phase": "stage"}, nf_patch_path="/o/nf_patch")
 
         def perform(c, rpm):
             calls.append(rpm)
-            return "POPEN"
+            return popen
         status, body = httpd.patch_side_effect(ctx, "ip", "/d/p.rpm", version="5.4.1", perform=perform)
         self.assertEqual((status, body), (202, {"accepted": True, "path": "/d/p.rpm"}))
         self.assertEqual(calls, ["/d/p.rpm"])
-        self.assertEqual(ctx.state["patch_job"], {"popen": "POPEN", "path": "/d/p.rpm",
+        self.assertEqual(ctx.state["patch_job"], {"popen": popen, "path": "/d/p.rpm",
                                                   "version": "5.4.1", "client": "ip"})
         self.assertEqual(ctx.state["log_follow"], "patch")
         self.assertEqual(ctx.state["phase"], "stage")
         self.assertFalse(api.fix_in_progress())
+
+    def test_exit_is_reaped_and_audited_without_a_patches_request(self):
+        # nf_patch must be waited for as soon as it exits, or it lingers as a
+        # <defunct> zombie until someone happens to open the Patches tab.
+        popen = BlockingPopen(0)
+        self.addCleanup(popen.finish)
+        ctx = launch_ctx(self.tmp)._replace(state={}, nf_patch_path="/o/nf_patch")
+        status, _ = httpd.patch_side_effect(ctx, "ip", "/d/p.rpm", version="5.4.1",
+                                            perform=lambda c, r: popen)
+        self.assertEqual(status, 202)
+        popen.finish()
+        deadline = time.time() + 5
+        while "patch_job" in ctx.state and time.time() < deadline:
+            time.sleep(0.01)
+        self.assertNotIn("patch_job", ctx.state)
+        self.assertTrue(popen.waited)
+        recs = [json.loads(l) for l in open(os.path.join(self.tmp, "audit.jsonl"))]
+        done = [r for r in recs if r["event"] == "patch_install_done"]
+        self.assertEqual(len(done), 1)
+        self.assertEqual(done[0]["version"], "5.4.1")
 
     def test_busy_lock_is_409(self):
         ctx = launch_ctx(self.tmp)._replace(state={})

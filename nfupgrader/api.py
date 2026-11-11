@@ -501,17 +501,25 @@ def _license_dispatch(method, path, body, client_ip, ctx):
         _FIX_LOCK.release()
 
 
+#: Serializes _patch_job_completion between the reaper thread and GET /api/patches,
+#: so a finished patch is audited exactly once.
+_PATCH_JOB_LOCK = threading.Lock()
+
+
 def _patch_job_completion(ctx):
     """If a patch job spawned by this service has exited, audit its outcome once
-    and forget it. Never puts the Popen handle anywhere but ctx.state."""
+    and forget it. Never puts the Popen handle anywhere but ctx.state. Called by
+    the reaper thread (httpd.watch_patch_job) when nf_patch exits, and again on
+    GET /api/patches as a fallback."""
     st = ctx.state if isinstance(ctx.state, dict) else {}
-    job = st.get("patch_job")
-    if not job:
-        return
-    rc = job["popen"].poll()
-    if rc is None:
-        return
-    del st["patch_job"]
+    with _PATCH_JOB_LOCK:
+        job = st.get("patch_job")
+        if not job:
+            return
+        rc = job["popen"].poll()
+        if rc is None:
+            return
+        del st["patch_job"]
     if rc == 0:
         ctx.audit.record("patch_install_done", path=job.get("path"),
                          version=job.get("version"), client=job.get("client"))

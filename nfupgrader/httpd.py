@@ -6,6 +6,7 @@ import posixpath
 import signal
 import socketserver
 import sys
+import threading
 import time
 import traceback
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -224,6 +225,21 @@ def perform_patch(ctx, rpm_path):
     return launcher.launch_patch(ctx.nf_patch_path, rpm_path, api.upgrade_logdir(ctx))
 
 
+def watch_patch_job(ctx, popen):
+    """Start a daemon thread that waits for nf_patch to exit, then audits it via
+    api._patch_job_completion. Waiting is what reaps the child: without it a
+    finished nf_patch stays a <defunct> zombie until something polls it."""
+    def reap():
+        try:
+            popen.wait()
+        finally:
+            api._patch_job_completion(ctx)
+    t = threading.Thread(target=reap, name="nf_patch-reaper")
+    t.daemon = True
+    t.start()
+    return t
+
+
 def patch_side_effect(ctx, ip, rpm_path, version=None, perform=None):
     """Carry out an accepted POST /api/patches: spawn nf_patch under
     api._FIX_LOCK (non-blocking; busy -> 409), re-checking under the lock, as
@@ -259,6 +275,7 @@ def patch_side_effect(ctx, ip, rpm_path, version=None, perform=None):
             ctx.state["patch_job"] = {"popen": popen, "path": rpm_path,
                                       "version": version, "client": ip}
             ctx.state["log_follow"] = "patch"
+            watch_patch_job(ctx, popen)
         return 202, {"accepted": True, "path": rpm_path}
     finally:
         api._FIX_LOCK.release()

@@ -478,7 +478,9 @@ installed) and Install is refused in preview mode.
 - **Audit.** `patch_install_started` (client, file, version), `patch_install_refused`
   (reason), `patch_install_done` and `patch_install_failed` (exit code, trace path;
   or the error when `nf_patch` could not be started)
-  in `nfupgrader_audit.jsonl`.
+  in `nfupgrader_audit.jsonl`. The service waits on `nf_patch` in a background
+  thread, so the done/failed record is written as soon as it exits (and no
+  `<defunct>` process is left behind).
 
 ## Testing
 
