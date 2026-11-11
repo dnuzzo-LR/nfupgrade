@@ -34,6 +34,51 @@ class TestUrlHost(unittest.TestCase):
         self.assertEqual(httpd.resolve_url_host("127.0.0.1", None, "h"), "127.0.0.1")
 
 
+class TestTunnelCommand(unittest.TestCase):
+    def test_loopback_bind_uses_hostname_and_sudo_user(self):
+        self.assertEqual(httpd.tunnel_command("127.0.0.1", 8099, None, "holmvm32", "dan"),
+                         "ssh -L 8099:127.0.0.1:8099 dan@holmvm32")
+
+    def test_no_user_when_not_under_sudo(self):
+        self.assertEqual(httpd.tunnel_command("127.0.0.1", 8099, None, "holmvm32", None),
+                         "ssh -L 8099:127.0.0.1:8099 holmvm32")
+
+    def test_sudo_user_root_is_left_out(self):
+        self.assertEqual(httpd.tunnel_command("127.0.0.1", 8099, None, "h", "root"),
+                         "ssh -L 8099:127.0.0.1:8099 h")
+
+    def test_wildcard_bind_tunnels_to_loopback(self):
+        self.assertEqual(httpd.tunnel_command("0.0.0.0", 8099, None, "h", None),
+                         "ssh -L 8099:127.0.0.1:8099 h")
+
+    def test_specific_bind_address_is_the_tunnel_target(self):
+        self.assertEqual(httpd.tunnel_command("10.1.2.3", 8099, None, "h", None),
+                         "ssh -L 8099:10.1.2.3:8099 h")
+
+    def test_url_host_override_is_the_ssh_host(self):
+        self.assertEqual(httpd.tunnel_command("127.0.0.1", 8099, "r9dev19.lab", "h", None),
+                         "ssh -L 8099:127.0.0.1:8099 r9dev19.lab")
+
+
+class TestStartupBanner(unittest.TestCase):
+    def test_loopback_prints_tunnel_and_local_url(self):
+        text = "\n".join(httpd.startup_banner(
+            "127.0.0.1", 8099, "http://127.0.0.1:8099/auth?token=T",
+            "ssh -L 8099:127.0.0.1:8099 h"))
+        self.assertIn("    ssh -L 8099:127.0.0.1:8099 h", text)
+        self.assertIn("    http://127.0.0.1:8099/auth?token=T", text)
+        self.assertNotIn("WARNING", text)
+
+    def test_network_bind_prints_url_and_tunnel_alternative(self):
+        text = "\n".join(httpd.startup_banner(
+            "0.0.0.0", 8099, "http://h:8099/auth?token=T",
+            "ssh -L 8099:127.0.0.1:8099 h"))
+        self.assertIn("WARNING", text)
+        self.assertIn("    http://h:8099/auth?token=T", text)
+        self.assertIn("    ssh -L 8099:127.0.0.1:8099 h", text)
+        self.assertIn("    http://127.0.0.1:8099/auth?token=T", text)
+
+
 class TestDepotDirs(unittest.TestCase):
     def test_explicit_env_wins(self):
         self.assertEqual(httpd.resolve_depot_dirs("/a:/b", "/start"), ["/a", "/b"])

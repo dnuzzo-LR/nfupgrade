@@ -54,6 +54,35 @@ def resolve_url_host(bind, url_host_override, hostname):
     return bind
 
 
+def tunnel_command(bind, port, url_host_override, hostname, sudo_user):
+    """The `ssh -L` command a workstation runs to reach this service through an
+    SSH tunnel. The tunnel's far end is loopback when the bind accepts it
+    (loopback or wildcard), else the specific bind address. The ssh host is
+    NFU_URL_HOST if set (a name the workstation can resolve), else this host's
+    name; the user is the sudo caller when there is one (root rarely may ssh in),
+    otherwise left to ssh's default."""
+    if bind in ("127.0.0.1", "localhost", "0.0.0.0", "::", ""):
+        target = "127.0.0.1"
+    else:
+        target = bind
+    host = url_host_override or hostname
+    if sudo_user and sudo_user != "root":
+        host = "{}@{}".format(sudo_user, host)
+    return "ssh -L {p}:{t}:{p} {h}".format(p=port, t=target, h=host)
+
+
+def startup_banner(bind, port, url, tunnel):
+    """Lines printed at startup telling the user how to open the UI: through
+    the SSH tunnel (always offered), and directly when bound to the network."""
+    local_url = "http://127.0.0.1:{}/auth{}".format(port, url.split("/auth", 1)[1])
+    tunnel_lines = ["    " + tunnel, "then browse (single-use):", "    " + local_url]
+    if bind in ("127.0.0.1", "localhost"):
+        return ["Loopback only. From your workstation, open the tunnel:"] + tunnel_lines
+    return ["WARNING: bound to {} — the URL/token cross the network in plaintext HTTP.".format(bind),
+            "Open (single-use):", "    " + url,
+            "Or, encrypted through an SSH tunnel from your workstation:"] + tunnel_lines
+
+
 def resolve_launch_cwd(env_cwd, user_config):
     """Directory to run nf_upgrade from (for relative DEPOTFILE/linux_packages
     lookup): an explicit NFU_LAUNCH_CWD wins, else the user config's directory,
@@ -555,13 +584,10 @@ def main(argv=None):
     if preview_scenario:
         print("PREVIEW MODE (NFU_PREVIEW_INSTALL={}): install UI with canned data; "
               "launch, reset and fixes are refused.".format(preview_scenario))
-    if bind in ("127.0.0.1", "localhost"):
-        print("Loopback only. From your workstation, tunnel first, e.g.:")
-        print("    ssh -L {p}:127.0.0.1:{p} <this-host>   then browse:".format(p=real_port))
-        print("    http://127.0.0.1:{}/auth?token={}".format(real_port, ctx.auth.token))
-    else:
-        print("WARNING: bound to {} — the URL/token cross the network in plaintext HTTP.".format(bind))
-        print("Open (single-use):\n    {}".format(url))
+    tunnel = tunnel_command(bind, real_port, os.environ.get("NFU_URL_HOST"),
+                            hostname, os.environ.get("SUDO_USER"))
+    for line in startup_banner(bind, real_port, url, tunnel):
+        print(line)
     sys.stdout.flush()
     install_signals()
     serve_until_stopped(server, ctx)

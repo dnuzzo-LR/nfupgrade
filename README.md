@@ -28,9 +28,11 @@ On a RHEL/Rocky 7, 8 or 9 host that can reach GitHub, **as root**:
 
    It prints a single-use link such as
    `http://<host>:8099/auth?token=…`. Open it in a browser on your desktop.
-   (Without `NFU_BIND`/`NFU_PORT` it listens on loopback only and prints the
-   `ssh -L` tunnel to use instead. With `NFU_BIND=0.0.0.0` the link and the
-   pages travel as plain HTTP.)
+   It also prints the `ssh -L` command for reaching it through an SSH tunnel
+   instead, with the matching `http://127.0.0.1:<port>/…` link. (Without
+   `NFU_BIND`/`NFU_PORT` it listens on loopback only and the tunnel is the only
+   way in. With `NFU_BIND=0.0.0.0` the direct link and the pages travel as plain
+   HTTP; the tunnel route is encrypted.)
 
 4. **Use the tabs:** on a host without netFLEX the tool offers a new
    **Install**; on an installed host, **Stage** then **Upgrade**. The
@@ -124,9 +126,16 @@ the host being upgraded.
 | `NFU_PREVIEW_INSTALL` | (unset: off) | Preview the install screens on any box, even one already running netFLEX. Set to `1` (or `before`, `running`, `failed`, `done`). The UI shows install mode with sample data and a yellow PREVIEW banner whose picker switches between those scenarios. Pre-flight checks run for real (read-only). **Launch, Resume, Reset and Fix are refused**; Save writes `nfupgrader_preview.cfg` / `nfupgrader_preview_cnc.cnfg` beside — never over — the real saved config. |
 | `NFU_REPORTS` | `nfupgrader/reports.default.json` | Report list for the Reports tab. Snapshots go to `${INCLOGDIR}/nfupgrader_reports/` (newest 20 kept); an Upgrade launch takes a *before* snapshot first and an *after* snapshot when the upgrade ends. |
 
-**Loopback (default):** print shows an `ssh -L` tunnel hint. **Non-loopback:** the
-URL uses the hostname and a plaintext-HTTP warning is printed (token/URL cross the
-network unencrypted). The session cookie is bound to the client IP.
+**Loopback (default):** the startup output gives the `ssh -L` tunnel command and the
+`http://127.0.0.1:<port>/auth?token=…` link to open once it is up. **Non-loopback:**
+the URL uses the hostname and a plaintext-HTTP warning is printed (token/URL cross
+the network unencrypted); the tunnel command and its loopback link are printed too,
+as the encrypted alternative. Either way the token is single-use, so open only one
+of the two links. The tunnel command names `NFU_URL_HOST` if set, else this host's
+name, prefixed with `$SUDO_USER@` when started through `sudo` by a non-root user
+(otherwise ssh uses your workstation login name); it tunnels to `127.0.0.1`, or to
+the bind address when `NFU_BIND` is a specific interface. The session cookie is
+bound to the client IP.
 
 **Launch is guarded** by a browser confirm dialog, but there is no other gate — a
 confirmed click runs the real upgrade immediately. Only click on a host prepared
