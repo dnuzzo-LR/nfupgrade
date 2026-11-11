@@ -80,12 +80,13 @@ case "$1" in
 		exit 0
 	fi
 	cat "${m}"; exit 0;;
--Uvh)
+-ivh)
+	# rpm -i adds a record alongside any older netFLEX-CORE-PATCH (no erase)
 	echo "Preparing..."
 	rc=${FAIL_RPM:-0}
 	if [ "${rc}" -eq 0 ]; then
 		set -- $(cat "${NFT_SB}/meta/$(basename "${last}")")
-		echo "$2" > "${NFT_SB}/rpmdb_patch"
+		echo "$2" >> "${NFT_SB}/rpmdb_patch"
 	fi
 	exit ${rc};;
 esac
@@ -117,7 +118,7 @@ patchfile() {
 
 trace()    { cat "${SB}"/logs/patch_inc_h1.* 2>/dev/null; }
 lastline() { trace | sed -n '$p'; }
-uvh_calls() { grep -c -- '^rpm -Uvh' "${SB}/calls" | tr -d ' '; }
+uvh_calls() { grep -c -- '^rpm -ivh' "${SB}/calls" | tr -d ' '; }
 
 # run_patch <args...> — run nf_patch with the sandbox log dir; sets rc.
 run_patch() {
@@ -128,7 +129,7 @@ run_patch() {
 refused() {
 	assert_rc    "$1: rc" 1 "$rc"
 	assert_match "$1: result" "ERROR RESULT: refused: .*$2" "$(lastline)"
-	assert_eq    "$1: rpm -Uvh not run" 0 "$(uvh_calls)"
+	assert_eq    "$1: rpm -ivh not run" 0 "$(uvh_calls)"
 }
 
 # --- first patch, none installed --------------------------------------------
@@ -137,9 +138,19 @@ f29=$(patchfile 5.4.1.29); patchfile 5.4.1.30 >/dev/null
 run_patch -f "${f29}"
 assert_rc    "first patch: rc" 0 "$rc"
 assert_match "first patch: result" 'INFO  RESULT: installed 5\.4\.1\.29$' "$(lastline)"
-assert_match "first patch: rpm -Uvh --replacepkgs --replacefiles called" "^rpm -Uvh --replacepkgs --replacefiles ${f29}\$" "$(cat "${SB}/calls")"
+assert_match "first patch: rpm -ivh --replacepkgs --replacefiles called" "^rpm -ivh --replacepkgs --replacefiles ${f29}\$" "$(cat "${SB}/calls")"
 assert_match "first patch: rpm output in trace" 'EXEC  \[rpm\] Preparing' "$(trace)"
 assert_eq    "first patch: trace file name" 1 "$(ls "${SB}"/logs/patch_inc_h1.* 2>/dev/null | wc -l | tr -d ' ')"
+
+# --- -ivh keeps older patch records; the verify reads the highest -------------
+# (as Support's manual install and netFLEX's inc_upgrader do)
+setup
+print 5.4.1.29 > "${SB}/rpmdb_patch"
+f30=$(patchfile 5.4.1.30)
+run_patch -f "${f30}"
+assert_rc    "stacked records: rc" 0 "$rc"
+assert_match "stacked records: result" 'INFO  RESULT: installed 5\.4\.1\.30$' "$(lastline)"
+assert_eq    "stacked records: both kept" "5.4.1.29 5.4.1.30" "$(print $(cat "${SB}/rpmdb_patch"))"
 
 # --- web GUI check after install (#1 A) -----------------------------------------
 # A patch RPM does not carry the web GUI; after installing, nf_patch compares
@@ -310,22 +321,22 @@ f=$(patchfile 5.4.1.29)
 run_patch -f "${f}" -n
 assert_rc    "dry run: rc" 0 "$rc"
 assert_match "dry run: result" 'INFO  RESULT: eligible 5\.4\.1\.29$' "$(lastline)"
-assert_eq    "dry run: rpm -Uvh not run" 0 "$(uvh_calls)"
+assert_eq    "dry run: rpm -ivh not run" 0 "$(uvh_calls)"
 
-# --- rpm -Uvh fails --------------------------------------------------------------
+# --- rpm -ivh fails --------------------------------------------------------------
 setup
 f=$(patchfile 5.4.1.29)
 export FAIL_RPM=1
 run_patch -f "${f}"
 unset FAIL_RPM
 assert_rc    "rpm fails: rc" 2 "$rc"
-assert_match "rpm fails: result" 'ERROR RESULT: failed: rpm -Uvh exited 1$' "$(lastline)"
+assert_match "rpm fails: result" 'ERROR RESULT: failed: rpm -ivh exited 1$' "$(lastline)"
 
 # --- post-install verify fails ---------------------------------------------------
 setup
 f=$(patchfile 5.4.1.29)
 # rpm "succeeds" but leaves the database unchanged
-sed -i 's/echo "\$2" > "\${NFT_SB}\/rpmdb_patch"/:/' "${SB}/bin/rpm"
+sed -i 's/echo "\$2" >> "\${NFT_SB}\/rpmdb_patch"/:/' "${SB}/bin/rpm"
 run_patch -f "${f}"
 assert_rc    "verify fails: rc" 2 "$rc"
 assert_match "verify fails: result" 'ERROR RESULT: failed: rpm reports .* after install' "$(lastline)"
@@ -353,8 +364,6 @@ refused "other-generic patch: strict next" 'install 5\.4\.1\.30 first$'
 setup
 printf '5.4.0.40\n5.4.1.29\n' > "${SB}/rpmdb_patch"
 f=$(patchfile 5.4.1.30)
-# the -Uvh stub replaces the db; keep the other-generic line for the verify
-sed -i 's/echo "\$2" > "\${NFT_SB}\/rpmdb_patch"/printf "5.4.0.40\\n%s\\n" "$2" > "${NFT_SB}\/rpmdb_patch"/' "${SB}/bin/rpm"
 run_patch -f "${f}"
 assert_rc    "other-generic patch: install rc" 0 "$rc"
 assert_match "other-generic patch: result" 'RESULT: installed 5\.4\.1\.30$' "$(lastline)"

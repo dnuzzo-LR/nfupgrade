@@ -525,12 +525,16 @@ installed) and Install is refused in preview mode.
   supported, and never installed.
 - **`nf_patch`.** `nf_patch -f <rpm> [-l <logdir>] [-n]`; `-n` checks only. The log
   directory is `-l`, else `$INCLOGDIR`, else `/usr/cnc/logs`. It re-runs the rules
-  above, then `rpm -Uvh --replacepkgs --replacefiles` (the options support uses
-  for a manual install; a patch overwrites files owned by
-  `netFLEX-CORE`; without the flag rpm refuses with "conflicts with file from
-  package" and exits 4), then verifies the new version is reported. Exit codes:
+  above, then `rpm -ivh --replacepkgs --replacefiles`, then verifies the new
+  version is reported. Those are exactly the options of Support's manual install
+  and of netFLEX's own upgrade (`inc_upgrader`), so the rpm database looks the same
+  however a box was patched: `-i` keeps earlier `netFLEX-CORE-PATCH` records next
+  to the new one (`rpm -q netFLEX-CORE-PATCH` lists every patch applied; the tool
+  takes the highest on the CORE generic). `--replacefiles` is required: a patch
+  overwrites files owned by `netFLEX-CORE` (and earlier patches); without it rpm
+  refuses with "conflicts with file from package" and exits 4. Exit codes:
   `0` installed (or eligible with `-n`), `1` refused before rpm was touched, `2`
-  rpm -Uvh failed or the post-install check did not show the new version. The trace is `<logdir>/patch_inc_<host>.<pid>`; its last line is
+  rpm -ivh failed or the post-install check did not show the new version. The trace is `<logdir>/patch_inc_<host>.<pid>`; its last line is
   `RESULT: installed <version>`, `RESULT: refused: <reason>` or
   `RESULT: failed: <reason>`. On refused/failed the tab shows the trace path to send
   to support.

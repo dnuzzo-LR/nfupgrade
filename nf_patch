@@ -10,11 +10,15 @@
 #     -h: show this help
 #
 # Runs as root, in the foreground. Every check runs before rpm is touched;
-# the patch then goes in with `rpm -Uvh --replacepkgs --replacefiles` while
+# the patch then goes in with `rpm -ivh --replacepkgs --replacefiles` while
 # netFLEX keeps running (the patch's own scriptlets restart its processes).
-# --replacefiles is required: a patch overlays files owned by netFLEX-CORE, and
-# rpm refuses those conflicts without it. --replacepkgs matches the options
-# support uses for a manual patch install (and netFLEX's inc_upgrader).
+# These are exactly the options of Support's manual patch install and of
+# netFLEX's inc_upgrader, so the rpm database looks the same however a box was
+# patched: -i (not -U) keeps earlier netFLEX-CORE-PATCH records alongside the
+# new one (netFLEX reads the level with `rpm -qi ... | tail -1`; this script
+# and the service take the highest). --replacefiles is required: a patch
+# overlays files owned by netFLEX-CORE (and earlier patches), and rpm refuses
+# those conflicts without it.
 #
 # Rules (the same as nfupgrader/patches.py): NAME must be netFLEX-CORE-PATCH;
 # its generic and ARCH must match the installed netFLEX-CORE; sequence is
@@ -38,7 +42,7 @@
 #   INFO  RESULT: installed <version>     (exit 0)
 #   INFO  RESULT: eligible <version>      (exit 0, -n)
 #   ERROR RESULT: refused: <reason>       (exit 1, rpm never invoked)
-#   ERROR RESULT: failed: <reason>        (exit 2, rpm -Uvh or verify failed)
+#   ERROR RESULT: failed: <reason>        (exit 2, rpm -ivh or verify failed)
 #
 # Loads are compared as decimal integers with leading zeros stripped ("08"
 # would be invalid octal in shell arithmetic).
@@ -138,7 +142,7 @@ function web_check
 	fi
 }
 
-# fail <reason> — rpm -Uvh ran and it (or the verify after it) failed.
+# fail <reason> — rpm -ivh ran and it (or the verify after it) failed.
 function fail
 {
 	logerror "RESULT: failed: $1"
@@ -435,9 +439,9 @@ fi
 # --- install --------------------------------------------------------------------
 
 loginfo "Installing ${FILE}"
-run_logged rpm rpm -Uvh --replacepkgs --replacefiles "${FILE}"
+run_logged rpm rpm -ivh --replacepkgs --replacefiles "${FILE}"
 rc=$?
-[ ${rc} -eq 0 ] || fail "rpm -Uvh exited ${rc}"
+[ ${rc} -eq 0 ] || fail "rpm -ivh exited ${rc}"
 
 rpm -q --qf '%{VERSION}\n' netFLEX-CORE-PATCH > "${TMP}" 2>/dev/null
 NOW=$(highest_version "${TMP}" "${CGEN}")
