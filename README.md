@@ -186,6 +186,56 @@ export NFU_USER_CONFIG=/opt/apt/upgrade/my.cfg   # only needed to Launch
 ./run.sh    # browse the printed http://<host>:8099/auth?token=… URL
 ```
 
+### Example — through a bastion on a STIG host (no SSH forwarding)
+
+STIG-hardened hosts set `AllowTcpForwarding no` in sshd (check with
+`sshd -T | grep -i allowtcpforwarding`), so the printed
+`ssh -L <port>:127.0.0.1:<port> <host>` fails with
+`channel 3: open failed: administratively prohibited`. Forward through the
+bastion instead; the bastion then connects to the tool over the network, so the
+tool must listen on the host's own IP and the firewall must let the bastion in.
+Below, `<netflex-ip>` is the netFLEX host's IP as the bastion sees it,
+`<bastion-private-ip>` the bastion's address as the netFLEX host sees it, and
+`<bastion>` what you ssh to from your PC (e.g. `ubuntu@<bastion-public-ip>`).
+
+1. On the netFLEX host, start the tool on its own IP:
+
+   ```sh
+   cd /opt/nfupgrader && NFU_BIND=<netflex-ip> NFU_PORT=8099 ./run.sh
+   ```
+
+2. On the netFLEX host, let only the bastion reach the port. This is a
+   runtime-only rule (gone on reboot or `firewall-cmd --reload`); without it a
+   `drop` zone silently drops the connection:
+
+   ```sh
+   firewall-cmd --add-rich-rule='rule family="ipv4" source address="<bastion-private-ip>/32" port port="8099" protocol="tcp" accept'
+   ```
+
+3. From the bastion, confirm it is reachable (times out before step 2,
+   succeeds after):
+
+   ```sh
+   nc -zv -w 5 <netflex-ip> 8099
+   ```
+
+4. On your PC, tunnel through the bastion only:
+
+   ```sh
+   ssh -L 8099:<netflex-ip>:8099 <bastion>
+   ```
+
+5. In your browser, open the printed link with the host changed to `127.0.0.1`:
+   `http://127.0.0.1:8099/auth?token=<token>` (the printed tunnel section
+   already shows this form). PC to bastion is encrypted by ssh; **bastion to
+   netFLEX host is plain HTTP**, token included.
+
+6. When finished, stop the tool (Ctrl-C) and remove the rule:
+
+   ```sh
+   firewall-cmd --remove-rich-rule='rule family="ipv4" source address="<bastion-private-ip>/32" port port="8099" protocol="tcp" accept'
+   ```
+
 ## Installing on a new host
 
 When netFLEX is not installed on the host (or an install is unfinished), the tool

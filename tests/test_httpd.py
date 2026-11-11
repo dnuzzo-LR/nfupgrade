@@ -69,6 +69,13 @@ class TestStartupBanner(unittest.TestCase):
         self.assertIn("    http://127.0.0.1:8099/auth?token=T", text)
         self.assertNotIn("WARNING", text)
 
+    def test_points_at_bastion_route_when_forwarding_is_refused(self):
+        for bind in ("127.0.0.1", "0.0.0.0"):
+            text = "\n".join(httpd.startup_banner(
+                bind, 8099, "http://h:8099/auth?token=T", "ssh -L 8099:127.0.0.1:8099 h"))
+            self.assertIn("administratively prohibited", text)
+            self.assertIn("bastion", text)
+
     def test_network_bind_prints_url_and_tunnel_alternative(self):
         text = "\n".join(httpd.startup_banner(
             "0.0.0.0", 8099, "http://h:8099/auth?token=T",

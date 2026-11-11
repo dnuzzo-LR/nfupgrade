@@ -73,9 +73,13 @@ def tunnel_command(bind, port, url_host_override, hostname, sudo_user):
 
 def startup_banner(bind, port, url, tunnel):
     """Lines printed at startup telling the user how to open the UI: through
-    the SSH tunnel (always offered), and directly when bound to the network."""
+    the SSH tunnel (always offered, with a pointer to the bastion route for
+    hosts whose sshd refuses forwarding), and directly when bound to the
+    network."""
     local_url = "http://127.0.0.1:{}/auth{}".format(port, url.split("/auth", 1)[1])
-    tunnel_lines = ["    " + tunnel, "then browse (single-use):", "    " + local_url]
+    tunnel_lines = ["    " + tunnel, "then browse (single-use):", "    " + local_url,
+                    "(ssh says 'administratively prohibited'? The host forbids forwarding,",
+                    " e.g. STIG: tunnel through a bastion instead - README, 'through a bastion'.)"]
     if bind in ("127.0.0.1", "localhost"):
         return ["Loopback only. From your workstation, open the tunnel:"] + tunnel_lines
     return ["WARNING: bound to {} — the URL/token cross the network in plaintext HTTP.".format(bind),
