@@ -169,7 +169,53 @@ N30 = "netFLEX-CORE-PATCH-5.4.1.30-1.rhel8.i686.rpm"
 N31 = "netFLEX-CORE-PATCH-5.4.1.31-1.rhel8.i686.rpm"
 
 
+WEBINFO = ("/usr/cnc/web/bin/webinfo", "-j")
+
+
+def webinfo_out(release, build):
+    """webinfo -j as netFLEX prints it (gui/src/web/webinfo.c)."""
+    return '{ "release" : "%s", "build" : "%s"}\n' % (release, build)
+
+
+class TestWebStatus(unittest.TestCase):
+    """#1 (A): the web GUI's build must match the installed CORE/PATCH load."""
+
+    def test_parse_webinfo(self):
+        self.assertEqual(patches.parse_webinfo(webinfo_out("5.4.0", "36")), ("5.4.0", 36))
+        self.assertEqual(patches.parse_webinfo(webinfo_out("5.4.0", "036")), ("5.4.0", 36))
+        self.assertIsNone(patches.parse_webinfo(""))
+        self.assertIsNone(patches.parse_webinfo("not json"))
+        self.assertIsNone(patches.parse_webinfo(webinfo_out("5.4.0", "x")))
+
+    def st(self, out, rc=0, core="5.4.0.29", patch=None):
+        h = FakeHost({WEBINFO: RunResult(rc, out, "")})
+        inst = {"core": core, "core_arch": "x86_64", "patch": patch}
+        return patches.web_status(h, inst)
+
+    def test_web_behind_patch(self):
+        self.assertEqual(self.st(webinfo_out("5.4.0", "35"), patch="5.4.0.36"),
+                         {"web": "5.4.0.35", "expected": "5.4.0.36", "matches": False})
+
+    def test_web_matches_patch_or_core(self):
+        self.assertTrue(self.st(webinfo_out("5.4.0", "36"), patch="5.4.0.36")["matches"])
+        self.assertTrue(self.st(webinfo_out("5.4.0", "29"))["matches"])
+
+    def test_other_generic_does_not_match(self):
+        self.assertFalse(self.st(webinfo_out("5.4.1", "29"))["matches"])
+
+    def test_unknown_when_webinfo_missing_or_core_absent(self):
+        self.assertIsNone(self.st("", rc=127))
+        r = self.st(webinfo_out("5.4.0", "29"), core=None)
+        self.assertEqual((r["web"], r["expected"], r["matches"]), ("5.4.0.29", None, None))
+
+
 class TestGather(unittest.TestCase):
+    def test_gather_reports_web_status(self):
+        h = _fake(files={"/d": [N29]})
+        h.responses[WEBINFO] = RunResult(0, webinfo_out("5.4.1", "27"), "")
+        g = patches.gather(h, ["/d"])
+        self.assertEqual(g["web"], {"web": "5.4.1.27", "expected": "5.4.1.28", "matches": False})
+
     def test_gather_lists_and_evaluates(self):
         h = _fake(files={"/d": [N30, N29]})
         g = patches.gather(h, ["/d"])

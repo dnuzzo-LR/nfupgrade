@@ -31,6 +31,13 @@ mkstub() {
 	chmod +x "${SB}/bin/${name}"
 }
 
+# webinfo <release> <build> — install a fake ${INCROOT}/web/bin/webinfo.
+webinfo() {
+	mkdir -p "${SB}/usr/cnc/web/bin"
+	print "#!/bin/sh\necho '{ \"release\" : \"$1\", \"build\" : \"$2\"}'" > "${SB}/usr/cnc/web/bin/webinfo"
+	chmod +x "${SB}/usr/cnc/web/bin/webinfo"
+}
+
 # app_up — make netFLEX look running: .CNC_UP plus a cmm-owned dacs.
 app_up() {
 	touch "${SB}/usr/cnc/.CNC_UP"
@@ -133,6 +140,28 @@ assert_match "first patch: result" 'INFO  RESULT: installed 5\.4\.1\.29$' "$(las
 assert_match "first patch: rpm -Uvh --replacepkgs --replacefiles called" "^rpm -Uvh --replacepkgs --replacefiles ${f29}\$" "$(cat "${SB}/calls")"
 assert_match "first patch: rpm output in trace" 'EXEC  \[rpm\] Preparing' "$(trace)"
 assert_eq    "first patch: trace file name" 1 "$(ls "${SB}"/logs/patch_inc_h1.* 2>/dev/null | wc -l | tr -d ' ')"
+
+# --- web GUI check after install (#1 A) -----------------------------------------
+# A patch RPM does not carry the web GUI; after installing, nf_patch compares
+# webinfo -j with the new patch and warns (the result is still "installed").
+setup
+f29=$(patchfile 5.4.1.29)
+webinfo 5.4.1 28
+run_patch -f "${f29}"
+assert_rc    "web behind: rc" 0 "$rc"
+assert_match "web behind: result" 'INFO  RESULT: installed 5\.4\.1\.29$' "$(lastline)"
+assert_match "web behind: warned" 'WARN  web GUI is 5\.4\.1\.28 but the patch is 5\.4\.1\.29 - install the matching LINUXWEB64 tar' "$(trace)"
+setup
+f29=$(patchfile 5.4.1.29)
+webinfo 5.4.1 029
+run_patch -f "${f29}"
+assert_rc    "web matches: rc" 0 "$rc"
+assert_match "web matches: noted" 'INFO  web GUI is 5\.4\.1\.29 \(matches\)' "$(trace)"
+setup
+f29=$(patchfile 5.4.1.29)
+run_patch -f "${f29}"
+assert_rc    "no webinfo: rc" 0 "$rc"
+assert_match "no webinfo: warned" 'WARN  web GUI version not checked' "$(trace)"
 
 # --- not the lowest in its directory ----------------------------------------
 setup

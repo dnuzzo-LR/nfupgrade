@@ -236,6 +236,9 @@ function refreshInfo() {
     html += row("CORE", v.core);
     html += row("PATCH", v.patch);
     html += row("IPATCH", v.ipatch);
+    var w = i.web;
+    html += row("Web GUI", w ? esc(w.web) + (w.matches === false
+      ? " <span class='pill down'>mismatch</span> " + esc(webMismatchText(w)) : "") : null);
     html += row("Installed load", l.installed);
     html += row("Staged load", l.staged);
     html += row("Saved load", l.saved);
@@ -642,8 +645,20 @@ function refreshPatches() {
   });
 }
 
+// A patch RPM does not carry the web GUI (a separate LINUXWEB64 tar): say so
+// when the web GUI's build is not the installed CORE/PATCH load. "" otherwise.
+function webMismatchText(w) {
+  if (!w || w.matches !== false) return "";
+  return "Web GUI is " + w.web + " but netFLEX is at " + w.expected +
+    " \u2014 install the matching LINUXWEB64 tar (lwebsetup).";
+}
+
 function renderPatches(d) {
   var inst = d.installed || {};
+  var webMsg = webMismatchText(d.web);
+  var webEl = document.getElementById("patch-web");
+  webEl.style.display = webMsg ? "block" : "none";
+  webEl.textContent = webMsg;
   document.getElementById("patch-installed").textContent =
     "Installed: CORE " + (inst.core || "—") + (inst.core_arch ? " (" + inst.core_arch + ")" : "") +
     "   PATCH " + (inst.patch || "—") +

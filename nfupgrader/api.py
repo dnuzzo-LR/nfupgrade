@@ -656,6 +656,7 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
                                 ctx.cnc_cnfg_path or "/usr/cnc/features/cnc.cnfg")
         info["upgrade_logdir"] = upgrade_logdir(ctx)
         info["nfupgrader_logdir"] = ctx.inclogdir
+        info["web"] = patches.web_status(ctx.host, patches.installed_versions(ctx.host))
         return _json(200, info)
 
     if path == "/api/site" and method == "GET":

@@ -69,6 +69,13 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn('"&file=" + encodeURIComponent(logFile)', self.js)
         self.assertIn("if (d.reset)", self.js)
 
+    def test_web_gui_mismatch_shown(self):
+        # Overview row and Patches tab warning when web build != CORE/PATCH load.
+        self.assertIn('row("Web GUI"', self.js)
+        self.assertIn("webMismatchText(", self.js)
+        self.assertIn("install the matching LINUXWEB64 tar", self.js)
+        self.assertIn('id="patch-web"', self.html)
+
     def test_preflight_and_postflight_placeholders(self):
         # #9: say why a table is missing instead of leaving a blank.
         self.assertIn("Not run yet for ", self.js)

@@ -29,6 +29,11 @@
 # AT/sdi/dacs/screen/arm/bill/dump process (boot_nms's own rule), so a stale
 # .CNC_UP left by a forced stop does not block it.
 #
+# After installing, the web GUI's version (${INCROOT}/web/bin/webinfo -j) is
+# compared with the patch: a patch RPM does not carry the web GUI (that is the
+# separate LINUXWEB64 tar), so a mismatch is logged as a WARN line telling the
+# user to install the matching tar. It never changes the result.
+#
 # Trace: ${logdir}/patch_inc_${HOSTNAME}.<pid>. Its last line is always one of
 #   INFO  RESULT: installed <version>     (exit 0)
 #   INFO  RESULT: eligible <version>      (exit 0, -n)
@@ -100,6 +105,37 @@ function app_state
 	done < "${f}"
 	rm -f "${f}"
 	print stale
+}
+
+# web_check — log the web GUI's version against the patch just installed. A
+# patch RPM does not carry the web GUI (that is a separate LINUXWEB64 tar), so
+# unless the tar is installed too the GUI stays at the old build: WARN then.
+# Never fails the patch.
+function web_check
+{
+	typeset w out rel build
+	w="${INCROOT}/web/bin/webinfo"
+	if [ ! -x "${w}" ]
+	then
+		logwarn "web GUI version not checked (${w} not found)"
+		return
+	fi
+	out=$("${w}" -j 2>/dev/null)
+	rel=$(print -r -- "${out}" | sed -n 's/.*"release" *: *"\([^"]*\)".*/\1/p')
+	build=$(print -r -- "${out}" | sed -n 's/.*"build" *: *"\([0-9][0-9]*\)".*/\1/p')
+	if [ -z "${rel}" -o -z "${build}" ]
+	then
+		logwarn "web GUI version not checked (could not read ${w} -j)"
+		return
+	fi
+	# numeric compare: "029" is load 29 (expr, not $((...)), which reads 0NN as octal)
+	build=$(expr "${build}" + 0)
+	if [ "${rel}" = "${PVER%.*}" -a "${build}" = "$(expr "${PVER##*.}" + 0)" ]
+	then
+		loginfo "web GUI is ${rel}.${build} (matches)"
+	else
+		logwarn "web GUI is ${rel}.${build} but the patch is ${PVER} - install the matching LINUXWEB64 tar (lwebsetup)"
+	fi
 }
 
 # fail <reason> — rpm -Uvh ran and it (or the verify after it) failed.
@@ -408,5 +444,6 @@ NOW=$(highest_version "${TMP}" "${CGEN}")
 NOW=${NOW%% *}
 [ "${NOW}" = "${PVER}" ] || fail "rpm reports ${NOW:-no netFLEX-CORE-PATCH} after install"
 loginfo "patch ${PVER} installed"
+web_check
 loginfo "RESULT: installed ${PVER}"
 exit 0

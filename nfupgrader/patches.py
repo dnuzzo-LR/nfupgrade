@@ -3,6 +3,7 @@
 No I/O: callers gather installed state and per-file rpm metadata and pass
 them to evaluate(), which decides which single patch may be installed next
 (strict sequence) and labels every other file with why it cannot be."""
+import json
 import re
 
 from nfupgrader import cfg, localinfo
@@ -138,6 +139,48 @@ def _highest(versions, generic=None):
     return max(versions, key=key) if versions else None
 
 
+#: netFLEX's web GUI version tool: prints the release (generic) and build
+#: (load) compiled into the web GUI (gui/src/web/webinfo.c).
+WEBINFO = "/web/bin/webinfo"
+
+
+def parse_webinfo(out):
+    """(release, int build) from `webinfo -j` output, or None if unreadable.
+    The build is compared as a number ("036" == 36)."""
+    try:
+        d = json.loads(out or "")
+        build = str(d["build"]).strip()
+        release = str(d["release"]).strip()
+    except (ValueError, KeyError, TypeError):
+        return None
+    if not release or not build.isdigit():
+        return None
+    return release, int(build)
+
+
+def web_status(host, installed, incroot="/usr/cnc"):
+    """The web GUI's version against the installed CORE/PATCH load:
+    {"web": "5.4.0.35", "expected": "5.4.0.36", "matches": False}. A patch
+    RPM does not carry the web GUI (it is a separate LINUXWEB64 tar), so the
+    two drift apart unless the tar is installed too. None when webinfo cannot
+    be run or read; expected/matches None when netFLEX-CORE is not installed."""
+    r = host.run([incroot + WEBINFO, "-j"])
+    web = parse_webinfo(r.out) if r.rc == 0 else None
+    if web is None:
+        return None
+    core = split_version(installed.get("core"))
+    load = current_load(installed)
+    if core is None or load is None:
+        return {"web": "{}.{}".format(*web), "expected": None, "matches": None}
+    return {"web": "{}.{}".format(*web), "expected": "{}.{}".format(core[0], load),
+            "matches": web == (core[0], load)}
+
+
+def installed_versions(host):
+    """The installed CORE/PATCH dict (see _read_installed), without IPATCH."""
+    return _read_installed(host)[0]
+
+
 def _read_installed(host):
     """Query rpm for installed CORE/PATCH versions. Returns the installed dict
     (core, core_arch, patch, current_load) and whether an IPATCH is present."""
@@ -211,4 +254,4 @@ def gather(host, dirs, stage_root="/usr/cnc_stage", incroot="/usr/cnc"):
                 rows = evaluate(installed, files, block, app_up)
             break
     return {"installed": installed, "host_block": block, "app_up": app_up,
-            "patches": rows}
+            "patches": rows, "web": web_status(host, installed, incroot)}

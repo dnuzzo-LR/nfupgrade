@@ -68,6 +68,19 @@ class TestApi(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.ctx = make_ctx(self.tmp)
 
+    def test_info_reports_web_gui_status(self):
+        self.ctx.host.responses[("rpm", "-q", "--qf", "%{VERSION} %{ARCH}\\n", "netFLEX-CORE")] = \
+            RunResult(0, "5.4.0.29 x86_64\n", "")
+        self.ctx.host.responses[("rpm", "-q", "--qf", "%{VERSION}\\n", "netFLEX-CORE-PATCH")] = \
+            RunResult(0, "5.4.0.36\n", "")
+        self.ctx.host.responses[("/usr/cnc/web/bin/webinfo", "-j")] = \
+            RunResult(0, '{ "release" : "5.4.0", "build" : "35"}\n', "")
+        status, _, body = api.dispatch("GET", "/api/info", {}, b"",
+                                       {"nfu_sid": self._session()}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body.decode())["web"],
+                         {"web": "5.4.0.35", "expected": "5.4.0.36", "matches": False})
+
     def _postflight(self, phase="upgrade"):
         status, _, body = api.dispatch(
             "GET", "/api/checks", {"when": ["postflight"], "phase": [phase]}, b"",

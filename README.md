@@ -512,6 +512,15 @@ installed) and Install is refused in preview mode.
   *Is netFLEX up?*), Install
   is disabled with "This patch requires netFLEX to be stopped — use the Boot
   menu tab". (Best-effort; the RPM's own refusal is the backstop.)
+- **Web GUI.** A patch RPM does **not** update the web GUI: that is a separate
+  `LINUXWEB64.rhel<N>.tar` from the same build, installed with `lwebsetup` (Support's
+  procedure: `tar -xvf`, `cmmperm`, `./lwebsetup`, save WEB GUI DataBase `y`, SAML
+  `n`). The tool reads the web GUI's version with `/usr/cnc/web/bin/webinfo -j` and,
+  when it is not the installed CORE/PATCH load, the Patches tab and Overview
+  (**Web GUI** row) say *Web GUI is 5.4.0.35 but netFLEX is at 5.4.0.36 — install the
+  matching LINUXWEB64 tar*. After an install, `nf_patch` logs the same comparison
+  (`INFO web GUI is … (matches)` or a `WARN`); it never changes the patch result.
+  Installing the tar is still manual.
 - **Not supported.** `IPATCH`, `INC` and `ATTEXT` patches are listed, marked not
   supported, and never installed.
 - **`nf_patch`.** `nf_patch -f <rpm> [-l <logdir>] [-n]`; `-n` checks only. The log
