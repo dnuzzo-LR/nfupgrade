@@ -10,8 +10,11 @@
 #     -h: show this help
 #
 # Runs as root, in the foreground. Every check runs before rpm is touched;
-# the patch then goes in with `rpm -Uvh` while netFLEX keeps running (the
-# patch's own scriptlets restart its processes).
+# the patch then goes in with `rpm -Uvh --replacepkgs --replacefiles` while
+# netFLEX keeps running (the patch's own scriptlets restart its processes).
+# --replacefiles is required: a patch overlays files owned by netFLEX-CORE, and
+# rpm refuses those conflicts without it. --replacepkgs matches the options
+# support uses for a manual patch install (and netFLEX's inc_upgrader).
 #
 # Rules (the same as nfupgrader/patches.py): NAME must be netFLEX-CORE-PATCH;
 # its generic and ARCH must match the installed netFLEX-CORE; sequence is
@@ -363,7 +366,7 @@ fi
 # --- install --------------------------------------------------------------------
 
 loginfo "Installing ${FILE}"
-run_logged rpm rpm -Uvh "${FILE}"
+run_logged rpm rpm -Uvh --replacepkgs --replacefiles "${FILE}"
 rc=$?
 [ ${rc} -eq 0 ] || fail "rpm -Uvh exited ${rc}"
 

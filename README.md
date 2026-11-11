@@ -370,7 +370,10 @@ installed) and Install is refused in preview mode.
   supported, and never installed.
 - **`nf_patch`.** `nf_patch -f <rpm> [-l <logdir>] [-n]`; `-n` checks only. The log
   directory is `-l`, else `$INCLOGDIR`, else `/usr/cnc/logs`. It re-runs the rules
-  above, then `rpm -Uvh`, then verifies the new version is reported. Exit codes:
+  above, then `rpm -Uvh --replacepkgs --replacefiles` (the options support uses
+  for a manual install; a patch overwrites files owned by
+  `netFLEX-CORE`; without the flag rpm refuses with "conflicts with file from
+  package" and exits 4), then verifies the new version is reported. Exit codes:
   `0` installed (or eligible with `-n`), `1` refused before rpm was touched, `2`
   rpm -Uvh failed or the post-install check did not show the new version. The trace is `<logdir>/patch_inc_<host>.<pid>`; its last line is
   `RESULT: installed <version>`, `RESULT: refused: <reason>` or

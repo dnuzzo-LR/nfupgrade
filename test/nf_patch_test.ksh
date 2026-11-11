@@ -121,7 +121,7 @@ f29=$(patchfile 5.4.1.29); patchfile 5.4.1.30 >/dev/null
 run_patch -f "${f29}"
 assert_rc    "first patch: rc" 0 "$rc"
 assert_match "first patch: result" 'INFO  RESULT: installed 5\.4\.1\.29$' "$(lastline)"
-assert_match "first patch: rpm -Uvh called" "^rpm -Uvh ${f29}\$" "$(cat "${SB}/calls")"
+assert_match "first patch: rpm -Uvh --replacepkgs --replacefiles called" "^rpm -Uvh --replacepkgs --replacefiles ${f29}\$" "$(cat "${SB}/calls")"
 assert_match "first patch: rpm output in trace" 'EXEC  \[rpm\] Preparing' "$(trace)"
 assert_eq    "first patch: trace file name" 1 "$(ls "${SB}"/logs/patch_inc_h1.* 2>/dev/null | wc -l | tr -d ' ')"
 
