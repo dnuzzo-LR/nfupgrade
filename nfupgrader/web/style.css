@@ -210,3 +210,6 @@ pre.lic-error { background: #fdecea; padding: .5rem .7rem; border-radius: 6px;
 .patch-table .hint { color: var(--muted); font-size: 12px; }
 .patch-msg, .patch-last { margin-top: .6rem; }
 .patch-last .bad { color: var(--err); }
+.patch-last .warn { color: var(--warn); }
+.patch-web-opt { margin-top: .3rem; font-weight: normal; color: var(--fg, inherit); }
+.patch-web-opt.greyed label { color: var(--muted); }

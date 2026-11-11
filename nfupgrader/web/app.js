@@ -609,6 +609,7 @@ var patchData = null;      // last /api/patches response
 var patchMsg = "";         // transient message under the table
 
 var PATCH_STOP_MSG = "This patch requires netFLEX to be stopped — use the Boot menu tab";
+var patchWebUnticked = {}; // web tar path -> true once the user unticked it (survives re-render)
 
 function patchStatusText(p, installed) {
   switch (p.status) {
@@ -681,6 +682,7 @@ function renderPatches(d) {
         html += " <button type='button' class='primary' data-patch='" + i + "'" +
           (off ? " disabled" : "") + ">Install</button>";
         if (p.needs_stop) html += "<div class='hint'>" + esc(PATCH_STOP_MSG) + "</div>";
+        if (p.web_tar !== undefined) html += patchWebOption(p, off);
       }
       html += "</td></tr>";
     });
@@ -688,6 +690,10 @@ function renderPatches(d) {
   }
   var box = document.getElementById("patch-table");
   box.innerHTML = html;
+  var cb = document.getElementById("patch-web-cb");
+  if (cb) cb.onchange = function () {
+    if (cb.value) patchWebUnticked[cb.value] = !cb.checked;
+  };
   var btns = box.querySelectorAll("button[data-patch]");
   for (var i = 0; i < btns.length; i++) {
     btns[i].onclick = (function (p) { return function () { installPatch(p); }; })(rows[btns[i].getAttribute("data-patch")]);
@@ -703,24 +709,52 @@ function renderPatches(d) {
   var lh = "";
   if (!d.running && last.result) {
     var bad = /RESULT: (refused|failed)/.test(last.result);
-    lh = "Last patch: <span class='" + (bad ? "bad" : "") + "'>" + esc(last.result.replace(/^.*RESULT:\s*/, "")) + "</span>";
+    // nf_patch exit 3: the patch is installed, only the web GUI step failed
+    var warn = !bad && /web GUI not updated/.test(last.result);
+    lh = "Last patch: <span class='" + (bad ? "bad" : warn ? "warn" : "") + "'>" +
+      esc(last.result.replace(/^.*RESULT:\s*/, "")) + "</span>";
     if (last.trace) {
       lh += "<div class='hint'>Trace: " + esc(last.trace) +
-        (bad ? " — send this file to support" : "") + "</div>";
+        (bad || warn ? " — send this file to support" : "") + "</div>";
     }
   }
   document.getElementById("patch-last").innerHTML = lh;
 }
 
+// The "Also install the web GUI" checkbox under the installable row: ticked
+// by default when the scan found the matching LINUXWEB64 tar beside the RPM,
+// greyed out (never installable) with the reason otherwise.
+function patchWebOption(p, off) {
+  var name = p.web_tar ? p.web_tar.replace(/^.*\//, "") : "";
+  var checked = p.web_tar && !patchWebUnticked[p.web_tar];
+  var h = "<div class='patch-web-opt" + (p.web_tar ? "" : " greyed") + "'><label>" +
+    "<input type='checkbox' id='patch-web-cb' value='" + esc(p.web_tar || "") + "'" +
+    (!p.web_tar || off ? " disabled" : "") + (checked ? " checked" : "") +
+    "> Also install the web GUI</label>";
+  h += "<div class='hint'>" + esc(p.web_tar ? name + " (web GUI " + p.version + ")"
+    : p.web_tar_note || "no web GUI tar found") + "</div></div>";
+  return h;
+}
+
 function installPatch(p) {
+  var cb = document.getElementById("patch-web-cb");
+  var web = !!(p.web_tar && cb && cb.checked);
+  var text = "netFLEX stays up, but its processes will be restarted. " +
+    "Installing " + p.name + " cannot be undone from this tool.";
+  if (web) {
+    text += " Then the web GUI is installed from " + p.web_tar.replace(/^.*\//, "") + ". " +
+      "Web users are disconnected while the web GUI is reinstalled (lwebsetup restarts the web processes). " +
+      "The web step can take several minutes.";
+  }
   showConfirm({
-    title: "Install patch " + p.version + " on " + thisHost() + "?",
+    title: "Install patch " + p.version + (web ? " and the web GUI" : "") + " on " + thisHost() + "?",
     ok: "Install patch",
-    body: "netFLEX stays up, but its processes will be restarted. " +
-      "Installing " + p.name + " cannot be undone from this tool."
+    body: text
   }, function () {
     patchMsg = "";
-    postJSON("/api/patches/install", { path: p.path }, function (status, body) {
+    var body = { path: p.path };
+    if (web) body.web = p.web_tar;
+    postJSON("/api/patches/install", body, function (status, body) {
       if (status === 202) patchInstalled(body);
       else {
         patchMsg = "Not installed: " + (body.error || "HTTP " + status);

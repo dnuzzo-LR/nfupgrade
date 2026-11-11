@@ -506,17 +506,33 @@ class TestPatchSideEffect(unittest.TestCase):
         self.addCleanup(popen.finish)
         ctx = launch_ctx(self.tmp)._replace(state={"phase": "stage"}, nf_patch_path="/o/nf_patch")
 
-        def perform(c, rpm):
+        def perform(c, rpm, web_tar=None):
             calls.append(rpm)
             return popen
         status, body = httpd.patch_side_effect(ctx, "ip", "/d/p.rpm", version="5.4.1", perform=perform)
         self.assertEqual((status, body), (202, {"accepted": True, "path": "/d/p.rpm"}))
         self.assertEqual(calls, ["/d/p.rpm"])
         self.assertEqual(ctx.state["patch_job"], {"popen": popen, "path": "/d/p.rpm",
-                                                  "version": "5.4.1", "client": "ip"})
+                                                  "version": "5.4.1", "client": "ip",
+                                                  "web": None})
         self.assertEqual(ctx.state["log_follow"], "patch")
         self.assertEqual(ctx.state["phase"], "stage")
         self.assertFalse(api.fix_in_progress())
+
+    def test_patch_side_effect_passes_web(self):
+        calls = []
+        popen = BlockingPopen(0)
+        self.addCleanup(popen.finish)
+        ctx = launch_ctx(self.tmp)._replace(state={}, nf_patch_path="/o/nf_patch")
+
+        def perform(c, rpm, web_tar=None):
+            calls.append((rpm, web_tar))
+            return popen
+        status, body = httpd.patch_side_effect(ctx, "ip", "/d/p.rpm", version="5.4.1",
+                                               perform=perform, web_tar="/d/W.rhel8.tar")
+        self.assertEqual(status, 202)
+        self.assertEqual(calls, [("/d/p.rpm", "/d/W.rhel8.tar")])
+        self.assertEqual(ctx.state["patch_job"]["web"], "/d/W.rhel8.tar")
 
     def test_exit_is_reaped_and_audited_without_a_patches_request(self):
         # nf_patch must be waited for as soon as it exits, or it lingers as a
@@ -525,7 +541,7 @@ class TestPatchSideEffect(unittest.TestCase):
         self.addCleanup(popen.finish)
         ctx = launch_ctx(self.tmp)._replace(state={}, nf_patch_path="/o/nf_patch")
         status, _ = httpd.patch_side_effect(ctx, "ip", "/d/p.rpm", version="5.4.1",
-                                            perform=lambda c, r: popen)
+                                            perform=lambda c, r, web_tar=None: popen)
         self.assertEqual(status, 202)
         popen.finish()
         deadline = time.time() + 5
@@ -543,7 +559,7 @@ class TestPatchSideEffect(unittest.TestCase):
         self.assertTrue(api._FIX_LOCK.acquire(False))
         try:
             status, body = httpd.patch_side_effect(ctx, "ip", "/d/p.rpm",
-                                                   perform=lambda c, r: self.fail("spawned"))
+                                                   perform=lambda c, r, web_tar=None: self.fail("spawned"))
         finally:
             api._FIX_LOCK.release()
         self.assertEqual((status, body), (409, {"error": "another action is running"}))
@@ -555,13 +571,13 @@ class TestPatchSideEffect(unittest.TestCase):
                          ("cat", "/proc/5/cmdline"): RunResult(0, "nf_patch\0-f\0x\0", "")})
         ctx = launch_ctx(self.tmp, host=host)._replace(state={})
         status, body = httpd.patch_side_effect(ctx, "ip", "/d/p.rpm",
-                                               perform=lambda c, r: self.fail("spawned"))
+                                               perform=lambda c, r, web_tar=None: self.fail("spawned"))
         self.assertEqual(status, 409)
         self.assertEqual(self._refused()[0]["reason"], "another action is running")
         self.assertFalse(api.fix_in_progress())
 
     def test_spawn_failure_is_500_and_audited(self):
-        def perform(c, rpm):
+        def perform(c, rpm, web_tar=None):
             raise OSError("boom")
         ctx = launch_ctx(self.tmp)._replace(state={})
         status, body = httpd.patch_side_effect(ctx, "ip", "/d/p.rpm", perform=perform)
@@ -589,7 +605,7 @@ class TestPatchSideEffect(unittest.TestCase):
                 return True
         ctx = launch_ctx(self.tmp)._replace(state={"bootmenu": Running()})
         status, body = httpd.patch_side_effect(ctx, "ip", "/d/p.rpm",
-                                               perform=lambda c, r: self.fail("spawned"))
+                                               perform=lambda c, r, web_tar=None: self.fail("spawned"))
         self.assertEqual((status, body), (409, {"error": "the boot menu is open"}))
         ref = self._refused()
         self.assertEqual(len(ref), 1)
@@ -603,7 +619,7 @@ class TestPatchSideEffect(unittest.TestCase):
                 return True
         ctx = launch_ctx(self.tmp, runner=Busy())._replace(state={})
         status, body = httpd.patch_side_effect(ctx, "ip", "/d/p.rpm",
-                                               perform=lambda c, r: self.fail("spawned"))
+                                               perform=lambda c, r, web_tar=None: self.fail("spawned"))
         self.assertEqual((status, body), (409, {"error": "report snapshot in progress"}))
         self.assertEqual(len(self._refused()), 1)
 
@@ -611,17 +627,18 @@ class TestPatchSideEffect(unittest.TestCase):
         seen = []
 
         def disp(method, path, query, body, cookies, ip, ctx):
-            out = json.dumps({"accepted": True, "path": "/d/p.rpm", "version": "5.4.1"}).encode()
+            out = json.dumps({"accepted": True, "path": "/d/p.rpm", "version": "5.4.1",
+                              "web": "/d/W.rhel8.tar"}).encode()
             return 202, [], out
 
-        def patch(ctx, ip, path, version=None):
-            seen.append((path, version))
+        def patch(ctx, ip, path, version=None, web_tar=None):
+            seen.append((path, version, web_tar))
             return 202, {"accepted": True, "path": path}
         ctx = launch_ctx(self.tmp)
         status, headers, out = httpd.safe_dispatch(
             "POST", "/api/patches/install", {}, b"{}", {}, "ip", ctx, dispatch=disp, patch=patch)
         self.assertEqual(status, 202)
-        self.assertEqual(seen, [("/d/p.rpm", "5.4.1")])
+        self.assertEqual(seen, [("/d/p.rpm", "5.4.1", "/d/W.rhel8.tar")])
         self.assertEqual(json.loads(out.decode()), {"accepted": True, "path": "/d/p.rpm"})
 
     def test_stage_launch_and_reset_clear_log_follow(self):

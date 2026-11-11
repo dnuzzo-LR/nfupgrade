@@ -353,6 +353,37 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn('showTab("log")', self._fn("patchInstalled"))
         self.assertIn("esc(", self._fn("renderPatches"))
 
+    def test_patch_web_checkbox(self):
+        self.assertIn("patchWebOption(p, off)", self._fn("renderPatches"))
+        fn = self._fn("patchWebOption")
+        self.assertIn("id='patch-web-cb'", fn)
+        self.assertIn("Also install the web GUI", fn)
+        self.assertIn("p.web_tar_note", fn)
+        # greyed (disabled) without a matching tar, ticked by default with one
+        self.assertRegex(fn, r"!p\.web_tar[^;]*disabled")
+        self.assertRegex(fn, r"p\.web_tar[^;]*checked")
+
+    def test_patch_install_posts_web(self):
+        fn = self._fn("installPatch")
+        self.assertIn('getElementById("patch-web-cb")', fn)
+        self.assertIn(".checked", fn)
+        self.assertRegex(fn, r"body\.web = p\.web_tar")
+        self.assertIn('postJSON("/api/patches/install", body', fn)
+
+    def test_patch_confirm_mentions_web_disconnect(self):
+        fn = self._fn("installPatch")
+        self.assertIn("Web users are disconnected while the web GUI is reinstalled "
+                      "(lwebsetup restarts the web processes).", fn)
+        self.assertIn("The web step can take several minutes.", fn)
+
+    def test_patch_last_result_web_warning(self):
+        fn = self._fn("renderPatches")
+        self.assertIn("/web GUI not updated/", fn)
+        self.assertIn('"warn"', fn)
+        self.assertIn("send this file to support", fn)
+        self.assertRegex(self.css, r"\.patch-last \.warn")
+        self.assertRegex(self.css, r"\.patch-web-opt")
+
     def test_license_tab_button_and_panel(self):
         self.assertIn('<button class="tab" data-tab="license">License</button>', self.html)
         panel = self.html.split('id="tab-license"', 1)[1].split("</section>", 1)[0]

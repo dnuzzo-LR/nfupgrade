@@ -108,6 +108,13 @@ class TestLauncher(unittest.TestCase):
         self.assertEqual(launcher.build_patch_argv("/o/nf_patch", "/d/p.rpm", "/l"),
                          ["/o/nf_patch", "-f", "/d/p.rpm", "-l", "/l"])
 
+    def test_build_patch_argv_with_web(self):
+        self.assertEqual(
+            launcher.build_patch_argv("/o/nf_patch", "/d/p.rpm", "/logs",
+                                      web_tar="/d/LINUXWEB64.29.rhel8.tar"),
+            ["/o/nf_patch", "-f", "/d/p.rpm", "-l", "/logs",
+             "-w", "/d/LINUXWEB64.29.rhel8.tar"])
+
 
 if __name__ == "__main__":
     unittest.main()

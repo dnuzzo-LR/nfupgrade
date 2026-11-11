@@ -220,9 +220,11 @@ def launch_side_effect(ctx, mode, ip, perform=None, begin=None, action=None, per
         api._FIX_LOCK.release()
 
 
-def perform_patch(ctx, rpm_path):
-    """Spawn nf_patch for one rpm, logging into the upgrade log directory."""
-    return launcher.launch_patch(ctx.nf_patch_path, rpm_path, api.upgrade_logdir(ctx))
+def perform_patch(ctx, rpm_path, web_tar=None):
+    """Spawn nf_patch for one rpm (and web GUI tar), logging into the upgrade
+    log directory."""
+    return launcher.launch_patch(ctx.nf_patch_path, rpm_path, api.upgrade_logdir(ctx),
+                                 web_tar)
 
 
 def watch_patch_job(ctx, popen):
@@ -240,7 +242,7 @@ def watch_patch_job(ctx, popen):
     return t
 
 
-def patch_side_effect(ctx, ip, rpm_path, version=None, perform=None):
+def patch_side_effect(ctx, ip, rpm_path, version=None, perform=None, web_tar=None):
     """Carry out an accepted POST /api/patches: spawn nf_patch under
     api._FIX_LOCK (non-blocking; busy -> 409), re-checking under the lock, as
     launch_side_effect does, that the boot menu is not open, no report snapshot
@@ -265,7 +267,7 @@ def patch_side_effect(ctx, ip, rpm_path, version=None, perform=None):
         if launcher.anything_running(ctx.host):
             return refused("another action is running")
         try:
-            popen = perform(ctx, rpm_path)
+            popen = perform(ctx, rpm_path, web_tar=web_tar)
         except Exception as e:
             ctx.audit.record("patch_install_failed", path=rpm_path, version=version,
                              client=ip, error=str(e))
@@ -273,7 +275,7 @@ def patch_side_effect(ctx, ip, rpm_path, version=None, perform=None):
             return 500, {"error": "launch failed: {}".format(e)}
         if isinstance(ctx.state, dict):
             ctx.state["patch_job"] = {"popen": popen, "path": rpm_path,
-                                      "version": version, "client": ip}
+                                      "version": version, "client": ip, "web": web_tar}
             ctx.state["log_follow"] = "patch"
             watch_patch_job(ctx, popen)
         return 202, {"accepted": True, "path": rpm_path}
@@ -354,7 +356,8 @@ def safe_dispatch(method, path, query, body, cookies, ip, ctx, dispatch=None, la
             status, headers, out = _json_response(status, obj)
         elif path == "/api/patches/install" and status == 202:
             accepted = json.loads(out.decode("utf-8"))
-            status, obj = patch(ctx, ip, accepted.get("path"), version=accepted.get("version"))
+            status, obj = patch(ctx, ip, accepted.get("path"), version=accepted.get("version"),
+                                web_tar=accepted.get("web"))
             status, headers, out = _json_response(status, obj)
         elif path == "/api/install/reset" and status == 202:
             status, obj = reset(ctx, ip)

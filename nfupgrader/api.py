@@ -520,6 +520,13 @@ def _license_dispatch(method, path, body, client_ip, ctx):
 _PATCH_JOB_LOCK = threading.Lock()
 
 
+def nf_webbuild_path(ctx):
+    """nf_webbuild ships beside nf_patch; None (no web tar scan) without one."""
+    if not ctx.nf_patch_path:
+        return None
+    return os.path.join(os.path.dirname(ctx.nf_patch_path), "nf_webbuild")
+
+
 def _patch_job_completion(ctx):
     """If a patch job spawned by this service has exited, audit its outcome once
     and forget it. Never puts the Popen handle anywhere but ctx.state. Called by
@@ -536,7 +543,14 @@ def _patch_job_completion(ctx):
         del st["patch_job"]
     if rc == 0:
         ctx.audit.record("patch_install_done", path=job.get("path"),
-                         version=job.get("version"), client=job.get("client"))
+                         version=job.get("version"), web=job.get("web"),
+                         client=job.get("client"))
+    elif rc == 3:
+        # nf_patch: the RPM is installed, only the web GUI step failed.
+        ctx.audit.record("patch_install_web_failed", rc=rc,
+                         trace=logtail.latest_trace(upgrade_logdir(ctx), "patch", ctx.hostname),
+                         path=job.get("path"), version=job.get("version"),
+                         web=job.get("web"), client=job.get("client"))
     else:
         ctx.audit.record("patch_install_failed", rc=rc,
                          trace=logtail.latest_trace(upgrade_logdir(ctx), "patch", ctx.hostname),
@@ -1049,7 +1063,7 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
             unavailable = "preview mode"
         elif host_mode(ctx) == "install":
             unavailable = "netFLEX is not installed"
-        out = patches.gather(ctx.host, ctx.depot_dirs)
+        out = patches.gather(ctx.host, ctx.depot_dirs, webbuild=nf_webbuild_path(ctx))
         trace = logtail.latest_trace(upgrade_logdir(ctx), "patch", ctx.hostname)
         result = None
         try:
@@ -1074,6 +1088,9 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         want = payload.get("path")
         if not isinstance(want, str) or not want:
             return _json(400, {"error": "path required"})
+        web = payload.get("web")
+        if web is not None and (not isinstance(web, str) or not web):
+            return _json(400, {"error": "web must be a tar path"})
         if preview_scenario(ctx):
             return _json(409, {"error": "preview mode"})
         if host_mode(ctx) == "install":
@@ -1099,7 +1116,8 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         if launcher.script_running(ctx.host, "nf_upgrade"):
             return _json(409, {"error": "an upgrade is running (nf_upgrade)"})
         # Only a path the depot scan itself produced is ever handed to nf_patch.
-        rows = patches.gather(ctx.host, ctx.depot_dirs).get("patches", [])
+        rows = patches.gather(ctx.host, ctx.depot_dirs,
+                              webbuild=nf_webbuild_path(ctx)).get("patches", [])
         row = None
         for r in rows:
             if r.get("path") == want:
@@ -1110,9 +1128,16 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
             ctx.audit.record("patch_install_refused", path=want, reason=reason,
                              client=client_ip)
             return _json(400, {"error": reason})
+        # Likewise the web GUI tar: only the scan's matching tar for this row.
+        if web is not None and web != row.get("web_tar"):
+            reason = "web GUI tar is not the matching one for {}".format(row.get("version"))
+            ctx.audit.record("patch_install_refused", path=want, web=web, reason=reason,
+                             client=client_ip)
+            return _json(409, {"error": reason})
         ctx.audit.record("patch_install_started", path=want, version=row.get("version"),
-                         client=client_ip)
+                         web=web, client=client_ip)
         # httpd (patch_side_effect) spawns nf_patch from this 202.
-        return _json(202, {"accepted": True, "path": want, "version": row.get("version")})
+        return _json(202, {"accepted": True, "path": want, "version": row.get("version"),
+                           "web": web})
 
     return _json(404, {"error": "not found"})

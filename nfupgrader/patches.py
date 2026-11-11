@@ -176,6 +176,87 @@ def web_status(host, installed, incroot="/usr/cnc"):
             "matches": web == (core[0], load)}
 
 
+_VERSION_ID_RE = re.compile(r'^VERSION_ID="?(\d+)', re.M)
+
+#: nf_webbuild results, keyed (path, size, mtime): the Patches tab polls every
+#: few seconds and unpacking a web tar's lwebdata.Z is not cheap.
+_TAR_BUILDS = {}
+
+
+def rhel_major(host):
+    """The RHEL major ("8") from /etc/os-release VERSION_ID, or None."""
+    r = host.run(["cat", "/etc/os-release"])
+    m = _VERSION_ID_RE.search(r.out) if r.rc == 0 else None
+    return m.group(1) if m else None
+
+
+def web_tar_candidates(host, rpm_dir, major):
+    """LINUXWEB*.tar paths at the top of rpm_dir that are for this RHEL major
+    (name has ".rhel<major>."), excluding ATT tars, sorted by name. Nothing
+    inside a tar records its RHEL major, so the name is the only source."""
+    if not major:
+        return []
+    r = host.run(["find", rpm_dir, "-maxdepth", "1", "-name", "LINUXWEB*.tar"])
+    if r.rc != 0:
+        return []
+    tag = ".rhel{}.".format(major)
+    names = [ln.strip() for ln in r.out.splitlines() if ln.strip()]
+    keep = [n for n in names
+            if "ATT" not in n.rsplit("/", 1)[-1] and tag in n.rsplit("/", 1)[-1]]
+    return sorted(keep, key=lambda x: x.rsplit("/", 1)[-1])
+
+
+def read_tar_build(host, path, webbuild):
+    """(release, int build) of the web GUI inside the tar at path, via
+    nf_webbuild (the tar's own webinfo -j); None if it cannot be read. The
+    file name is never trusted for the build."""
+    st = host.run(["stat", "-c", "%s %Y", path])
+    if st.rc != 0:
+        return None
+    key = (path, st.out.strip())
+    if key in _TAR_BUILDS:
+        return _TAR_BUILDS[key]
+    r = host.run([webbuild, path], timeout=120)
+    build = parse_webinfo(r.out) if r.rc == 0 else None
+    _TAR_BUILDS[key] = build
+    return build
+
+
+_NUMBERED_RE = re.compile(r'^LINUXWEB64\.\d+\.rhel')
+
+
+def pick_web_tar(version, tars):
+    """Choose the tar to install with patch `version` from [(path, build)]
+    (build = (release, int) or None). Returns (path, None) for a match --
+    preferring a numbered name (LINUXWEB64.<n>.rhel...), else the first by
+    name -- or (None, note) saying why none can be installed."""
+    want = split_version(version)
+    named = sorted(tars, key=lambda t: t[0].rsplit("/", 1)[-1])
+    match = [t[0] for t in named if want is not None and t[1] == want]
+    if match:
+        numbered = [m for m in match if _NUMBERED_RE.match(m.rsplit("/", 1)[-1])]
+        return (numbered or match)[0], None
+    found = []
+    for _, b in named:
+        if b is not None and "{}.{}".format(*b) not in found:
+            found.append("{}.{}".format(*b))
+    if found:
+        return None, "no web GUI tar for {} found (found: {})".format(version, ", ".join(found))
+    if named:
+        return None, "could not read the web GUI build from {}".format(
+            ", ".join(t[0].rsplit("/", 1)[-1] for t in named))
+    return None, "no web GUI tar for {} found".format(version)
+
+
+def _web_tar_fields(host, row, webbuild):
+    """web_tar / web_tar_note for the installable row: only tars beside its RPM."""
+    rpm_dir = row["path"].rsplit("/", 1)[0] or "/"
+    paths = web_tar_candidates(host, rpm_dir, rhel_major(host))
+    tar, note = pick_web_tar(row["version"],
+                             [(t, read_tar_build(host, t, webbuild)) for t in paths])
+    row["web_tar"], row["web_tar_note"] = tar, note
+
+
 def installed_versions(host):
     """The installed CORE/PATCH dict (see _read_installed), without IPATCH."""
     return _read_installed(host)[0]
@@ -217,11 +298,13 @@ def _read_file(host, path):
     return row
 
 
-def gather(host, dirs, stage_root="/usr/cnc_stage", incroot="/usr/cnc"):
+def gather(host, dirs, stage_root="/usr/cnc_stage", incroot="/usr/cnc", webbuild=None):
     """Collect installed state and depot patch files, then evaluate them.
 
     Returns {"installed", "host_block", "app_up", "patches"}. REBOOT_LOADS is
-    read (rpm -qp --scripts) only for the one row that is installable."""
+    read (rpm -qp --scripts) only for the one row that is installable. With
+    webbuild (path of nf_webbuild), that row also gets web_tar (the matching
+    web GUI tar beside its RPM, or None) and web_tar_note (why none)."""
     installed, ipatch = _read_installed(host)
     if installed["core"] is None:
         block = "netFLEX-CORE is not installed"
@@ -253,5 +336,9 @@ def gather(host, dirs, stage_root="/usr/cnc_stage", incroot="/usr/cnc"):
                 files[i]["reboot_loads"] = parse_reboot_loads(r.out)
                 rows = evaluate(installed, files, block, app_up)
             break
+    if webbuild:
+        for row in rows:
+            if row["status"] == "installable":
+                _web_tar_fields(host, row, webbuild)
     return {"installed": installed, "host_block": block, "app_up": app_up,
             "patches": rows, "web": web_status(host, installed, incroot)}

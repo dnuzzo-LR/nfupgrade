@@ -16,9 +16,17 @@ ROW_BAD = dict(ROW_OK, path="/depot/old.rpm", status="not_applicable", reason="t
 ROW_STOP = dict(ROW_OK, path="/depot/stop.rpm", needs_stop=True, reason="stop netFLEX")
 
 
+WEB = "/depot/LINUXWEB64.29.rhel8.tar"
+GATHER_KW = []
+
+
 def fake_gather(*a, **k):
+    GATHER_KW.append(k)
+    ok = dict(ROW_OK)
+    if k.get("webbuild"):
+        ok.update(web_tar=WEB, web_tar_note=None)
     return {"installed": {"current_load": "inc54.029"}, "host_block": None,
-            "app_up": False, "patches": [dict(ROW_OK), dict(ROW_BAD), dict(ROW_STOP)]}
+            "app_up": False, "patches": [ok, dict(ROW_BAD), dict(ROW_STOP)]}
 
 
 class FakePopen(object):
@@ -33,7 +41,7 @@ class TestPatchesApi(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp, True)
-        self.ctx = make_ctx(self.tmp, running=False)
+        self.ctx = make_ctx(self.tmp, running=False)._replace(nf_patch_path="/o/nf_patch")
         self.ctx.host.responses[("pgrep", "-f", "nf_patch")] = RunResult(1, "", "")
         self.ctx.host.responses[("pgrep", "-f", "nf_install")] = RunResult(1, "", "")
         self.sid = self.ctx.auth.redeem("TOK", "127.0.0.1")
@@ -91,8 +99,38 @@ class TestPatchesApi(unittest.TestCase):
         st, b = self.call("POST", "/api/patches/install", {"path": ROW_OK["path"]})
         self.assertEqual(st, 202)
         self.assertEqual(b, {"accepted": True, "path": ROW_OK["path"],
-                             "version": ROW_OK["version"]})
+                             "version": ROW_OK["version"], "web": None})
         self.assertIn("patch_install_started", self.audit())
+
+    def test_get_and_post_scan_with_nf_webbuild(self):
+        del GATHER_KW[:]
+        st, b = self.call("GET", "/api/patches")
+        self.assertEqual(b["patches"][0]["web_tar"], WEB)
+        self.call("POST", "/api/patches/install", {"path": ROW_OK["path"]})
+        want = "/o/nf_webbuild"
+        self.assertEqual(api.nf_webbuild_path(self.ctx), want)
+        self.assertIsNone(api.nf_webbuild_path(self.ctx._replace(nf_patch_path=None)))
+        self.assertEqual([k.get("webbuild") for k in GATHER_KW], [want, want])
+
+    def test_install_with_matching_web_accepted(self):
+        st, b = self.call("POST", "/api/patches/install", {"path": ROW_OK["path"], "web": WEB})
+        self.assertEqual(st, 202)
+        self.assertEqual(b["web"], WEB)
+        started = [json.loads(l) for l in self.audit().splitlines()
+                   if json.loads(l)["event"] == "patch_install_started"]
+        self.assertEqual(started[0]["web"], WEB)
+
+    def test_install_with_other_web_refused(self):
+        other = "/depot/LINUXWEB64.rhel8.tar"
+        st, b = self.call("POST", "/api/patches/install", {"path": ROW_OK["path"], "web": other})
+        self.assertEqual(st, 409)
+        self.assertEqual(b["error"], "web GUI tar is not the matching one for 5.4.0.29-3")
+        self.assertIn("patch_install_refused", self.audit())
+        self.assertNotIn("patch_install_started", self.audit())
+
+    def test_install_web_must_be_string(self):
+        st, b = self.call("POST", "/api/patches/install", {"path": ROW_OK["path"], "web": 5})
+        self.assertEqual(st, 400)
 
     def test_post_bad_requests(self):
         body = b"not json"
@@ -168,6 +206,17 @@ class TestPatchesApi(unittest.TestCase):
         self.call("GET", "/api/patches")
         self.assertEqual(self.audit().count("patch_install_failed"), 1)
         self.assertIn('"rc": 2', self.audit())
+
+    def test_completion_rc3_audited(self):
+        self.ctx.state["patch_job"] = {"popen": FakePopen(3), "path": ROW_OK["path"],
+                                       "version": "5.4.0.29-3", "client": "1.2.3.4",
+                                       "web": WEB}
+        self.call("GET", "/api/patches")
+        recs = [json.loads(l) for l in self.audit().splitlines()]
+        web_failed = [r for r in recs if r["event"] == "patch_install_web_failed"]
+        self.assertEqual(len(web_failed), 1)
+        self.assertEqual((web_failed[0]["rc"], web_failed[0]["web"]), (3, WEB))
+        self.assertFalse([r for r in recs if r["event"] == "patch_install_failed"])
 
     def test_completion_ok_and_still_running(self):
         self.ctx.state["patch_job"] = {"popen": FakePopen(None), "path": "p",

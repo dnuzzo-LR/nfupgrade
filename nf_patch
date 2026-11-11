@@ -2,9 +2,10 @@
 #
 # nf_patch — guarded install of a netFLEX-CORE-PATCH RPM on the local host.
 #
-#   Usage: nf_patch -f <patch rpm> [-l <log dir>] [-n] [-h]
+#   Usage: nf_patch -f <patch rpm> [-w <web tar>] [-l <log dir>] [-n] [-h]
 #
 #     -f: the patch RPM file to install
+#     -w: also install this web GUI tar (LINUXWEB64...rhel<N>.tar) after it
 #     -l: log dir for the trace (default $INCLOGDIR, else /usr/cnc/logs)
 #     -n: check only - exit 0 if the patch could be installed now
 #     -h: show this help
@@ -33,16 +34,30 @@
 # AT/sdi/dacs/screen/arm/bill/dump process (boot_nms's own rule), so a stale
 # .CNC_UP left by a forced stop does not block it.
 #
-# After installing, the web GUI's version (${INCROOT}/web/bin/webinfo -j) is
-# compared with the patch: a patch RPM does not carry the web GUI (that is the
-# separate LINUXWEB64 tar), so a mismatch is logged as a WARN line telling the
-# user to install the matching tar. It never changes the result.
+# A patch RPM does not carry the web GUI (that is the separate LINUXWEB64 tar).
+# Without -w, the web GUI's version (${INCROOT}/web/bin/webinfo -j) is compared
+# with the patch after installing; a mismatch is logged as a WARN line telling
+# the user to install the matching tar. It never changes the result.
+#
+# With -w <tar>, the tar is checked with the others, before rpm: it must be in
+# the same directory as the RPM, not an ATT tar, named .rhel<M>. for this RHEL
+# major (${NFP_OS_RELEASE:-/etc/os-release} VERSION_ID), and the build inside it
+# (nf_webbuild: the tar's own webinfo -j, never its name) must equal the patch.
+# After the RPM it is installed as Support does by hand: unpack in
+# ${INCROOT}/webfloppy, ./lwebsetup -r ${INCROOT} (answers: save the WEB GUI
+# DataBase y, SAML n), su cmm -c cmmperm, then webinfo -j must equal the patch.
+# lwebsetup exits 0 even on its errors, so the step failed when its output has
+# an "ERROR:" line or lacks "Installation Complete!". No timeout: killing
+# lwebsetup part-way would leave the web GUI half installed.
 #
 # Trace: ${logdir}/patch_inc_${HOSTNAME}.<pid>. Its last line is always one of
 #   INFO  RESULT: installed <version>     (exit 0)
+#   INFO  RESULT: installed <version> (web GUI <version>)   (exit 0, -w)
 #   INFO  RESULT: eligible <version>      (exit 0, -n)
 #   ERROR RESULT: refused: <reason>       (exit 1, rpm never invoked)
 #   ERROR RESULT: failed: <reason>        (exit 2, rpm -ivh or verify failed)
+#   WARN  RESULT: installed <version>; web GUI not updated: <reason>
+#                                         (exit 3, -w: RPM in, web step failed)
 #
 # Loads are compared as decimal integers with leading zeros stripped ("08"
 # would be invalid octal in shell arithmetic).
@@ -67,13 +82,16 @@ PROG=${0##*/}
 # Roots: overridable so the test suite can run in a sandbox.
 INCROOT=${NFP_INCROOT:-/usr/cnc}
 STAGEROOT=${NFP_STAGEROOT:-/usr/cnc_stage}
+OS_RELEASE=${NFP_OS_RELEASE:-/etc/os-release}
+WEBBUILD="$(dirname "$0")/nf_webbuild"
 
 SUPPORTED_PKG=netFLEX-CORE-PATCH
 
 function print_usage
 {
-	print -u2 "Usage: ${PROG} -f <patch rpm> [-l <log dir>] [-n] [-h]"
+	print -u2 "Usage: ${PROG} -f <patch rpm> [-w <web tar>] [-l <log dir>] [-n] [-h]"
 	print -u2 "   -f: patch RPM file to install"
+	print -u2 "   -w: also install this web GUI tar (same directory, same build)"
 	print -u2 "   -l: log dir (default \$INCLOGDIR, else /usr/cnc/logs)"
 	print -u2 "   -n: check only, do not install"
 	print -u2 "   -h: show this help"
@@ -117,29 +135,109 @@ function app_state
 # Never fails the patch.
 function web_check
 {
-	typeset w out rel build
+	typeset w
 	w="${INCROOT}/web/bin/webinfo"
 	if [ ! -x "${w}" ]
 	then
 		logwarn "web GUI version not checked (${w} not found)"
 		return
 	fi
-	out=$("${w}" -j 2>/dev/null)
-	rel=$(print -r -- "${out}" | sed -n 's/.*"release" *: *"\([^"]*\)".*/\1/p')
-	build=$(print -r -- "${out}" | sed -n 's/.*"build" *: *"\([0-9][0-9]*\)".*/\1/p')
-	if [ -z "${rel}" -o -z "${build}" ]
-	then
+	parse_webinfo "$("${w}" -j 2>/dev/null)" || {
 		logwarn "web GUI version not checked (could not read ${w} -j)"
 		return
-	fi
-	# numeric compare: "029" is load 29 (expr, not $((...)), which reads 0NN as octal)
-	build=$(expr "${build}" + 0)
-	if [ "${rel}" = "${PVER%.*}" -a "${build}" = "$(expr "${PVER##*.}" + 0)" ]
+	}
+	if [ "${WEBVER}" = "${PGEN}.${PLOAD}" ]
 	then
-		loginfo "web GUI is ${rel}.${build} (matches)"
+		loginfo "web GUI is ${WEBVER} (matches)"
 	else
-		logwarn "web GUI is ${rel}.${build} but the patch is ${PVER} - install the matching LINUXWEB64 tar (lwebsetup)"
+		logwarn "web GUI is ${WEBVER} but the patch is ${PVER} - install the matching LINUXWEB64 tar (lwebsetup)"
 	fi
+}
+
+# parse_webinfo <webinfo -j output> — set WEBVER to "<release>.<build>" with
+# the build as a decimal ("029" -> 29, so it compares with ${PGEN}.${PLOAD});
+# returns 1 when the output cannot be read.
+function parse_webinfo
+{
+	typeset rel build
+	WEBVER=""
+	rel=$(print -r -- "$1" | sed -n 's/.*"release" *: *"\([^"]*\)".*/\1/p')
+	build=$(print -r -- "$1" | sed -n 's/.*"build" *: *"\([0-9][0-9]*\)".*/\1/p')
+	[ -n "${rel}" -a -n "${build}" ] || return 1
+	WEBVER="${rel}.$(dec "${build}")"
+	return 0
+}
+
+# webtar_check — the -w tar's checks, before rpm (each refusal exits 1).
+function webtar_check
+{
+	typeset name fdir wdir major out
+	name=${WEB##*/}
+	[ -f "${WEB}" -a -r "${WEB}" ] || refuse "cannot read ${WEB}"
+	fdir=$(cd "$(dirname "${FILE}")" && pwd)
+	wdir=$(cd "$(dirname "${WEB}")" && pwd)
+	[ "${wdir}" = "${fdir}" ] \
+		|| refuse "web GUI tar must be in ${fdir} (beside the patch RPM), not ${wdir}"
+	case "${name}" in
+	*ATT*) refuse "ATT web GUI tars are not supported (${name})" ;;
+	esac
+	major=$(sed -n 's/^VERSION_ID="\{0,1\}\([0-9][0-9]*\).*/\1/p' "${OS_RELEASE}" 2>/dev/null | sed -n 1p)
+	[ -n "${major}" ] || refuse "cannot read the RHEL version (VERSION_ID) from ${OS_RELEASE}"
+	case "${name}" in
+	*.rhel${major}.*) ;;
+	*) refuse "web GUI tar is not for RHEL ${major}: ${name}" ;;
+	esac
+	"${WEBBUILD}" "${WEB}" > "${TMP}" 2> "${TMP}.err"
+	if [ $? -ne 0 ]
+	then
+		refuse "cannot read the web GUI build from ${name} ($(sed -n 1p "${TMP}.err"))"
+	fi
+	parse_webinfo "$(cat "${TMP}")" \
+		|| refuse "cannot read the web GUI build from ${name} (webinfo -j: $(sed -n 1p "${TMP}"))"
+	[ "${WEBVER}" = "${PGEN}.${PLOAD}" ] \
+		|| refuse "web GUI tar ${name} is ${WEBVER}, not ${PVER}"
+	loginfo "web GUI tar ${name} is ${WEBVER} (matches)"
+}
+
+# webgui_install <reason file> — install the -w tar after the RPM. Run in a
+# subshell (it cds); on failure writes the reason to <reason file>, exit 1.
+# stdout is the trace, which is why the reason goes to a file.
+function webgui_install
+{
+	typeset why="$1" wf out rc e
+	wf="${INCROOT}/webfloppy"
+	out="${TMP}.lweb"
+	rm -rf "${wf}"
+	mkdir -p "${wf}" && cd "${wf}" || { print -r -- "cannot create ${wf}" > "${why}"; exit 1; }
+	loginfo "Installing web GUI from ${WEB}"
+	run_logged webtar tar xf "${WEB}"
+	rc=$?
+	[ ${rc} -eq 0 ] || { print -r -- "tar xf exited ${rc}" > "${why}"; exit 1; }
+	# lwebsetup asks: save the current WEB GUI DataBase (y), install SAML (n)
+	print 'y\nn' > "${TMP}.ans"
+	run_logged lwebsetup ./lwebsetup -r "${INCROOT}" < "${TMP}.ans" > "${out}"
+	rc=$?
+	cat "${out}"
+	e=$(sed -n 's/^.* EXEC  \[lwebsetup\] \(ERROR:.*\)$/\1/p' "${out}" | sed -n 1p)
+	[ -z "${e}" ] || { print -r -- "lwebsetup: ${e}" > "${why}"; exit 1; }
+	[ ${rc} -eq 0 ] || { print -r -- "lwebsetup exited ${rc}" > "${why}"; exit 1; }
+	grep 'Installation Complete!' "${out}" > /dev/null \
+		|| { print -r -- "lwebsetup did not complete" > "${why}"; exit 1; }
+	run_logged cmmperm su cmm -c "${INCROOT}/bin/cmmperm"
+	rc=$?
+	[ ${rc} -eq 0 ] || { print -r -- "cmmperm exited ${rc}" > "${why}"; exit 1; }
+	parse_webinfo "$("${INCROOT}/web/bin/webinfo" -j 2>/dev/null)" \
+		|| { print -r -- "could not read the web GUI version after lwebsetup" > "${why}"; exit 1; }
+	[ "${WEBVER}" = "${PGEN}.${PLOAD}" ] \
+		|| { print -r -- "web GUI is ${WEBVER} after lwebsetup" > "${why}"; exit 1; }
+	exit 0
+}
+
+# webfail <reason> — the RPM is installed but the web GUI step failed.
+function webfail
+{
+	logwarn "RESULT: installed ${PVER}; web GUI not updated: $1"
+	exit 3
 }
 
 # fail <reason> — rpm -ivh ran and it (or the verify after it) failed.
@@ -212,12 +310,14 @@ function highest_version
 # --- options -------------------------------------------------------------------
 
 FILE=""
+WEB=""
 LOGDIR=""
 DRYRUN=NO
-while getopts "f:l:nh" c
+while getopts "f:w:l:nh" c
 do
 	case $c in
 	f) FILE=${OPTARG} ;;
+	w) WEB=${OPTARG} ;;
 	l) LOGDIR=${OPTARG} ;;
 	n) DRYRUN=YES ;;
 	h) print_usage; exit 0 ;;
@@ -246,9 +346,9 @@ fi
 TRACEFILE="${LOGDIR}/patch_inc_${HOSTNAME}.$$"
 exec >>"${TRACEFILE}" 2>&1
 TMP=""
-trap '[ -n "${TMP}" ] && rm -f "${TMP}"' EXIT
+trap '[ -n "${TMP}" ] && rm -f "${TMP}" "${TMP}".*' EXIT
 
-loginfo "${PROG} started on ${HOSTNAME} (pid $$, file ${FILE:-none}, dry run ${DRYRUN})"
+loginfo "${PROG} started on ${HOSTNAME} (pid $$, file ${FILE:-none}, web ${WEB:-none}, dry run ${DRYRUN})"
 
 TMP=$(mktemp "${LOGDIR}/.nfpatch.XXXXXX" 2>/dev/null)
 if [ $? -ne 0 -o -z "${TMP}" ]
@@ -430,6 +530,16 @@ then
 	esac
 fi
 
+# web GUI tar (-w)
+if [ -n "${WEB}" ]
+then
+	case "${WEB}" in
+	/*) ;;
+	*) WEB="$(pwd)/${WEB}" ;;
+	esac
+	webtar_check
+fi
+
 if [ "${DRYRUN}" = "YES" ]
 then
 	loginfo "RESULT: eligible ${PVER}"
@@ -448,6 +558,22 @@ NOW=$(highest_version "${TMP}" "${CGEN}")
 NOW=${NOW%% *}
 [ "${NOW}" = "${PVER}" ] || fail "rpm reports ${NOW:-no netFLEX-CORE-PATCH} after install"
 loginfo "patch ${PVER} installed"
-web_check
-loginfo "RESULT: installed ${PVER}"
+if [ -z "${WEB}" ]
+then
+	web_check
+	loginfo "RESULT: installed ${PVER}"
+	exit 0
+fi
+
+rm -f "${TMP}.why"
+( webgui_install "${TMP}.why" )
+rc=$?
+rm -rf "${INCROOT}/webfloppy"
+if [ ${rc} -ne 0 ]
+then
+	why=$(cat "${TMP}.why" 2>/dev/null)
+	webfail "${why:-web GUI step exited ${rc}}"
+fi
+loginfo "web GUI ${WEBVER} installed"
+loginfo "RESULT: installed ${PVER} (web GUI ${PGEN}.${PLOAD})"
 exit 0

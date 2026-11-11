@@ -90,9 +90,13 @@ def anything_running(host):
     return upgrader_running(host) or installer_running(host) or patcher_running(host)
 
 
-def build_patch_argv(nf_patch_path, rpm_path, logdir):
-    """Return the argv to launch nf_patch for one patch rpm."""
-    return [nf_patch_path, "-f", rpm_path, "-l", logdir]
+def build_patch_argv(nf_patch_path, rpm_path, logdir, web_tar=None):
+    """Return the argv to launch nf_patch for one patch rpm, plus -w <tar> to
+    install the matching web GUI tar after it."""
+    argv = [nf_patch_path, "-f", rpm_path, "-l", logdir]
+    if web_tar:
+        argv += ["-w", web_tar]
+    return argv
 
 
 def build_install_argv(nf_install_path, config_path, action):
@@ -122,10 +126,10 @@ def launch_install(nf_install_path, config_path, action, cwd=None):
     )
 
 
-def launch_patch(nf_patch_path, rpm_path, logdir):
+def launch_patch(nf_patch_path, rpm_path, logdir, web_tar=None):
     """Launch nf_patch detached. nf_patch runs in the foreground, so the
     returned Popen's pid is nf_patch's own (its trace is patch_inc_<host>.<pid>)."""
-    argv = build_patch_argv(nf_patch_path, rpm_path, logdir)
+    argv = build_patch_argv(nf_patch_path, rpm_path, logdir, web_tar)
     return subprocess.Popen(
         argv, cwd=None, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         start_new_session=True,

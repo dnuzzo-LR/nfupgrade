@@ -282,5 +282,130 @@ class TestGather(unittest.TestCase):
                          [("5.4.1.29", "installed"), ("5.4.1.30", "installable")])
 
 
+WB = "/o/nf_webbuild"
+
+
+def _web(h, d, tars, builds=None, major="8.10", mtime="100"):
+    """Add a RHEL VERSION_ID, LINUXWEB* tars in dir d, and their nf_webbuild
+    answers ({name: (release, build)}; absent = unreadable) to FakeHost h."""
+    builds = builds or {}
+    h.responses[("cat", "/etc/os-release")] = RunResult(
+        0, 'NAME="Red Hat Enterprise Linux"\nVERSION_ID="%s"\n' % major, "")
+    h.responses[("find", d, "-maxdepth", "1", "-name", "LINUXWEB*.tar")] = RunResult(
+        0, "".join(d + "/" + t + "\n" for t in tars), "")
+    for t in tars:
+        path = d + "/" + t
+        h.responses[("stat", "-c", "%s %Y", path)] = RunResult(0, "5000 " + mtime + "\n", "")
+        if t in builds:
+            h.responses[(WB, path)] = RunResult(0, webinfo_out(*builds[t]), "")
+        else:
+            h.responses[(WB, path)] = RunResult(1, "", "nf_webbuild: webinfo did not run")
+    return h
+
+
+class TestWebTar(unittest.TestCase):
+    """#1 (B): the web GUI tar beside the eligible patch RPM."""
+
+    def setUp(self):
+        patches._TAR_BUILDS.clear()
+
+    def test_rhel_major(self):
+        h = FakeHost({("cat", "/etc/os-release"): RunResult(0, 'VERSION_ID="8.10"\n', "")})
+        self.assertEqual(patches.rhel_major(h), "8")
+        h = FakeHost({("cat", "/etc/os-release"): RunResult(0, "VERSION_ID=9\n", "")})
+        self.assertEqual(patches.rhel_major(h), "9")
+        h = FakeHost({("cat", "/etc/os-release"): RunResult(0, 'NAME="x"\n', "")})
+        self.assertIsNone(patches.rhel_major(h))
+        self.assertIsNone(patches.rhel_major(FakeHost()))
+
+    def test_candidates_filter(self):
+        h = _web(FakeHost(), "/d", ["LINUXWEB64.rhel8.tar", "LINUXWEB64.36.rhel8.tar",
+                                    "LINUXWEB64.rhel9.tar", "LINUXWEB64ATT.rhel8.tar",
+                                    "LINUXWEB64.tar"])
+        self.assertEqual(patches.web_tar_candidates(h, "/d", "8"),
+                         ["/d/LINUXWEB64.36.rhel8.tar", "/d/LINUXWEB64.rhel8.tar"])
+        self.assertEqual(patches.web_tar_candidates(h, "/nope", "8"), [])
+
+    def test_pick_prefers_numbered_match(self):
+        tars = [("/d/LINUXWEB64.rhel8.tar", ("5.4.0", 36)),
+                ("/d/LINUXWEB64.36.rhel8.tar", ("5.4.0", 36))]
+        self.assertEqual(patches.pick_web_tar("5.4.0.36", tars),
+                         ("/d/LINUXWEB64.36.rhel8.tar", None))
+        self.assertEqual(patches.pick_web_tar("5.4.0.036", tars[:1]),
+                         ("/d/LINUXWEB64.rhel8.tar", None))
+
+    def test_pick_mismatch_note(self):
+        self.assertEqual(
+            patches.pick_web_tar("5.4.0.36", [("/d/LINUXWEB64.rhel8.tar", ("5.4.0", 37))]),
+            (None, "no web GUI tar for 5.4.0.36 found (found: 5.4.0.37)"))
+        # another generic with the same load is not a match
+        self.assertEqual(
+            patches.pick_web_tar("5.4.0.36", [("/d/a.rhel8.tar", ("5.4.1", 36)),
+                                              ("/d/b.rhel8.tar", ("5.4.1", 36))]),
+            (None, "no web GUI tar for 5.4.0.36 found (found: 5.4.1.36)"))
+
+    def test_pick_none_found(self):
+        self.assertEqual(patches.pick_web_tar("5.4.0.36", []),
+                         (None, "no web GUI tar for 5.4.0.36 found"))
+
+    def test_pick_unreadable(self):
+        self.assertEqual(
+            patches.pick_web_tar("5.4.0.36", [("/d/LINUXWEB64.rhel8.tar", None)]),
+            (None, "could not read the web GUI build from LINUXWEB64.rhel8.tar"))
+        # an unreadable tar beside a mismatched one: say what was found
+        self.assertEqual(
+            patches.pick_web_tar("5.4.0.36", [("/d/a.rhel8.tar", None),
+                                              ("/d/b.rhel8.tar", ("5.4.0", 35))]),
+            (None, "no web GUI tar for 5.4.0.36 found (found: 5.4.0.35)"))
+
+    def test_read_tar_build_cached(self):
+        path = "/d/LINUXWEB64.rhel8.tar"
+        h = _web(FakeHost(), "/d", ["LINUXWEB64.rhel8.tar"],
+                 {"LINUXWEB64.rhel8.tar": ("5.4.0", "36")})
+        self.assertEqual(patches.read_tar_build(h, path, WB), ("5.4.0", 36))
+        self.assertEqual(patches.read_tar_build(h, path, WB), ("5.4.0", 36))
+        self.assertEqual(sum(1 for c in h.calls if c[0] == WB), 1)
+        h.responses[("stat", "-c", "%s %Y", path)] = RunResult(0, "5000 200\n", "")
+        patches.read_tar_build(h, path, WB)
+        self.assertEqual(sum(1 for c in h.calls if c[0] == WB), 2)
+
+    def test_read_tar_build_unreadable(self):
+        h = _web(FakeHost(), "/d", ["LINUXWEB64.rhel8.tar"])
+        self.assertIsNone(patches.read_tar_build(h, "/d/LINUXWEB64.rhel8.tar", WB))
+        # gone: no stat
+        self.assertIsNone(patches.read_tar_build(FakeHost(), "/d/x.tar", WB))
+
+    def test_gather_installable_row_gets_web_tar(self):
+        h = _fake(files={"/d": [N29, N30]})
+        _web(h, "/d", ["LINUXWEB64.29.rhel8.tar"], {"LINUXWEB64.29.rhel8.tar": ("5.4.1", "29")})
+        g = patches.gather(h, ["/d"], webbuild=WB)
+        row, other = g["patches"]
+        self.assertEqual(row["web_tar"], "/d/LINUXWEB64.29.rhel8.tar")
+        self.assertIsNone(row["web_tar_note"])
+        self.assertNotIn("web_tar", other)
+
+    def test_gather_without_webbuild_has_no_web_keys(self):
+        h = _fake(files={"/d": [N29]})
+        _web(h, "/d", ["LINUXWEB64.29.rhel8.tar"], {"LINUXWEB64.29.rhel8.tar": ("5.4.1", "29")})
+        row = patches.gather(h, ["/d"])["patches"][0]
+        self.assertNotIn("web_tar", row)
+        self.assertFalse([c for c in h.calls if c[0] == WB])
+
+    def test_gather_only_rpm_directory(self):
+        h = _fake(files={"/d": [N29], "/e": []}, dirs=("/d", "/e"))
+        _web(h, "/d", [])
+        _web(h, "/e", ["LINUXWEB64.29.rhel8.tar"], {"LINUXWEB64.29.rhel8.tar": ("5.4.1", "29")})
+        row = patches.gather(h, ["/d", "/e"], webbuild=WB)["patches"][0]
+        self.assertIsNone(row["web_tar"])
+        self.assertEqual(row["web_tar_note"], "no web GUI tar for 5.4.1.29 found")
+
+    def test_gather_other_rhel_tar_ignored(self):
+        h = _fake(files={"/d": [N29]})
+        _web(h, "/d", ["LINUXWEB64.rhel9.tar"], {"LINUXWEB64.rhel9.tar": ("5.4.1", "29")})
+        row = patches.gather(h, ["/d"], webbuild=WB)["patches"][0]
+        self.assertIsNone(row["web_tar"])
+        self.assertFalse([c for c in h.calls if c[0] == WB])
+
+
 if __name__ == "__main__":
     unittest.main()

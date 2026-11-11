@@ -97,7 +97,7 @@ exit 1'
 	export NFP_INCROOT="${SB}/usr/cnc"
 	export NFP_STAGEROOT="${SB}/usr/cnc_stage"
 	export NFP_SKIP_ROOT=YES
-	unset FAIL_RPM INCLOGDIR
+	unset FAIL_RPM INCLOGDIR NFP_OS_RELEASE FAIL_CMMPERM
 }
 
 cleanup() {
@@ -406,6 +406,147 @@ print 5.5.0.08 > "${SB}/rpmdb_patch"
 f=$(patchfile 5.5.0.09)
 run_patch -f "${f}"
 assert_rc    "leading zero next: rc" 0 "$rc"
+
+# --- -w: install the matching web GUI tar with the patch (#1 B) -----------------
+# Real small tars (mkwebtar, as in nf_webbuild_test.ksh) and the real
+# nf_webbuild beside nf_patch; su and cmmperm are stubs. The tar's lwebsetup
+# is called as ./lwebsetup -r <root> with y/n on stdin.
+
+# mkwebtar <path> <release> <build> [lwebsetup-body] — a LINUXWEB64-style tar:
+# top-level lwebsetup + lwebdata.Z (gzip'd cpio of web/ holding webinfo -j).
+mkwebtar() {
+	typeset path="$1" rel="$2" bld="$3" body="${4:-exit 0}" w
+	w=$(mktemp -d "${SB}/mk.XXXXXX")
+	mkdir -p "${w}/web/bin"
+	print "#!/bin/sh\necho '{ \"release\" : \"${rel}\", \"build\" : \"${bld}\"}'" > "${w}/web/bin/webinfo"
+	chmod +x "${w}/web/bin/webinfo"
+	print -r -- "#!/bin/sh
+${body}" > "${w}/lwebsetup"
+	chmod +x "${w}/lwebsetup"
+	(cd "${w}" && find web | cpio -o > lwebdata 2>/dev/null && gzip -c lwebdata > lwebdata.Z)
+	(cd "${w}" && tar cf "${path}" lwebdata.Z lwebsetup)
+	rm -rf "${w}"
+}
+
+# lwebsetup bodies. OK installs the tar's own web tree under the -r root.
+LWEB_OK='read a; read b; echo "answers $a $b"
+gzip -dc lwebdata.Z > "$2/.lwebdata" && (cd "$2" && cpio -idu < .lwebdata 2>/dev/null); rm -f "$2/.lwebdata"
+printf "\n\nWEB GUI 5.4.1 Installation Complete!\n\n"'
+LWEB_ERROR='echo "ERROR: lwebdata.Z missing"
+exit'
+LWEB_SILENT='exit 0'
+LWEB_NOINSTALL='echo "WEB GUI 5.4.1 Installation Complete!"'
+
+# websetup — RHEL 8, su that runs its -c command, a cmmperm stub.
+websetup() {
+	print 'NAME="Red Hat Enterprise Linux"\nVERSION_ID="8.10"' > "${SB}/os-release"
+	export NFP_OS_RELEASE="${SB}/os-release"
+	mkstub su '[ "$2" = "-c" ] && exec sh -c "$3"; exit 1'
+	mkdir -p "${SB}/usr/cnc/bin"
+	print '#!/bin/sh\necho "cmmperm done"\nexit ${FAIL_CMMPERM:-0}' > "${SB}/usr/cnc/bin/cmmperm"
+	chmod +x "${SB}/usr/cnc/bin/cmmperm"
+	webinfo 5.4.1 28
+}
+
+setup; websetup
+f29=$(patchfile 5.4.1.29)
+mkwebtar "${SB}/depot/LINUXWEB64.rhel8.tar" 5.4.1 29 "${LWEB_OK}"
+run_patch -f "${f29}" -w "${SB}/depot/LINUXWEB64.rhel8.tar"
+assert_rc    "web ok: rc" 0 "$rc"
+assert_match "web ok: result" 'INFO  RESULT: installed 5\.4\.1\.29 \(web GUI 5\.4\.1\.29\)$' "$(lastline)"
+assert_match "web ok: tar matched before rpm" 'web GUI tar LINUXWEB64\.rhel8\.tar is 5\.4\.1\.29 \(matches\)' "$(trace)"
+assert_match "web ok: lwebsetup answered y n" 'EXEC  \[lwebsetup\] answers y n' "$(trace)"
+assert_match "web ok: cmmperm as cmm" "^su cmm -c ${SB}/usr/cnc/bin/cmmperm\$" "$(cat "${SB}/calls")"
+assert_match "web ok: cmmperm in trace" 'EXEC  \[cmmperm\] cmmperm done' "$(trace)"
+assert_eq    "web ok: webfloppy removed" "no" "$([ -e "${SB}/usr/cnc/webfloppy" ] && echo yes || echo no)"
+assert_eq    "web ok: no temp left" "" "$(ls -A "${SB}/usr/cnc" "${SB}/logs" | grep '^\.nf')"
+assert_eq    "web ok: rpm ran" 1 "$(uvh_calls)"
+
+setup; websetup
+f29=$(patchfile 5.4.1.29)
+mkwebtar "${SB}/depot/LINUXWEB64.rhel8.tar" 5.4.1 30 "${LWEB_OK}"
+run_patch -f "${f29}" -w "${SB}/depot/LINUXWEB64.rhel8.tar"
+refused "web mismatch" 'web GUI tar LINUXWEB64\.rhel8\.tar is 5\.4\.1\.30, not 5\.4\.1\.29$'
+
+setup; websetup
+f29=$(patchfile 5.4.1.29)
+print "not a tar" > "${SB}/depot/LINUXWEB64.rhel8.tar"
+run_patch -f "${f29}" -w "${SB}/depot/LINUXWEB64.rhel8.tar"
+refused "web unreadable" 'cannot read the web GUI build from LINUXWEB64\.rhel8\.tar'
+
+setup; websetup
+f29=$(patchfile 5.4.1.29)
+mkdir -p "${SB}/other"
+mkwebtar "${SB}/other/LINUXWEB64.rhel8.tar" 5.4.1 29 "${LWEB_OK}"
+run_patch -f "${f29}" -w "${SB}/other/LINUXWEB64.rhel8.tar"
+refused "web not beside rpm" "web GUI tar must be in ${SB}/depot"
+
+setup; websetup
+f29=$(patchfile 5.4.1.29)
+mkwebtar "${SB}/depot/LINUXWEB64.rhel9.tar" 5.4.1 29 "${LWEB_OK}"
+run_patch -f "${f29}" -w "${SB}/depot/LINUXWEB64.rhel9.tar"
+refused "web other rhel" 'web GUI tar is not for RHEL 8'
+
+setup; websetup
+f29=$(patchfile 5.4.1.29)
+mkwebtar "${SB}/depot/LINUXWEB64ATT.rhel8.tar" 5.4.1 29 "${LWEB_OK}"
+run_patch -f "${f29}" -w "${SB}/depot/LINUXWEB64ATT.rhel8.tar"
+refused "web ATT" 'ATT web GUI tars are not supported'
+
+setup; websetup
+f29=$(patchfile 5.4.1.29)
+run_patch -f "${f29}" -w "${SB}/depot/LINUXWEB64.rhel8.tar"
+refused "web missing" 'cannot read .*LINUXWEB64\.rhel8\.tar'
+
+setup; websetup
+f29=$(patchfile 5.4.1.29)
+mkwebtar "${SB}/depot/LINUXWEB64.rhel8.tar" 5.4.1 29 "${LWEB_ERROR}"
+run_patch -f "${f29}" -w "${SB}/depot/LINUXWEB64.rhel8.tar"
+assert_rc    "lwebsetup ERROR exit 0: rc" 3 "$rc"
+assert_match "lwebsetup ERROR exit 0: result" 'WARN  RESULT: installed 5\.4\.1\.29; web GUI not updated: lwebsetup: ERROR: lwebdata\.Z missing$' "$(lastline)"
+assert_eq    "lwebsetup ERROR exit 0: rpm ran" 1 "$(uvh_calls)"
+assert_eq    "lwebsetup ERROR exit 0: webfloppy removed" "no" "$([ -e "${SB}/usr/cnc/webfloppy" ] && echo yes || echo no)"
+
+setup; websetup
+f29=$(patchfile 5.4.1.29)
+mkwebtar "${SB}/depot/LINUXWEB64.rhel8.tar" 5.4.1 29 "${LWEB_SILENT}"
+run_patch -f "${f29}" -w "${SB}/depot/LINUXWEB64.rhel8.tar"
+assert_rc    "lwebsetup incomplete: rc" 3 "$rc"
+assert_match "lwebsetup incomplete: result" 'WARN  RESULT: installed 5\.4\.1\.29; web GUI not updated: lwebsetup did not complete$' "$(lastline)"
+
+setup; websetup
+f29=$(patchfile 5.4.1.29)
+mkwebtar "${SB}/depot/LINUXWEB64.rhel8.tar" 5.4.1 29 'exit 1'
+run_patch -f "${f29}" -w "${SB}/depot/LINUXWEB64.rhel8.tar"
+assert_rc    "lwebsetup exit 1: rc" 3 "$rc"
+assert_match "lwebsetup exit 1: result" 'web GUI not updated: lwebsetup exited 1$' "$(lastline)"
+
+setup; websetup
+f29=$(patchfile 5.4.1.29)
+mkwebtar "${SB}/depot/LINUXWEB64.rhel8.tar" 5.4.1 29 "${LWEB_OK}"
+FAIL_CMMPERM=1; export FAIL_CMMPERM
+run_patch -f "${f29}" -w "${SB}/depot/LINUXWEB64.rhel8.tar"
+unset FAIL_CMMPERM
+assert_rc    "cmmperm fails: rc" 3 "$rc"
+assert_match "cmmperm fails: result" 'web GUI not updated: cmmperm exited 1$' "$(lastline)"
+
+setup; websetup
+f29=$(patchfile 5.4.1.29)
+mkwebtar "${SB}/depot/LINUXWEB64.rhel8.tar" 5.4.1 29 "${LWEB_NOINSTALL}"
+run_patch -f "${f29}" -w "${SB}/depot/LINUXWEB64.rhel8.tar"
+assert_rc    "post-check mismatch: rc" 3 "$rc"
+assert_match "post-check mismatch: result" 'web GUI not updated: web GUI is 5\.4\.1\.28 after lwebsetup$' "$(lastline)"
+
+setup; websetup
+f29=$(patchfile 5.4.1.29)
+mkwebtar "${SB}/depot/LINUXWEB64.rhel8.tar" 5.4.1 29 "${LWEB_OK}"
+run_patch -n -f "${f29}" -w "${SB}/depot/LINUXWEB64.rhel8.tar"
+assert_rc    "dry run with -w: rc" 0 "$rc"
+assert_match "dry run with -w: result" 'INFO  RESULT: eligible 5\.4\.1\.29$' "$(lastline)"
+assert_match "dry run with -w: tar checked" 'web GUI tar LINUXWEB64\.rhel8\.tar is 5\.4\.1\.29 \(matches\)' "$(trace)"
+assert_eq    "dry run with -w: rpm not run" 0 "$(uvh_calls)"
+assert_eq    "dry run with -w: lwebsetup not run" "" "$(trace | grep 'EXEC  \[lwebsetup\]')"
+
 
 # --- usage ---------------------------------------------------------------------------
 setup

@@ -1,0 +1,50 @@
+#!/usr/bin/ksh
+# nf_webbuild <web tar> — print the build of the web GUI inside a LINUXWEB64
+# tar, i.e. the output of the tar's own web/bin/webinfo -j:
+#     { "release" : "5.4.0", "build" : "36"}
+#
+# Why this way: the tar's file name is not trusted for the build (the packager's
+# numbered name and its unnumbered copy can both be stale or ambiguous). webinfo
+# is self-contained with the build compiled in, so running the extracted copy is
+# the only reliable answer. Used by the service (Patches tab checkbox) and by
+# nf_patch -w (before touching rpm), so the two can never disagree about a tar.
+#
+# The temp dir lives under the netFLEX root (NFP_INCROOT, default /usr/cnc),
+# never /tmp: STIG boxes mount /tmp noexec, so webinfo could not run there.
+# Nothing else from the tar is run.
+#
+# Exit 0 with webinfo's output on stdout; exit 1 with one line
+# "nf_webbuild: <reason>" on stderr on any failure. ksh88-safe.
+
+INCROOT="${NFP_INCROOT:-/usr/cnc}"
+TMPW=""
+
+die() {
+	print -r -u2 -- "nf_webbuild: $*"
+	exit 1
+}
+
+cleanup() { [ -n "${TMPW}" ] && rm -rf "${TMPW}"; }
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+
+[ $# -eq 1 ] && [ -n "$1" ] || die "usage: nf_webbuild <web tar>"
+TAR="$1"
+
+[ -f "${TAR}" ] && [ -r "${TAR}" ] || die "cannot read ${TAR}"
+TMPW=$(mktemp -d "${INCROOT}/.nfweb.XXXXXX") || die "cannot make a temp dir in ${INCROOT}"
+
+tar tf "${TAR}" > "${TMPW}/list" 2>/dev/null || die "cannot read ${TAR}"
+# The packager's tar is "tar cf ... *" (member "lwebdata.Z"); allow "./" too.
+MEMBER=$(grep -x '\(\./\)\{0,1\}lwebdata\.Z' "${TMPW}/list" | sed -n 1p)
+[ -n "${MEMBER}" ] || die "no lwebdata.Z in ${TAR}"
+(cd "${TMPW}" && tar xf "${TAR}" "${MEMBER}" > /dev/null 2>&1) && [ -f "${TMPW}/lwebdata.Z" ] \
+	|| die "no lwebdata.Z in ${TAR}"
+
+gzip -dc "${TMPW}/lwebdata.Z" > "${TMPW}/lwebdata" 2>/dev/null || die "cannot unpack lwebdata.Z"
+(cd "${TMPW}" && cpio -id web/bin/webinfo < lwebdata > /dev/null 2>&1)
+[ -f "${TMPW}/web/bin/webinfo" ] || die "no web/bin/webinfo in lwebdata"
+
+"${TMPW}/web/bin/webinfo" -j > "${TMPW}/out" 2>/dev/null || die "webinfo did not run"
+cat "${TMPW}/out"
+exit 0

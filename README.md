@@ -50,6 +50,7 @@ saved configs, report snapshots) and any RPMs in `/opt/nfupgrader` are kept.
 | `nf_upgrade`, `nf_upgrader` | Forks of netFLEX `inc_upgrade` / `inc_upgrader`, behavior-identical to the originals but with a cleaned-up, severity-prefixed log. Intended to eventually replace the originals in the product. |
 | `nf_install` | New (not a fork): fresh netFLEX CORE install of the local host, with resume and reset. See *Installing on a new host*. |
 | `nf_patch` | New (not a fork): checks and installs one `netFLEX-CORE-PATCH` RPM on the local host (`nf_patch -f <rpm>`). See *Patches tab*. |
+| `nf_webbuild` | New: prints the web GUI build inside a `LINUXWEB64` tar (runs the tar's own `webinfo -j`). Used by the Patches tab and `nf_patch -w`. |
 | `nf_log.ksh` | Sourced logging helpers: `loginfo` / `logwarn` / `logerror` / `logfatal` and the status-preserving `run_logged` sub-command wrapper. |
 | `ref/inc_upgrade`, `ref/inc_upgrader` | Pinned snapshots of the originals (netFLEX commit `776f42242`), used only as the baseline for the equivalence test. Never run. |
 | `test/` | ksh unit tests and the fork verifier. |
@@ -518,12 +519,33 @@ installed) and Install is refused in preview mode.
   `n`). The tool reads the web GUI's version with `/usr/cnc/web/bin/webinfo -j` and,
   when it is not the installed CORE/PATCH load, the Patches tab and Overview
   (**Web GUI** row) say *Web GUI is 5.4.0.35 but netFLEX is at 5.4.0.36 — install the
-  matching LINUXWEB64 tar*. After an install, `nf_patch` logs the same comparison
-  (`INFO web GUI is … (matches)` or a `WARN`); it never changes the patch result.
-  Installing the tar is still manual.
+  matching LINUXWEB64 tar*.
+  - **Also install the web GUI.** Under the eligible patch's Install button is a
+    checkbox **Also install the web GUI**. The tool looks for `LINUXWEB*.tar` **in the
+    same directory as that patch RPM only** (top level; `ATT` tars and tars not named
+    `.rhel<N>.` for this host's RHEL major are ignored) and reads the build *inside*
+    each tar (`nf_webbuild`: the tar's own `webinfo -j`; the file name is never
+    trusted). Only a tar whose build equals the patch version can be installed: the
+    box is then ticked by default and names the tar (a numbered
+    `LINUXWEB64.<n>.rhel<N>.tar` is preferred over the unnumbered copy). Otherwise it
+    is greyed out with the reason, e.g. *no web GUI tar for 5.4.0.36 found (found:
+    5.4.0.37)*; a mismatched tar can never be installed. Ticked, Install runs one
+    `nf_patch -f <rpm> -w <tar>`: the patch, then the web GUI (Support's steps:
+    unpack in `/usr/cnc/webfloppy`, `./lwebsetup -r /usr/cnc` answering `y` (save the
+    WEB GUI DataBase) and `n` (SAML), `su cmm -c /usr/cnc/bin/cmmperm`), then a
+    `webinfo -j` check. **Web users are disconnected** while `lwebsetup` restarts the
+    web processes, and the web step can take several minutes (its `yum` calls).
+    If only the web step fails, the patch stays installed and the tab shows the
+    result as a warning, *installed 5.4.0.36; web GUI not updated: <reason>*, with
+    the trace to send to support.
+  - Without the checkbox, `nf_patch` logs the web GUI comparison after an install
+    (`INFO web GUI is … (matches)` or a `WARN`); it never changes the patch result.
 - **Not supported.** `IPATCH`, `INC` and `ATTEXT` patches are listed, marked not
   supported, and never installed.
-- **`nf_patch`.** `nf_patch -f <rpm> [-l <logdir>] [-n]`; `-n` checks only. The log
+- **`nf_patch`.** `nf_patch -f <rpm> [-w <web tar>] [-l <logdir>] [-n]`; `-n` checks
+  only (including the `-w` tar). `-w` refuses (before rpm) a tar that is not beside
+  the RPM, is an `ATT` tar, is not `.rhel<N>.` for this host, or whose build is not
+  the patch version. The log
   directory is `-l`, else `$INCLOGDIR`, else `/usr/cnc/logs`. It re-runs the rules
   above, then `rpm -ivh --replacepkgs --replacefiles`, then verifies the new
   version is reported. Those are exactly the options of Support's manual install
@@ -534,13 +556,20 @@ installed) and Install is refused in preview mode.
   overwrites files owned by `netFLEX-CORE` (and earlier patches); without it rpm
   refuses with "conflicts with file from package" and exits 4. Exit codes:
   `0` installed (or eligible with `-n`), `1` refused before rpm was touched, `2`
-  rpm -ivh failed or the post-install check did not show the new version. The trace is `<logdir>/patch_inc_<host>.<pid>`; its last line is
-  `RESULT: installed <version>`, `RESULT: refused: <reason>` or
-  `RESULT: failed: <reason>`. On refused/failed the tab shows the trace path to send
-  to support.
-- **Audit.** `patch_install_started` (client, file, version), `patch_install_refused`
-  (reason), `patch_install_done` and `patch_install_failed` (exit code, trace path;
-  or the error when `nf_patch` could not be started)
+  rpm -ivh failed or the post-install check did not show the new version, `3`
+  (with `-w`) the patch is installed but the web GUI step failed: the tar did not
+  unpack, `lwebsetup` printed an `ERROR:` line or no "Installation Complete!" (it
+  exits 0 even on its own errors, so its output is what counts), `cmmperm` failed,
+  or `webinfo -j` afterwards is not the patch version. There is no timeout on the
+  web step. The trace is `<logdir>/patch_inc_<host>.<pid>`; its last line is
+  `RESULT: installed <version>`, `RESULT: installed <version> (web GUI <version>)`,
+  `RESULT: refused: <reason>`, `RESULT: failed: <reason>` or
+  `RESULT: installed <version>; web GUI not updated: <reason>`. On refused/failed
+  (and web GUI not updated) the tab shows the trace path to send to support.
+- **Audit.** `patch_install_started` (client, file, version, web tar),
+  `patch_install_refused` (reason), `patch_install_done`, `patch_install_web_failed`
+  (exit 3: patch in, web GUI step failed; trace path) and `patch_install_failed`
+  (exit code, trace path; or the error when `nf_patch` could not be started)
   in `nfupgrader_audit.jsonl`. The service waits on `nf_patch` in a background
   thread, so the done/failed record is written as soon as it exits (and no
   `<defunct>` process is left behind).
@@ -551,6 +580,7 @@ installed) and Install is refused in preview mode.
 ksh test/nf_log_test.ksh                          # unit tests for nf_log.ksh
 ksh test/nf_install_test.ksh                      # nf_install in a sandbox
 ksh test/nf_patch_test.ksh                        # nf_patch in a sandbox (fake rpm)
+ksh test/nf_webbuild_test.ksh                     # nf_webbuild on small test web tars
 ksh test/install_test.ksh                         # make_release.sh + install.sh in a sandbox
 sh  test/nf_fork_verify.sh                         # fork syntax/equivalence/coverage/grammar
 python3 -m unittest discover -s tests -p 'test_*.py'   # Phase 2 python tests
