@@ -2157,6 +2157,17 @@ document.getElementById("links").textContent = "Loading…";
   tr.innerHTML = "<td colspan='9' class='loading'><span class='spinner'></span> Loading site…</td>";
 })();
 applyLocalOpen();
+// Deferred stop (httpd.StopControl): show it on every tab.
+function refreshStopping() {
+  getJSON("/api/tool/status", function (t) {
+    var b = document.getElementById("stopping-banner");
+    b.style.display = t.stopping ? "" : "none";
+    document.getElementById("stopping-work").textContent =
+      t.stopping && t.work && t.work.length ? "(" + t.work.join(", ") + ")" : "";
+  }, function () {});
+}
+
+refreshStopping();
 refreshProgress();
 refreshLog();
 refreshInfo();
@@ -2166,6 +2177,7 @@ refreshReports();
 refreshReportsJob();
 refreshBootMenu();
 refreshPatches();
+setInterval(refreshStopping, 2000);
 setInterval(refreshProgress, 2000);
 setInterval(refreshInstall, 2000);
 setInterval(refreshLive, 2000);

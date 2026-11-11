@@ -500,6 +500,7 @@ class TestSession(unittest.TestCase):
         self.addCleanup(_kill_quietly, bg)
         self.assertTrue(wait_for(lambda: bg in s.own_pids()))
         self.assertTrue(wait_for(s.busy))
+        self.assertIn((bg, "sleep"), s.work())   # what a deferred stop waits for
         self.assertTrue(s.end())
         self.assertEqual(s.state()["state"], "ended")
         self.assertEqual(s.state()["exit_code"], 128 + signal.SIGKILL)
@@ -516,6 +517,7 @@ class TestSession(unittest.TestCase):
         s.start()
         self.assertTrue(wait_for(lambda: s.own_pids()))
         self.assertFalse(s.busy())
+        self.assertEqual(s.work(), [])
         self.assertTrue(s.end())
         self.assertFalse(s.running())
 

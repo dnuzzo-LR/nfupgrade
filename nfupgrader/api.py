@@ -173,6 +173,17 @@ def host_mode(ctx):
     return installstate.host_mode(ctx.host, ctx.hostname, upgrade_logdir(ctx))
 
 
+#: Error for every action refused while a stop waits for the boot menu.
+STOPPING_ERROR = "nfupgrader is stopping \u2014 waiting for the boot menu to finish"
+
+
+def tool_stopping(ctx):
+    """The deferred-stop record ({"work": [...]}) set by httpd.StopControl
+    while a stop waits for boot menu work to finish, else None."""
+    st = ctx.state if isinstance(ctx.state, dict) else {}
+    return st.get("stopping")
+
+
 def _bootmenu_session(ctx):
     """The BootMenuSession object in ctx.state["bootmenu"], created by httpd
     (Task 5) when the tab is first opened; None if there is none (treated as
@@ -549,6 +560,16 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
     # --- everything else requires a valid session ---
     if not _needs_session(cookies, client_ip, ctx):
         return _json(401, {"error": "authentication required"})
+
+    # While a stop waits for the boot menu (httpd.StopControl), start nothing
+    # new; ending the boot menu session is still the user's call.
+    stopping = tool_stopping(ctx)
+    if path == "/api/tool/status" and method == "GET":
+        if stopping is None:
+            return _json(200, {"stopping": False})
+        return _json(200, {"stopping": True, "work": stopping.get("work", [])})
+    if stopping is not None and method == "POST" and path != "/api/bootmenu/end":
+        return _json(409, {"error": STOPPING_ERROR})
 
     if path == "/api/progress" and method == "GET" and preview_scenario(ctx):
         rec = previewdata.progress_record(preview_scenario(ctx))

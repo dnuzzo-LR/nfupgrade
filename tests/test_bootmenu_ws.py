@@ -15,7 +15,7 @@ import time
 import unittest
 from unittest import mock
 
-from nfupgrader import bootmenu, bootmenu_ws, httpd, websocket
+from nfupgrader import api, bootmenu, bootmenu_ws, httpd, websocket
 from tests.test_api import make_ctx, install_ctx
 
 #: Stand-in menu: echoes its first line back, exits 0 on the second.
@@ -551,24 +551,127 @@ class TestServeUntilStopped(unittest.TestCase):
         self.assertIsInstance(self.run_with(OSError("boom")), OSError)
 
 
-class TestSignals(unittest.TestCase):
-    def test_sigterm_handler_raises_keyboardinterrupt(self):
-        old_term = signal.getsignal(signal.SIGTERM)
-        self.addCleanup(signal.signal, signal.SIGTERM, old_term)
+class FakeBusySession(object):
+    """A running boot menu session whose work() is set by the test."""
+
+    def __init__(self, work):
+        self.work_list = list(work)
+
+    def running(self):
+        return True
+
+    def work(self):
+        return list(self.work_list)
+
+    def busy(self):
+        return bool(self.work_list)
+
+
+class FakeStopServer(object):
+    def __init__(self):
+        self.stopped = threading.Event()
+
+    def shutdown(self):
+        self.stopped.set()
+
+
+class TestDeferredStop(unittest.TestCase):
+    """#4: a stop while the boot menu runs work (e.g. a boot) waits for it."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.ctx = make_ctx(self.tmp)
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            self.addCleanup(signal.signal, sig, signal.getsignal(sig))
+        self.out = []
+        self.server = FakeStopServer()
+
+    def stop(self, session):
+        if session is not None:
+            self.ctx.state["bootmenu"] = session
+        return httpd.StopControl(self.ctx, self.server, poll=0.01, out=self.out.append)
+
+    def events(self):
+        return [e["event"] for e in _audit_events(self.ctx)]
+
+    def test_no_session_stops_at_once(self):
         with self.assertRaises(KeyboardInterrupt):
-            httpd._on_sigterm(signal.SIGTERM, None)
-        self.assertEqual(signal.getsignal(signal.SIGTERM), signal.SIG_IGN)
+            self.stop(None).on_signal(signal.SIGINT, None)
+        self.assertNotIn("stopping", self.ctx.state)
+
+    def test_idle_session_stops_at_once(self):
+        with self.assertRaises(KeyboardInterrupt):
+            self.stop(FakeBusySession([])).on_signal(signal.SIGTERM, None)
+
+    def test_busy_session_defers_until_idle(self):
+        session = FakeBusySession([(4242, "boot_cnc")])
+        stop = self.stop(session)
+        stop.on_signal(signal.SIGINT, None)          # returns: no KeyboardInterrupt
+        self.assertTrue(api.tool_stopping(self.ctx))
+        self.assertIn("tool_stop_deferred", self.events())
+        said = "\n".join(self.out)
+        self.assertIn("boot_cnc (4242)", said)
+        self.assertIn("Ctrl-C again", said)
+        time.sleep(0.1)
+        self.assertFalse(self.server.stopped.is_set())   # still serving while busy
+        session.work_list = []
+        self.assertTrue(self.server.stopped.wait(5))
+
+    def test_second_signal_forces(self):
+        session = FakeBusySession([(4242, "boot_cnc")])
+        stop = self.stop(session)
+        stop.on_signal(signal.SIGINT, None)
+        with self.assertRaises(KeyboardInterrupt):
+            stop.on_signal(signal.SIGINT, None)
+        forced = [e for e in _audit_events(self.ctx) if e["event"] == "tool_stop_forced"]
+        self.assertEqual(len(forced), 1)
+        self.assertEqual(forced[0]["work"], ["boot_cnc (4242)"])
+        session.work_list = []                        # the waiter must not linger on
 
     def test_install_signals(self):
         old_hup = signal.getsignal(signal.SIGHUP)
-        old_term = signal.getsignal(signal.SIGTERM)
-        try:
-            httpd.install_signals()
-            self.assertEqual(signal.getsignal(signal.SIGHUP), signal.SIG_IGN)
-            self.assertEqual(signal.getsignal(signal.SIGTERM), httpd._on_sigterm)
-        finally:
-            signal.signal(signal.SIGHUP, old_hup)
-            signal.signal(signal.SIGTERM, old_term)
+        self.addCleanup(signal.signal, signal.SIGHUP, old_hup)
+        stop = self.stop(None)
+        httpd.install_signals(stop)
+        self.assertEqual(signal.getsignal(signal.SIGHUP), signal.SIG_IGN)
+        self.assertEqual(signal.getsignal(signal.SIGTERM), stop.on_signal)
+        self.assertEqual(signal.getsignal(signal.SIGINT), stop.on_signal)
+
+
+class TestStoppingRefusals(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.ctx = make_ctx(self.tmp)
+        self.sid = self.ctx.auth.redeem(self.ctx.auth.token, "127.0.0.1")
+
+    def call(self, method, path, body=b"{}"):
+        return api.dispatch(method, path, {}, body, {"nfu_sid": self.sid}, "127.0.0.1", self.ctx)
+
+    def test_status_reports_stopping(self):
+        st, _, body = self.call("GET", "/api/tool/status")
+        self.assertEqual((st, json.loads(body.decode())), (200, {"stopping": False}))
+        self.ctx.state["stopping"] = {"work": ["boot_cnc (4242)"]}
+        st, _, body = self.call("GET", "/api/tool/status")
+        self.assertEqual(json.loads(body.decode()), {"stopping": True, "work": ["boot_cnc (4242)"]})
+
+    def test_actions_refused_while_stopping(self):
+        self.ctx.state["stopping"] = {"work": []}
+        for path in ("/api/launch", "/api/patches/install", "/api/checks/fix",
+                     "/api/reports/run", "/api/config/save"):
+            st, _, body = self.call("POST", path)
+            self.assertEqual(st, 409, path)
+            self.assertIn("stopping", json.loads(body.decode())["error"])
+
+    def test_end_session_still_allowed_while_stopping(self):
+        self.ctx.state["stopping"] = {"work": []}
+        st, _, body = self.call("POST", "/api/bootmenu/end")
+        self.assertNotIn("stopping", json.loads(body.decode()).get("error", ""))
+
+    def test_new_bootmenu_session_refused_while_stopping(self):
+        self.ctx.state["stopping"] = {"work": []}
+        self.assertIn("stopping", bootmenu_ws._start(object(), {}, self.ctx))
 
 
 if __name__ == "__main__":

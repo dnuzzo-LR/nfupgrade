@@ -15,6 +15,11 @@
     <span id="app-badge" class="badge unknown">APP ?</span>
   </header>
 
+  <div id="stopping-banner" class="preview-banner" style="display:none">
+    <b>nfupgrader is stopping</b> &mdash; waiting for the boot menu to finish
+    <span id="stopping-work"></span>. Nothing new can be started.
+  </div>
+
   <div id="preview-banner" class="preview-banner" style="display:none">
     <b>PREVIEW</b> &mdash; install screens with sample data; nothing will be installed or changed.
     <label>Show:
@@ -326,7 +331,7 @@
         <div id="bootmenu-wrap" class="bootmenu-wrap" style="display:none">
           <div id="bootmenu-term"></div>
         </div>
-        <p id="bootmenu-note" class="muted">Restarting this tool ends the boot menu session.</p>
+        <p id="bootmenu-note" class="muted">Stopping or restarting this tool ends the boot menu session. A boot or stop running from the menu is waited for first (Ctrl-C twice on the tool forces it).</p>
       </div>
     </section>
   </main>

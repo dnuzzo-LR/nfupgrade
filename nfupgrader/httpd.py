@@ -516,20 +516,72 @@ def serve_until_stopped(server, ctx):
             server.server_close()
 
 
-def _on_sigterm(signum, frame):
-    """SIGTERM handler: unwind serve_forever like Ctrl-C does. (Python runs
-    signal handlers in the main thread only, which is the one in
-    serve_forever.) A second SIGTERM is ignored from here on, so it cannot
-    interrupt ending the boot menu."""
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    raise KeyboardInterrupt()
+class StopControl(object):
+    """What a stop signal (Ctrl-C / SIGTERM) does.
+
+    Stopping ends the boot menu session (shutdown_bootmenu), which kills the
+    menu script; if the menu is running work -- a boot, say -- that cuts the
+    sequence off half-way (PostgreSQL up, .CNC_UP written, the rest never
+    started). So while the menu is busy the first signal only *defers* the
+    stop: the tool keeps serving (the browser can watch the boot finish),
+    refuses new actions (api.tool_stopping), and a waiter thread shuts the
+    server down once the menu is idle. A second signal stops at once.
+    Otherwise a signal stops at once, as before. (Python runs handlers in the
+    main thread, the one in serve_forever, so raising KeyboardInterrupt
+    unwinds it.)"""
+
+    def __init__(self, ctx, server, poll=1.0, out=None):
+        self.ctx = ctx
+        self.server = server
+        self.poll = poll
+        self.out = out or (lambda line: (print(line), sys.stdout.flush()))
+        self.deferred = False
+
+    def _work(self):
+        session = api._bootmenu_session(self.ctx)
+        if session is None or not session.running():
+            return None, []
+        return session, ["{} ({})".format(name, pid) for pid, name in session.work()]
+
+    def _stop_now(self):
+        # Further signals must not interrupt ending the boot menu.
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(sig, signal.SIG_IGN)
+        raise KeyboardInterrupt()
+
+    def on_signal(self, signum, frame):
+        if self.deferred:
+            _, work = self._work()
+            self.ctx.audit.record("tool_stop_forced", work=work)
+            self.out("Stopping now; the boot menu work is cut off.")
+            self._stop_now()
+        session, work = self._work()
+        if not work:
+            self._stop_now()
+        self.deferred = True
+        if isinstance(self.ctx.state, dict):
+            self.ctx.state["stopping"] = {"work": work}
+        self.ctx.audit.record("tool_stop_deferred", work=work)
+        self.out("Boot menu is running work ({}).".format(", ".join(work)))
+        self.out("nfupgrader will stop when it finishes. Press Ctrl-C again to stop now")
+        self.out("(this cuts the running boot/stop off).")
+        t = threading.Thread(target=self._wait, args=(session,), name="stop-waiter")
+        t.daemon = True
+        t.start()
+
+    def _wait(self, session):
+        while session.running() and session.busy():
+            time.sleep(self.poll)
+        self.out("Boot menu work finished; stopping.")
+        self.server.shutdown()
 
 
-def install_signals():
+def install_signals(stop):
     """Ignore SIGHUP (a dropped ssh session must not kill the tool or the
-    boot menu it owns); SIGTERM stops the tool like SIGINT."""
+    boot menu it owns); SIGINT and SIGTERM go to stop.on_signal (StopControl)."""
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
-    signal.signal(signal.SIGTERM, _on_sigterm)
+    signal.signal(signal.SIGTERM, stop.on_signal)
+    signal.signal(signal.SIGINT, stop.on_signal)
 
 
 def main(argv=None):
@@ -610,7 +662,7 @@ def main(argv=None):
     for line in startup_banner(bind, real_port, url, tunnel):
         print(line)
     sys.stdout.flush()
-    install_signals()
+    install_signals(StopControl(ctx, server))
     serve_until_stopped(server, ctx)
 
 

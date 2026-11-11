@@ -439,19 +439,25 @@ class BootMenuSession(object):
             return set()
         return {pid} | descendants(procs, pid)
 
-    def busy(self):
-        """True iff some descendant of the child is neither a kill_names
-        process nor a bare shell -- i.e. the menu is running work."""
+    def work(self):
+        """[(pid, name)] of the descendants of the child that are neither
+        kill_names processes nor bare shells -- the work the menu is running
+        (e.g. a boot), sorted by pid; [] when idle or not running."""
         procs, pid = self._procs_and_pid()
         if procs is None:
-            return False
+            return []
         desc = descendants(procs, pid)
+        out = []
         for p in procs:
             if p["pid"] in desc:
                 name = proc_name(p["argv"])
                 if name and name not in self.kill_names and name not in _SHELLS:
-                    return True
-        return False
+                    out.append((p["pid"], name))
+        return sorted(out)
+
+    def busy(self):
+        """True iff the menu is running work (see work())."""
+        return bool(self.work())
 
     def end(self, reason=None):
         """SIGKILL each session process (read fresh from /proc) whose

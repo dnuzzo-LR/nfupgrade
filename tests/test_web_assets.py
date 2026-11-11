@@ -69,6 +69,12 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn('"&file=" + encodeURIComponent(logFile)', self.js)
         self.assertIn("if (d.reset)", self.js)
 
+    def test_stopping_banner(self):
+        # A deferred stop (boot menu busy) shows on every tab.
+        self.assertIn('id="stopping-banner"', self.html)
+        self.assertIn('"/api/tool/status"', self.js)
+        self.assertIn("Ctrl-C twice", self.html)
+
     def test_stale_cnc_up_is_shown_as_down(self):
         # /api/info app_state "stale": .CNC_UP left behind with nothing running.
         self.assertIn('"APP DOWN (stale .CNC_UP)"', self.js)
@@ -511,7 +517,7 @@ process.stdout.write(JSON.stringify(out));
         self.assertIn(">Open boot menu</button>", panel)
         self.assertIn(">End session</button>", panel)
         self.assertIn(">End it</button>", panel)
-        self.assertIn("Restarting this tool ends the boot menu session.", panel)
+        self.assertIn("restarting this tool ends the boot menu session. A boot or stop running", panel)
         self.assertIn("The terminal could not load in this browser "
                       "(Firefox 115 or newer is needed).", panel)
         self.assertNotIn("<iframe", self.html)

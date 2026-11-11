@@ -126,6 +126,8 @@ def _start(session, msg, ctx):
     launch accepted in the last FIX_LAUNCH_GRACE seconds counts as running
     (nf_upgrader shows up in pgrep only after a delay), as does a report
     snapshot."""
+    if api.tool_stopping(ctx) is not None:
+        return api.STOPPING_ERROR
     if session is None:
         return "the boot menu is not available"
     if not api._FIX_LOCK.acquire(False):

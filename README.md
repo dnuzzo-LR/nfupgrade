@@ -383,7 +383,18 @@ There is never a shell prompt: when the menu exits, the session ends.
   or half down.
 - **Tool stop.** Stopping or restarting the tool (Ctrl-C / SIGTERM) ends the boot
   menu session; a SIGHUP (e.g. the ssh session that started the tool dropping) does
-  not. If the tool died without ending it, the next run finds the *leftover* menu
+  not. **If the menu is running work** (a boot or stop: any process under the menu
+  other than the menu script or a shell), ending it would cut that sequence off
+  half-way (e.g. PostgreSQL up and `.CNC_UP` written, the rest never started), so
+  the first Ctrl-C / SIGTERM only defers the stop: the tool prints what it is
+  waiting for, keeps serving (watch the boot finish in the tab), shows
+  *nfupgrader is stopping* on every tab, refuses anything new (launch, patch, fix,
+  report, config save, new boot menu session: 409; **End session** still works),
+  and stops by itself once the menu is back at its prompt. A **second** Ctrl-C /
+  SIGTERM stops at once and cuts the work off. Audited as `tool_stop_deferred` and
+  `tool_stop_forced` (with the work it was waiting for). Never `kill -9` the tool:
+  that cannot be deferred and leaves the menu behind as a leftover. If the tool
+  died without ending it, the next run finds the *leftover* menu
   and the tab offers **End it**, which likewise kills only the leftover
   `new_boot_nms` / `boot_nms` processes.
 - **Browser.** The terminal needs **Firefox 115** or newer (or a current
