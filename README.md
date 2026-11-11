@@ -174,6 +174,20 @@ name, prefixed with `$SUDO_USER@` when started through `sudo` by a non-root user
 the bind address when `NFU_BIND` is a specific interface. The session cookie is
 bound to the client IP.
 
+### Is netFLEX up?
+
+The tool uses netFLEX's own rule (the boot menu, `boot_nms`, rewrites
+`.CNC_UP` from the same check): netFLEX is **up** only when `/usr/cnc/.CNC_UP`
+exists **and** a process named `AT`, `sdi`, `dacs`, `screen`, `arm`, `bill` or
+`dump` is running **as `cmm`** (so a support user's own `screen` session does not
+count). `.CNC_UP` with none of those running is **stale** — e.g. left behind by a
+forced stop or an interrupted boot — and is treated as down: the header shows
+**APP DOWN (stale .CNC_UP)**, the License tab is editable, and reboot-load patches
+are not blocked (`nf_patch` logs a warning). The tool never deletes the file;
+opening netFLEX's boot menu clears it. This rule drives the header badge,
+Overview and Site view, the License tab, the Patches tab, `nf_patch`, and the
+`post-app-up` post-flight check. If `ps` itself fails, the file is trusted.
+
 **Launch is guarded** by a browser confirm dialog, but there is no other gate — a
 confirmed click runs the real upgrade immediately. Only click on a host prepared
 for it. Just running the service launches nothing; it only observes.
@@ -407,7 +421,7 @@ itself. The install form on the Config tab links here.
   `license -n <file> -M`, and reads it back. Audited as `license_repaired` /
   `license_repair_failed`.
 - **netFLEX must be down.** The license is shown read-only, with the reason, while
-  netFLEX is running (`/usr/cnc/.CNC_UP`), while an install, upgrade, check fix,
+  netFLEX is running (see *Is netFLEX up?*), while an install, upgrade, check fix,
   report snapshot or boot menu is running, and in preview mode. Stop netFLEX
   (e.g. from the Boot menu tab) to edit it.
 - **Flow.** Before **Unlock**, the NE types list shows only the enabled types.
@@ -459,7 +473,8 @@ installed) and Install is refused in preview mode.
   Install is also refused while an install, upgrade, patch, check fix, report
   snapshot or boot menu session is running, and for a short grace period just
   after an upgrade, stage or install was launched.
-- **Needs stop.** If the patch's `REBOOT_LOADS` applies and netFLEX is up, Install
+- **Needs stop.** If the patch's `REBOOT_LOADS` applies and netFLEX is up (see
+  *Is netFLEX up?*), Install
   is disabled with "This patch requires netFLEX to be stopped — use the Boot
   menu tab". (Best-effort; the RPM's own refusal is the backstop.)
 - **Not supported.** `IPATCH`, `INC` and `ATTEXT` patches are listed, marked not

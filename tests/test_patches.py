@@ -129,7 +129,7 @@ class TestEvaluate(unittest.TestCase):
 
 
 def _fake(core="5.4.1.28 i686\n", patch="", ipatch=False, files=None, lock=False,
-          stage=False, link=False, up=False, loads="", dirs=("/d",)):
+          stage=False, link=False, up=False, stale=False, loads="", dirs=("/d",)):
     r = {}
     ok = RunResult(0, "", "")
     for d in dirs:
@@ -157,6 +157,10 @@ def _fake(core="5.4.1.28 i686\n", patch="", ipatch=False, files=None, lock=False
         r[("test", "-L", "/usr/cnc_stage")] = ok
     if up:
         r[("test", "-f", "/usr/cnc/.CNC_UP")] = ok
+        r[("ps", "-e", "-o", "user=,comm=")] = RunResult(0, "cmm dacs\n", "")
+    if stale:
+        r[("test", "-f", "/usr/cnc/.CNC_UP")] = ok
+        r[("ps", "-e", "-o", "user=,comm=")] = RunResult(0, "cmm ksh\n", "")
     return FakeHost(r)
 
 
@@ -182,6 +186,12 @@ class TestGather(unittest.TestCase):
         g = patches.gather(h, ["/d"])
         self.assertEqual(g["installed"]["patch"], "5.4.1.30")
         self.assertEqual(g["patches"][0]["status"], "installable")
+
+    def test_stale_cnc_up_does_not_need_stop(self):
+        h = _fake(files={"/d": [N29]}, stale=True, loads='REBOOT_LOADS="29"\n')
+        g = patches.gather(h, ["/d"])
+        self.assertFalse(g["app_up"])
+        self.assertFalse(g["patches"][0]["needs_stop"])
 
     def test_reboot_loads_and_app_up(self):
         h = _fake(files={"/d": [N29]}, up=True, loads='REBOOT_LOADS="29"\n')

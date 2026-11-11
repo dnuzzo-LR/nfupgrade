@@ -193,7 +193,8 @@ function refreshSite() {
         ? "<span class='pill ok'>ok</span>"
         : "<span class='pill down'>unreachable</span>";
       var app = !h.reachable ? "<span class='pill unknown'>?</span>"
-        : (i.app_up ? "<span class='pill ok'>UP</span>" : "<span class='pill down'>DOWN</span>");
+        : (i.app_up ? "<span class='pill ok'>UP</span>"
+           : "<span class='pill down'>" + (i.app_state === "stale" ? "DOWN (stale .CNC_UP)" : "DOWN") + "</span>");
       var tog = h.is_local
         ? "<td class='tog'><button id='local-toggle' class='toggle' type='button' " +
           "aria-label='Show host details'></button></td>"
@@ -230,7 +231,8 @@ function refreshInfo() {
     html += row("Topology", t.kind + (t.role ? " (" + t.role + ")" : "") +
                 (t.host_count ? " — " + t.host_count + " hosts" : ""));
     html += row("Mate", t.mate);
-    html += row("Application", i.app_up ? "UP" : "DOWN");
+    html += row("Application", i.app_up ? "UP"
+      : (i.app_state === "stale" ? "DOWN (stale .CNC_UP: no netFLEX processes running)" : "DOWN"));
     html += row("CORE", v.core);
     html += row("PATCH", v.patch);
     html += row("IPATCH", v.ipatch);
@@ -261,7 +263,7 @@ function refreshInfo() {
     document.getElementById("links").textContent =
       i.links ? i.links : (i.app_up ? "(no links reported)" : "application down — unavailable");
     var badge = document.getElementById("app-badge");
-    badge.textContent = i.app_up ? "APP UP" : "APP DOWN";
+    badge.textContent = i.app_up ? "APP UP" : (i.app_state === "stale" ? "APP DOWN (stale .CNC_UP)" : "APP DOWN");
     badge.className = "badge " + (i.app_up ? "up" : "down");
   });
 }

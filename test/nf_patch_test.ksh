@@ -8,7 +8,9 @@
 #   rpmdb_ipatch     exists = netFLEX-CORE-IPATCH installed
 #   meta/<basename>  "NAME VERSION ARCH" answered by rpm -qp (absent = rpm fails)
 #   scripts/<base>   answered by rpm -qp --scripts
-#   ps               output of the ps stub
+#   ps               output of the ps stub (ps -eo pid,args)
+#   ps_app           output of ps -e -o user=,comm= (netFLEX up = a cmm-owned
+#                    AT/sdi/dacs/screen/arm/bill/dump); see app_up below
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 . "${DIR}/test/nf_test_lib.ksh"
 
@@ -29,15 +31,22 @@ mkstub() {
 	chmod +x "${SB}/bin/${name}"
 }
 
+# app_up — make netFLEX look running: .CNC_UP plus a cmm-owned dacs.
+app_up() {
+	touch "${SB}/usr/cnc/.CNC_UP"
+	print 'root     systemd\ncmm      dacs' > "${SB}/ps_app"
+}
+
 setup() {
 	cleanup
 	SB=$(mktemp -d "${TMPDIR:-/tmp}/nfp_test.XXXXXX") || { print "mktemp failed"; exit 2; }
 	mkdir -p "${SB}/logs" "${SB}/usr/cnc" "${SB}/bin" "${SB}/depot" "${SB}/meta" "${SB}/scripts"
 	: > "${SB}/calls"
 	: > "${SB}/ps"
+	: > "${SB}/ps_app"
 	print "5.4.1.28 i686" > "${SB}/rpmdb_core"
 	mkstub hostname 'echo h1'
-	mkstub ps 'cat "${NFT_SB}/ps"'
+	mkstub ps 'case "$*" in *user=*) cat "${NFT_SB}/ps_app";; *) cat "${NFT_SB}/ps";; esac'
 	mkstub rpm '
 for last in "$@"; do :; done
 case "$1" in
@@ -238,9 +247,18 @@ assert_rc    "unrelated process: rc" 0 "$rc"
 setup
 f=$(patchfile 5.4.1.29)
 print 'preinstall scriptlet (using /bin/sh):\n    REBOOT_LOADS="29"\nfi' > "${SB}/scripts/$(basename "${f}")"
-touch "${SB}/usr/cnc/.CNC_UP"
+app_up
 run_patch -f "${f}"
 refused "needs stop" 'netFLEX must be stopped'
+# a stale .CNC_UP (forced stop: nothing running) does not count as up
+setup
+f=$(patchfile 5.4.1.29)
+print '    REBOOT_LOADS="29"' > "${SB}/scripts/$(basename "${f}")"
+touch "${SB}/usr/cnc/.CNC_UP"
+print 'cmm      ksh\npostgres postgres\ndan      screen' > "${SB}/ps_app"
+run_patch -f "${f}"
+assert_rc    "reboot load, stale .CNC_UP: rc" 0 "$rc"
+assert_match "reboot load, stale .CNC_UP: noted" 'WARN .*stale .*CNC_UP' "$(trace)"
 # same patch with netFLEX down installs
 setup
 f=$(patchfile 5.4.1.29)
@@ -252,7 +270,7 @@ setup
 print 5.4.1.30 > "${SB}/rpmdb_patch"
 f=$(patchfile 5.4.1.31)
 print '    REBOOT_LOADS="29"' > "${SB}/scripts/$(basename "${f}")"
-touch "${SB}/usr/cnc/.CNC_UP"
+app_up
 run_patch -f "${f}"
 assert_rc    "reboot load passed: rc" 0 "$rc"
 assert_match "reboot load passed: result" 'RESULT: installed 5\.4\.1\.31$' "$(lastline)"

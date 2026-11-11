@@ -114,10 +114,8 @@
     "fail_text": "WARNING",
     "when": "postflight",
     "phase": "upgrade",
-    "kind": "file_exists",
-    "params": {
-      "path": "/usr/cnc/.CNC_UP"
-    }
+    "kind": "app_running",
+    "params": {}
   },
   {
     "name": "lvm2",

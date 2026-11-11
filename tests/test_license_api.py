@@ -18,6 +18,12 @@ def _read_ok(host, path=None):
     return {"state": "ok", "license": dict(LICENSE_DICT), "error": ""}
 
 
+def _app_up(ctx):
+    """Make netFLEX look running: .CNC_UP present and a cmm-owned dacs."""
+    ctx.host.responses[("test", "-f", lic.APP_UP)] = RunResult(0, "", "")
+    ctx.host.responses[("ps", "-e", "-o", "user=,comm=")] = RunResult(0, "cmm dacs\n", "")
+
+
 class FakeSession(object):
     def __init__(self, running):
         self._r = running
@@ -67,11 +73,19 @@ class TestLicenseApi(unittest.TestCase):
             st, b = self.call("GET", "/api/license")
         self.assertEqual(b["state"], "ok")
         self.assertIn("expiry", b)
-        self.ctx.host.responses[("test", "-f", lic.APP_UP)] = RunResult(0, "", "")
+        _app_up(self.ctx)
         with mock.patch.object(lic, "read_license", _read_ok):
             st, b = self.call("GET", "/api/license")
         self.assertFalse(b["editable"])
         self.assertIn("netFLEX is running", b["reason"])
+
+    def test_stale_cnc_up_leaves_license_editable(self):
+        # A forced stop can leave .CNC_UP behind with nothing running.
+        self.ctx.host.responses[("test", "-f", lic.APP_UP)] = RunResult(0, "", "")
+        self.ctx.host.responses[("ps", "-e", "-o", "user=,comm=")] = RunResult(0, "cmm ksh\n", "")
+        with mock.patch.object(lic, "read_license", _read_ok):
+            st, b = self.call("GET", "/api/license")
+        self.assertTrue(b["editable"])
 
     def test_requires_session(self):
         self.sid = "bad"
@@ -119,7 +133,7 @@ class TestLicenseApi(unittest.TestCase):
 
     def _busy(self, how):
         if how == "app":
-            self.ctx.host.responses[("test", "-f", lic.APP_UP)] = RunResult(0, "", "")
+            _app_up(self.ctx)
         elif how == "running":
             self.ctx.host.responses.update(
                 {("pgrep", "-f", "nf_upgrader"): RunResult(0, "4242\n", ""),
@@ -238,7 +252,7 @@ class TestLicenseApi(unittest.TestCase):
         self.assertTrue(mg.called)
         self.assertEqual(b["state"], "ok")
         self.assertIn("license_created", self.audit())
-        self.ctx.host.responses[("test", "-f", lic.APP_UP)] = RunResult(0, "", "")
+        _app_up(self.ctx)
         with mock.patch.object(lic, "read_license", return_value=missing), \
                 mock.patch.object(lic, "create_from_template") as cr2:
             self.assertEqual(self.call("POST", "/api/license/create")[0], 409)
@@ -479,7 +493,7 @@ class TestLicenseRepairApi(unittest.TestCase):
             st, _ = self.call("POST", "/api/license/repair",
                               {"password": PW, "expiry": "12/31/2027"})
         self.assertEqual(st, 409)
-        self.ctx.host.responses[("test", "-f", lic.APP_UP)] = RunResult(0, "", "")
+        _app_up(self.ctx)
         with mock.patch.object(lic, "read_license", return_value=dict(self.NEEDS)):
             st, _ = self.call("POST", "/api/license/repair",
                               {"password": PW, "expiry": "12/31/2027"})

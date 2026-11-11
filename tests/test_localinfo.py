@@ -5,6 +5,11 @@ from nfupgrader import localinfo
 DBCHECK_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "dbcheck")
 
 
+#: `ps -e -o user=,comm=` output with and without a netFLEX process run by cmm.
+PS_UP = "root     systemd\ncmm      dacs\ncmm      ksh\n"
+PS_DOWN = "root     systemd\ncmm      ksh\npostgres postgres\n"
+
+
 def dbcheck_out(name):
     """Canned `dbcheck -AV` stdout (tests/fixtures/dbcheck/<name>.out)."""
     with open(os.path.join(DBCHECK_DIR, name + ".out")) as f:
@@ -83,6 +88,44 @@ def _cnfg(tmp):
     return p
 
 
+class TestAppState(unittest.TestCase):
+    """netFLEX's own rule (boot_nms): up only while AT/sdi/dacs/screen/arm/bill/
+    dump runs; .CNC_UP alone can be left behind by a forced stop."""
+
+    def host(self, cnc_up, ps_out, ps_rc=0):
+        return FakeHost({
+            ("test", "-f", "/usr/cnc/.CNC_UP"): RunResult(0 if cnc_up else 1, "", ""),
+            ("ps", "-e", "-o", "user=,comm="): RunResult(ps_rc, ps_out, ""),
+        })
+
+    def test_up_needs_flag_and_a_cmm_process(self):
+        self.assertEqual(localinfo.app_state(self.host(True, PS_UP)), "up")
+
+    def test_flag_without_processes_is_stale(self):
+        self.assertEqual(localinfo.app_state(self.host(True, PS_DOWN)), "stale")
+
+    def test_no_flag_is_down_even_with_processes(self):
+        self.assertEqual(localinfo.app_state(self.host(False, PS_UP)), "down")
+
+    def test_process_must_belong_to_cmm(self):
+        # e.g. a support user's GNU screen session must not count
+        self.assertEqual(localinfo.app_state(self.host(True, "dan      screen\nroot     dump\n")),
+                         "stale")
+
+    def test_every_boot_nms_name_counts_and_match_is_exact(self):
+        for name in ("AT", "sdi", "dacs", "screen", "arm", "bill", "dump"):
+            self.assertEqual(localinfo.app_state(self.host(True, "cmm %s\n" % name)), "up", name)
+        self.assertEqual(localinfo.app_state(self.host(True, "cmm dacsproc\ncmm at\n")), "stale")
+
+    def test_ps_failure_trusts_the_flag(self):
+        self.assertEqual(localinfo.app_state(self.host(True, "", ps_rc=1)), "up")
+
+    def test_incroot(self):
+        h = FakeHost({("test", "-f", "/x/.CNC_UP"): RunResult(0, "", ""),
+                      ("ps", "-e", "-o", "user=,comm="): RunResult(0, PS_UP, "")})
+        self.assertEqual(localinfo.app_state(h, "/x"), "up")
+
+
 class TestGather(unittest.TestCase):
     def _host(self, app_up=True):
         r = {
@@ -93,6 +136,7 @@ class TestGather(unittest.TestCase):
             ("readlink", "/usr/cnc_stage"): RunResult(0, "/usr/inc/inc54.129\n", ""),
             ("readlink", "/usr/cnc_saved"): RunResult(1, "", ""),
             ("test", "-f", "/usr/cnc/.CNC_UP"): RunResult(0 if app_up else 1, "", ""),
+            ("ps", "-e", "-o", "user=,comm="): RunResult(0, PS_UP if app_up else PS_DOWN, ""),
             ("cat", "/usr/cnc/.GR_STATUS"): RunResult(0, "COMPLETED\n", ""),
             ("test", "-f", "/usr/cnc/grestore.pid"): RunResult(1, "", ""),
             ("df", "-kP"): RunResult(0, "Filesystem 1024-blocks Used Available Capacity Mounted on\n"
@@ -133,6 +177,20 @@ class TestGather(unittest.TestCase):
         self.assertEqual(info["app_detail"]["incinfo"]["release"], "5.4.0")
         self.assertEqual(info["app_detail"]["dbcheck_errors"], 0)
         self.assertIn("fep2", info["links"])
+
+    def test_gather_stale_cnc_up_is_down(self):
+        tmp = tempfile.mkdtemp()
+        h = self._host(app_up=True)
+        h.responses[("ps", "-e", "-o", "user=,comm=")] = RunResult(0, PS_DOWN, "")
+        info = localinfo.gather(h, "fep1", _cnfg(tmp))
+        self.assertFalse(info["app_up"])
+        self.assertEqual(info["app_state"], "stale")
+        self.assertIsNone(info["app_detail"])     # no incinfo/dbcheck on a stopped system
+
+    def test_gather_reports_app_state(self):
+        tmp = tempfile.mkdtemp()
+        self.assertEqual(localinfo.gather(self._host(app_up=True), "fep1", _cnfg(tmp))["app_state"], "up")
+        self.assertEqual(localinfo.gather(self._host(app_up=False), "fep1", _cnfg(tmp))["app_state"], "down")
 
     def test_gather_tier1_only_skips_tier2_even_when_app_up(self):
         tmp = tempfile.mkdtemp()

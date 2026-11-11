@@ -25,7 +25,9 @@
 # upgrade holds .UPGRADE_LOCK, ${STAGEROOT} exists (dir or link), or another
 # nf_upgrader/nf_upgrade/inc_upgrade/inc_upgrader/nf_install/nf_patch is
 # running. A patch whose REBOOT_LOADS
-# applies is refused while netFLEX is up (.CNC_UP).
+# applies is refused while netFLEX is up: .CNC_UP plus a cmm-owned
+# AT/sdi/dacs/screen/arm/bill/dump process (boot_nms's own rule), so a stale
+# .CNC_UP left by a forced stop does not block it.
 #
 # Trace: ${logdir}/patch_inc_${HOSTNAME}.<pid>. Its last line is always one of
 #   INFO  RESULT: installed <version>     (exit 0)
@@ -73,6 +75,31 @@ function refuse
 {
 	logerror "RESULT: refused: $1"
 	exit 1
+}
+
+# app_state — print up, down or stale. netFLEX is up only with .CNC_UP AND a
+# process boot_nms counts as the Controller (AT sdi dacs screen arm bill dump)
+# run by cmm; .CNC_UP alone is "stale" (forced stop). Same rule as the
+# service's localinfo.app_state. If ps fails, the flag is trusted.
+function app_state
+{
+	typeset u c f
+	[ -f "${INCROOT}/.CNC_UP" ] || { print down; return; }
+	f="${TMP}.ps"
+	ps -e -o user=,comm= > "${f}" 2>/dev/null || { rm -f "${f}"; print up; return; }
+	while read u c
+	do
+		[ "${u}" = cmm ] || continue
+		case "${c}" in
+		AT|sdi|dacs|screen|arm|bill|dump)
+			rm -f "${f}"
+			print up
+			return
+			;;
+		esac
+	done < "${f}"
+	rm -f "${f}"
+	print stale
 }
 
 # fail <reason> — rpm -Uvh ran and it (or the verify after it) failed.
@@ -353,8 +380,14 @@ done
 if [ -n "${REBOOT}" ]
 then
 	loginfo "REBOOT_LOADS [${RLOADS}] applies (load ${REBOOT})"
-	[ -f "${INCROOT}/.CNC_UP" ] \
-		&& refuse "${PVER} requires a reboot load (${REBOOT}) - netFLEX must be stopped (Boot menu tab)"
+	case "$(app_state)" in
+	up)
+		refuse "${PVER} requires a reboot load (${REBOOT}) - netFLEX must be stopped (Boot menu tab)"
+		;;
+	stale)
+		logwarn "stale ${INCROOT}/.CNC_UP: no netFLEX processes running - treating netFLEX as stopped"
+		;;
+	esac
 fi
 
 if [ "${DRYRUN}" = "YES" ]

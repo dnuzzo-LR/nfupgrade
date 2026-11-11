@@ -14,6 +14,7 @@ def _tier1_responses(app_up=False):
         ("readlink", "/usr/cnc_stage"): RunResult(1, "", ""),
         ("readlink", "/usr/cnc_saved"): RunResult(1, "", ""),
         ("test", "-f", "/usr/cnc/.CNC_UP"): RunResult(0 if app_up else 1, "", ""),
+        ("ps", "-e", "-o", "user=,comm="): RunResult(0, "cmm dacs\n" if app_up else "", ""),
         ("cat", "/usr/cnc/.GR_STATUS"): RunResult(1, "", ""),
         ("test", "-f", "/usr/cnc/grestore.pid"): RunResult(1, "", ""),
         ("df", "-kP"): RunResult(0, "H\n/d 1 1 1 5% /usr4\n", ""),

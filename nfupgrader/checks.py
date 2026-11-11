@@ -23,6 +23,15 @@ def _file_exists(host, p):
     return host.run(["test", "-f", p["path"]]).rc == 0, p["path"]
 
 
+def _app_running(host, p):
+    """netFLEX is running by its own rule (localinfo.app_state), not merely
+    because .CNC_UP exists."""
+    state = localinfo.app_state(host)
+    if state == "stale":
+        return False, "stale .CNC_UP (no netFLEX processes)"
+    return state == "up", state
+
+
 def _file_absent(host, p):
     return host.run(["test", "-f", p["path"]]).rc != 0, p["path"]
 
@@ -313,6 +322,7 @@ def _ulimit(host, p):
 KINDS = {
     "rpm_installed": _rpm_installed,
     "file_exists": _file_exists,
+    "app_running": _app_running,
     "file_absent": _file_absent,
     "symlink_target": _symlink_target,
     "command_status": _command_status,

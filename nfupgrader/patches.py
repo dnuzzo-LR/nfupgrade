@@ -5,7 +5,7 @@ them to evaluate(), which decides which single patch may be installed next
 (strict sequence) and labels every other file with why it cannot be."""
 import re
 
-from nfupgrader import cfg
+from nfupgrader import cfg, localinfo
 
 #: The only package name this tool will install.
 SUPPORTED_PKG = "netFLEX-CORE-PATCH"
@@ -192,7 +192,7 @@ def gather(host, dirs, stage_root="/usr/cnc_stage", incroot="/usr/cnc"):
                  "finish or back out the upgrade first")
     else:
         block = None
-    app_up = host.run(["test", "-f", incroot + "/.CNC_UP"]).rc == 0
+    app_up = localinfo.app_state(host, incroot) == "up"
 
     files = []
     for d in dirs:

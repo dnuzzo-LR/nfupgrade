@@ -100,9 +100,37 @@ def _test_f(host, path):
     return host.run(["test", "-f", path]).rc == 0
 
 
+#: Process names netFLEX's boot menu counts as "Controller is running"
+#: (3b2/shell/boot_nms rewrites .CNC_UP from exactly this ps check).
+APP_PROCS = frozenset(["AT", "sdi", "dacs", "screen", "arm", "bill", "dump"])
+#: Only processes run by this user count, so e.g. a support user's GNU screen
+#: session cannot make a stopped netFLEX look up.
+APP_USER = "cmm"
+APP_PS_ARGV = ["ps", "-e", "-o", "user=,comm="]
+
+
+def app_state(host, incroot="/usr/cnc"):
+    """Whether netFLEX is running: "up", "down" or "stale".
+
+    "up" needs both <incroot>/.CNC_UP and a cmm-owned APP_PROCS process.
+    "stale" is .CNC_UP with no such process: left behind by a forced stop or
+    an interrupted boot; boot_nms itself clears it the next time it runs, and
+    this never touches it. If ps cannot be run, the flag is trusted ("up")."""
+    if host.run(["test", "-f", incroot + "/.CNC_UP"]).rc != 0:
+        return "down"
+    r = host.run(APP_PS_ARGV)
+    if r.rc != 0:
+        return "up"
+    for ln in r.out.splitlines():
+        f = ln.split()
+        if len(f) == 2 and f[0] == APP_USER and f[1] in APP_PROCS:
+            return "up"
+    return "stale"
+
+
 def gather(host, hostname, cnc_cnfg_path="/usr/cnc/features/cnc.cnfg", tier1_only=False):
     """Collect this host's read-only facts. Tier-2 (app-dependent) fields are
-    gathered only when /usr/cnc/.CNC_UP exists and tier1_only is False (peers
+    gathered only when netFLEX is up (app_state) and tier1_only is False (peers
     are tier-1 only)."""
     try:
         with open(cnc_cnfg_path) as fh:
@@ -117,7 +145,8 @@ def gather(host, hostname, cnc_cnfg_path="/usr/cnc/features/cnc.cnfg", tier1_onl
         "host_count": len(hosts),
     }
 
-    app_up = _test_f(host, "/usr/cnc/.CNC_UP")
+    state = app_state(host)
+    app_up = state == "up"
 
     gr_status = host.run(["cat", "/usr/cnc/.GR_STATUS"])
     gr = {
@@ -139,6 +168,7 @@ def gather(host, hostname, cnc_cnfg_path="/usr/cnc/features/cnc.cnfg", tier1_onl
             "saved": _readlink(host, "/usr/cnc_saved"),
         },
         "app_up": app_up,
+        "app_state": state,
         "gr": gr,
         "disk": parse_df(host.run(["df", "-kP"]).out, keep=_DISK_KEEP),
         "app_detail": None,

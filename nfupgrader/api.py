@@ -292,7 +292,7 @@ def license_editable(ctx, holding_lock=False):
     holding_lock: the caller holds _FIX_LOCK, so skip the lock test."""
     if preview_scenario(ctx):
         return False, "preview mode"
-    if ctx.host.run(["test", "-f", licmod.APP_UP]).rc == 0:
+    if localinfo.app_state(ctx.host, os.path.dirname(licmod.APP_UP)) == "up":
         return False, "netFLEX is running \u2014 stop it to edit the license"
     if launcher.anything_running(ctx.host):
         return False, "an install, upgrade or patch is running"

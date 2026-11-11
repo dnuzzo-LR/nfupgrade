@@ -69,6 +69,12 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn('"&file=" + encodeURIComponent(logFile)', self.js)
         self.assertIn("if (d.reset)", self.js)
 
+    def test_stale_cnc_up_is_shown_as_down(self):
+        # /api/info app_state "stale": .CNC_UP left behind with nothing running.
+        self.assertIn('"APP DOWN (stale .CNC_UP)"', self.js)
+        self.assertIn('"DOWN (stale .CNC_UP)"', self.js)
+        self.assertEqual(self.js.count('i.app_state === "stale"'), 3)
+
     def test_overview_dbcheck_unknown_is_not_shown_as_blank(self):
         # /api/info reports dbcheck_errors null when dbcheck did not complete.
         self.assertIn('i.app_detail.dbcheck_errors === null ? "unknown (dbcheck did not complete)"',

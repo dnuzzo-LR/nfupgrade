@@ -75,6 +75,21 @@ class TestKinds(unittest.TestCase):
         h2 = FakeHost({("dbcheck", "-AV"): RunResult(1, dbcheck_out("errors3"), "")})
         self.assertEqual(checks.KINDS["dbcheck_clean"](h2, {}), (False, "3 error(s)"))
 
+    def test_app_running(self):
+        def h(cnc_up, ps_out):
+            return FakeHost({("test", "-f", "/usr/cnc/.CNC_UP"): RunResult(0 if cnc_up else 1, "", ""),
+                             ("ps", "-e", "-o", "user=,comm="): RunResult(0, ps_out, "")})
+        run = checks.KINDS["app_running"]
+        self.assertEqual(run(h(True, "cmm dacs\n"), {}), (True, "up"))
+        self.assertEqual(run(h(True, "cmm ksh\n"), {}), (False, "stale .CNC_UP (no netFLEX processes)"))
+        self.assertEqual(run(h(False, ""), {}), (False, "down"))
+
+    def test_post_app_up_uses_processes_not_just_the_flag(self):
+        import json
+        path = os.path.join(os.path.dirname(checks.__file__), "checks.default.json")
+        c = [c for c in json.load(open(path)) if c["name"] == "post-app-up"][0]
+        self.assertEqual(c["kind"], "app_running")
+
     def test_dbcheck_that_did_not_complete_fails(self):
         h = FakeHost({("dbcheck", "-AV"): RunResult(1, dbcheck_out("initfail"), "")})
         self.assertEqual(checks.KINDS["dbcheck_clean"](h, {}),
