@@ -68,6 +68,32 @@ class TestApi(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.ctx = make_ctx(self.tmp)
 
+    def _postflight(self, phase="upgrade"):
+        status, _, body = api.dispatch(
+            "GET", "/api/checks", {"when": ["postflight"], "phase": [phase]}, b"",
+            {"nfu_sid": self._session()}, "127.0.0.1", self.ctx)
+        return status, json.loads(body.decode())
+
+    def test_postflight_pending_until_upgrade_completes(self):
+        # #9: no post-flight verdicts for an upgrade that has not happened.
+        for state in (None, "swscopycnc", "swscomplete", "swistart"):
+            path = os.path.join(self.tmp, ".h1_STATE")
+            if state is None:
+                os.remove(path)
+            else:
+                open(path, "w").write(state + "\n")
+            status, data = self._postflight()
+            self.assertEqual(status, 200)
+            self.assertEqual(data["results"], [], state)
+            self.assertEqual(data["pending"], "Runs after an upgrade completes on this host.")
+
+    def test_postflight_runs_after_upgrade_completes(self):
+        open(os.path.join(self.tmp, ".h1_STATE"), "w").write("swidone\n")
+        status, data = self._postflight()
+        self.assertEqual(status, 200)
+        self.assertNotIn("pending", data)
+        self.assertEqual([r["name"] for r in data["results"]], ["post-dbcheck"])
+
     def _session(self):
         # Cached: the token is single-use, but several tests (e.g. those
         # driving /api/launch through the _launch() helper) call _session()

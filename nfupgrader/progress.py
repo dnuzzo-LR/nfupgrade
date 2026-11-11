@@ -69,6 +69,12 @@ def read_state(hostname, inclogdir, phase="stage"):
         return None
 
 
+def phase_done(hostname, inclogdir, phase):
+    """True iff the phase's state file is at that phase's terminal state
+    (e.g. swidone for upgrade): the phase has run to completion on this host."""
+    return read_state(hostname, inclogdir, phase) == _TERMINAL[phase]
+
+
 def infer_phase(current):
     """'upgrade' once the state machine is past staging, else 'stage'."""
     return "upgrade" if current in _UPGRADE_ONLY else "stage"

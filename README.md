@@ -188,6 +188,16 @@ opening netFLEX's boot menu clears it. This rule drives the header badge,
 Overview and Site view, the License tab, the Patches tab, `nf_patch`, and the
 `post-app-up` post-flight check. If `ps` itself fails, the file is trusted.
 
+### Pre-flight and post-flight checks
+
+Pre-flight checks run only when you press **Run pre-flight checks** (they are
+slow: dbcheck and dozens of package/kernel/limits checks); until then, and after
+changing **Phase**, the area says *Not run yet*. Post-flight checks judge a
+finished upgrade, so in Upgrade phase they show only once this host's upgrade has
+completed (state `swidone`); before that the area says *Runs after an upgrade
+completes on this host.* (A failed upgrade stops short of `swidone`: see the
+progress strip and the Log tab.)
+
 ### Pre-flight Fix buttons and EPEL packages
 
 A failed pre-flight check whose problem the tool knows how to correct gets a

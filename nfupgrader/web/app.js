@@ -467,9 +467,18 @@ function applyFix(btn) {
     });
 }
 
+// Pre-flight runs only on request (it is slow: dbcheck and dozens of checks);
+// until then say so rather than leave a blank under the Phase picker.
+function preflightPlaceholder() {
+  var sel = document.getElementById("mode");
+  var label = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : sel.value;
+  document.getElementById("preflight").innerHTML = "<p class='muted'>Not run yet for " +
+    esc(label) + " &mdash; press <b>Run pre-flight checks</b>.</p>";
+}
+
 function resetPreflight() {
   preflight = null;
-  document.getElementById("preflight").innerHTML = "";
+  preflightPlaceholder();
   document.getElementById("override-box").style.display = "none";
   document.getElementById("fix-msg").textContent = "";
   updateLaunchState();
@@ -579,7 +588,10 @@ function refreshPostflight() {
   getJSON("/api/checks?when=postflight&phase=" + mode, function (data) {
     // The phase list changes with the host mode; drop an answer for the old one.
     if (document.getElementById("mode").value !== mode) return;
-    if (data.results.length) renderChecks(document.getElementById("postflight"), data);
+    var el = document.getElementById("postflight");
+    if (data.pending) el.innerHTML = "<p class='muted'>" + esc(data.pending) + "</p>";
+    else if (data.results.length) renderChecks(el, data);
+    else el.textContent = "-";
   });
 }
 
@@ -2170,6 +2182,7 @@ function refreshStopping() {
   }, function () {});
 }
 
+preflightPlaceholder();
 refreshStopping();
 refreshProgress();
 refreshLog();

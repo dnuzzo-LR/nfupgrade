@@ -69,6 +69,15 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn('"&file=" + encodeURIComponent(logFile)', self.js)
         self.assertIn("if (d.reset)", self.js)
 
+    def test_preflight_and_postflight_placeholders(self):
+        # #9: say why a table is missing instead of leaving a blank.
+        self.assertIn("Not run yet for ", self.js)
+        self.assertIn("press <b>Run pre-flight checks</b>", self.js)
+        self.assertIn("data.pending", self.js)
+        reset = self.js.split("function resetPreflight()", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("preflightPlaceholder()", reset)
+        self.assertIn("\npreflightPlaceholder();\n", self.js)    # also on page load
+
     def test_epel_checks_are_tagged(self):
         # EPEL package checks have no Fix button; the tag says why.
         self.assertIn('r.source === "epel"', self.js)

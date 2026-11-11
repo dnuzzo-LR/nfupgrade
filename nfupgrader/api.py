@@ -173,6 +173,9 @@ def host_mode(ctx):
     return installstate.host_mode(ctx.host, ctx.hostname, upgrade_logdir(ctx))
 
 
+#: /api/checks post-flight answer for upgrade phase before an upgrade completed.
+POSTFLIGHT_PENDING = "Runs after an upgrade completes on this host."
+
 #: Error for every action refused while a stop waits for the boot menu.
 STOPPING_ERROR = "nfupgrader is stopping \u2014 waiting for the boot menu to finish"
 
@@ -756,6 +759,11 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
     if path == "/api/checks" and method == "GET":
         when = (query.get("when") or ["preflight"])[0]
         phase = (query.get("phase") or [_active_phase(ctx)])[0]
+        if (when == "postflight" and phase == "upgrade"
+                and not progress.phase_done(ctx.hostname, upgrade_logdir(ctx), "upgrade")):
+            # Post-flight judges a finished upgrade; before one there is nothing
+            # to judge (e.g. "application booted after upgrade" with none run).
+            return _json(200, {"results": [], "blocking": [], "pending": POSTFLIGHT_PENDING})
         if when == "postflight" and phase == "install":
             # Re-checks the rpm_installed preconditions a fix may have just
             # installed; nothing else from the install check list is relevant
