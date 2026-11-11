@@ -69,6 +69,11 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn('"&file=" + encodeURIComponent(logFile)', self.js)
         self.assertIn("if (d.reset)", self.js)
 
+    def test_epel_checks_are_tagged(self):
+        # EPEL package checks have no Fix button; the tag says why.
+        self.assertIn('r.source === "epel"', self.js)
+        self.assertIn("pill epel", self.js)
+
     def test_stopping_banner(self):
         # A deferred stop (boot menu busy) shows on every tab.
         self.assertIn('id="stopping-banner"', self.html)

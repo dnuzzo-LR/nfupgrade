@@ -188,6 +188,20 @@ opening netFLEX's boot menu clears it. This rule drives the header badge,
 Overview and Site view, the License tab, the Patches tab, `nf_patch`, and the
 `post-app-up` post-flight check. If `ps` itself fails, the file is trusted.
 
+### Pre-flight Fix buttons and EPEL packages
+
+A failed pre-flight check whose problem the tool knows how to correct gets a
+**Fix** button (installing a missing package with `dnf install -y`, starting a
+service, setting a kernel parameter or limit, …); the button's tooltip shows the
+exact command. **Packages from EPEL never get one**: EPEL is outside Red Hat's
+supported content, and on a customer (e.g. STIG) host installing from it may need
+the customer's approval first. Those checks (`fzf`, `mg`, `htop`, `ne`,
+`fd-find`, `ripgrep`; marked `"source": "epel"` in `checks.default.json`) are
+optional WARNINGs tagged **EPEL**; when missing, the detail gives the `dnf
+install` line to run by hand once approved, and the server refuses a fix
+request for them. The `netcat` check passes with Red Hat's `nmap-ncat` (which
+provides `nc`) or EPEL's `netcat`, and its Fix installs `nmap-ncat`.
+
 **Launch is guarded** by a browser confirm dialog, but there is no other gate — a
 confirmed click runs the real upgrade immediately. Only click on a host prepared
 for it. Just running the service launches nothing; it only observes.

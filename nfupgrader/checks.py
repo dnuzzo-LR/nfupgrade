@@ -14,9 +14,28 @@ import stat
 from nfupgrader import localinfo
 
 
+#: Detail for a missing package from EPEL (params "source": "epel"). Such
+#: packages are outside Red Hat's supported content; on a customer (e.g. STIG)
+#: host they may need approval, so the tool never offers to install them.
+EPEL_MISSING = ("not installed \u2014 optional EPEL package (outside Red Hat-supported "
+                "content); needs the customer's approval. To install: dnf install {}")
+
+
+def _is_epel(p):
+    return p.get("source") == "epel"
+
+
 def _rpm_installed(host, p):
-    r = host.run(["rpm", "-q", p["pkg"]])
-    return r.rc == 0, r.out.strip() or r.err.strip()
+    """The package is installed; with "any_of", any one of those packages
+    (e.g. nmap-ncat or EPEL's netcat for nc). The fix installs "pkg"."""
+    r = None
+    for pkg in p.get("any_of") or [p["pkg"]]:
+        r = host.run(["rpm", "-q", pkg])
+        if r.rc == 0:
+            return True, r.out.strip() or r.err.strip()
+    if _is_epel(p):
+        return False, EPEL_MISSING.format(p["pkg"])
+    return False, r.out.strip() or r.err.strip()
 
 
 def _file_exists(host, p):
@@ -604,6 +623,8 @@ def describe_fix(check):
     if f is None:
         return None
     p = check.get("params", {})
+    if _is_epel(p):
+        return None
     try:
         return f[0](p) if _fix_args_ok(check.get("kind"), p) else None
     except (KeyError, TypeError, AttributeError):
@@ -616,6 +637,8 @@ def apply_fix(host, check):
     if f is None:
         return False, "no fix for kind {}".format(check.get("kind"))
     p = check.get("params", {})
+    if _is_epel(p):
+        return False, "EPEL packages are not installed by this tool (needs the customer's approval)"
     try:
         if not _fix_args_ok(check.get("kind"), p):
             return False, "invalid name for a {} fix".format(check.get("kind"))
@@ -704,6 +727,7 @@ def evaluate(host, c, when):
         "fix": None if passed else describe_fix(c),
         "output": "" if passed else _captured_output(rec.runs),
         "hard": bool(c.get("hard", False)),
+        "source": c.get("params", {}).get("source"),
     }
 
 

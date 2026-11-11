@@ -450,19 +450,21 @@
     "phase": "any",
     "kind": "rpm_installed",
     "params": {
-      "pkg": "netcat"
+      "pkg": "nmap-ncat",
+      "any_of": ["nmap-ncat", "netcat"]
     }
   },
   {
     "name": "fzf",
     "category": "SUPPORT",
-    "description": "command-line fuzzy finder {epel}",
+    "description": "command-line fuzzy finder",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
     "kind": "rpm_installed",
     "params": {
-      "pkg": "fzf"
+      "pkg": "fzf",
+      "source": "epel"
     }
   },
   {
@@ -480,13 +482,14 @@
   {
     "name": "mg",
     "category": "SUPPORT",
-    "description": "Tiny Emacs-like editor {epel}",
+    "description": "Tiny Emacs-like editor",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
     "kind": "rpm_installed",
     "params": {
-      "pkg": "mg"
+      "pkg": "mg",
+      "source": "epel"
     }
   },
   {
@@ -516,13 +519,14 @@
   {
     "name": "htop",
     "category": "SUPPORT",
-    "description": "A better top command {epel}",
+    "description": "A better top command",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
     "kind": "rpm_installed",
     "params": {
-      "pkg": "htop"
+      "pkg": "htop",
+      "source": "epel"
     }
   },
   {
@@ -540,37 +544,40 @@
   {
     "name": "ne",
     "category": "SUPPORT",
-    "description": "Like nano, just better {epel}",
+    "description": "Like nano, just better",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
     "kind": "rpm_installed",
     "params": {
-      "pkg": "ne"
+      "pkg": "ne",
+      "source": "epel"
     }
   },
   {
     "name": "fd",
     "category": "SUPPORT",
-    "description": "Like find, just better {epel}",
+    "description": "Like find, just better",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
     "kind": "rpm_installed",
     "params": {
-      "pkg": "fd-find"
+      "pkg": "fd-find",
+      "source": "epel"
     }
   },
   {
     "name": "rg",
     "category": "SUPPORT",
-    "description": "Like grep, just way better {epel}",
+    "description": "Like grep, just way better",
     "fail_text": "WARNING",
     "when": "preflight",
     "phase": "any",
     "kind": "rpm_installed",
     "params": {
-      "pkg": "ripgrep"
+      "pkg": "ripgrep",
+      "source": "epel"
     }
   },
   {

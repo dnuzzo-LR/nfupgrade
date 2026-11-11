@@ -63,6 +63,7 @@ tr.local { background: #eaf5ee; font-weight: 600; }
 .pill { padding: .05rem .45rem; border-radius: 999px; font-size: 12px; font-weight: 600; color: #fff; }
 .pill.ok { background: var(--ok); } .pill.down { background: var(--err); }
 .pill.unknown { background: var(--unknown); }
+.pill.epel { background: var(--unknown); }
 
 /* checks */
 table.checks tr.fail-ERROR { background: #fdecea; }

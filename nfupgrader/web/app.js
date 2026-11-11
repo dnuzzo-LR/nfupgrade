@@ -287,6 +287,9 @@ function renderChecks(el, data, overridable) {
           esc(r.fix) + "' title='" + esc(r.fix) + "'>Fix</button>" : "") + "</td>";
     }
     var detail = esc(r.detail || "");
+    // EPEL packages never get a Fix button (customer approval needed); say so.
+    if (r.source === "epel") detail = "<span class='pill epel' title='Extra Packages for " +
+      "Enterprise Linux: outside Red Hat-supported content'>EPEL</span> " + detail;
     if (r.output) {
       detail += " <a href='#' class='out-toggle' data-i='" + i + "'>output</a>";
     }

@@ -1,3 +1,4 @@
+import json
 import os
 import stat
 import subprocess
@@ -27,6 +28,24 @@ class TestKinds(unittest.TestCase):
         h = FakeHost({("rpm", "-q", "ksh"): RunResult(0, "ksh-20120801\n", "")})
         ok, _ = checks.KINDS["rpm_installed"](h, {"pkg": "ksh"})
         self.assertTrue(ok)
+
+    def test_rpm_any_of(self):
+        # netcat: Red Hat's nmap-ncat or EPEL's netcat both provide nc.
+        h = FakeHost({("rpm", "-q", "netcat"): RunResult(0, "netcat-1.229-1.el8\n", "")})
+        ok, detail = checks.KINDS["rpm_installed"](h, {"pkg": "nmap-ncat",
+                                                       "any_of": ["nmap-ncat", "netcat"]})
+        self.assertTrue(ok)
+        self.assertEqual(detail, "netcat-1.229-1.el8")
+        ok, _ = checks.KINDS["rpm_installed"](FakeHost({}), {"pkg": "nmap-ncat",
+                                                            "any_of": ["nmap-ncat", "netcat"]})
+        self.assertFalse(ok)
+
+    def test_rpm_missing_epel_says_needs_approval(self):
+        ok, detail = checks.KINDS["rpm_installed"](FakeHost({}), {"pkg": "ripgrep", "source": "epel"})
+        self.assertFalse(ok)
+        self.assertIn("optional EPEL package", detail)
+        self.assertIn("customer's approval", detail)
+        self.assertIn("dnf install ripgrep", detail)
 
     def test_rpm_missing(self):
         h = FakeHost({("rpm", "-q", "nope"): RunResult(1, "not installed\n", "")})
@@ -329,6 +348,34 @@ class TestFixes(unittest.TestCase):
                       checks.describe_fix(self.check("touchfile", file="ems")))
         self.assertIsNone(checks.describe_fix(self.check("system_define", variable="X")))
         self.assertIsNone(checks.describe_fix(self.check("dbcheck_clean")))
+
+    def test_epel_package_has_no_fix(self):
+        c = self.check("rpm_installed", pkg="ripgrep", source="epel")
+        self.assertIsNone(checks.describe_fix(c))
+        h = RecordingHost()
+        ok, detail = checks.apply_fix(h, c)
+        self.assertFalse(ok)
+        self.assertIn("EPEL", detail)
+        self.assertEqual(h.calls, [])                 # dnf never run
+        r = checks.evaluate(FakeHost({}), c, "preflight")
+        self.assertIsNone(r["fix"])
+        self.assertEqual(r["source"], "epel")
+
+    def test_netcat_fix_installs_red_hat_nmap_ncat(self):
+        c = self.check("rpm_installed", pkg="nmap-ncat", any_of=["nmap-ncat", "netcat"])
+        self.assertEqual(checks.describe_fix(c), "dnf install -y nmap-ncat")
+
+    def test_default_checks_epel_marking(self):
+        path = os.path.join(os.path.dirname(checks.__file__), "checks.default.json")
+        cl = json.load(open(path))
+        epel = sorted(c["params"]["pkg"] for c in cl
+                      if c.get("params", {}).get("source") == "epel")
+        self.assertEqual(epel, ["fd-find", "fzf", "htop", "mg", "ne", "ripgrep"])
+        self.assertFalse([c["name"] for c in cl if "{epel}" in c.get("description", "")])
+        nc = [c for c in cl if c["name"] == "netcat"][0]
+        self.assertEqual(nc["params"]["pkg"], "nmap-ncat")
+        self.assertEqual(nc["params"]["any_of"], ["nmap-ncat", "netcat"])
+        self.assertIsNotNone(checks.describe_fix(nc))
 
     def test_rpm_fix(self):
         h = RecordingHost()
