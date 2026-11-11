@@ -78,6 +78,43 @@ overwritten, while `logs/`, any `netFLEX-CORE*.rpm` and anything else you put
 there are left alone. It writes `/opt/nfupgrader/VERSION` and does not start the
 tool. Release tarballs contain the tool only, not the tests.
 
+### Installing from a downloaded zip (or without GitHub access)
+
+GitHub offers two different zips; which one you get matters:
+
+| Download | What it contains | Needs a release? |
+|----------|------------------|------------------|
+| Repo page → **Code → Download ZIP** | `main` as it is *right now*, unpacks to `nfupgrade-main/`, no version number, includes `test/`, `tests/` and `ref/` | No — anything pushed to `main` is in it |
+| Release page → **Source code (zip)** | the tagged release, unpacks to `nfupgrade-<version>/`, also includes the tests | Yes |
+| Release page → `nfupgrader-<version>.tar.gz` + `install.sh` | the tool only, checksum-verified by `install.sh` | Yes |
+
+Use **Download ZIP** for a quick lab test of an unreleased fix; give customers a
+**release**, so there is a version to quote and the checksum is checked.
+
+To install from a zip, copy it to the host and, as root:
+
+```sh
+cd /tmp && unzip -q nfupgrade-main.zip             # `dnf install unzip` if missing
+mkdir -p /opt/nfupgrader
+cp -a nfupgrade-main/. /opt/nfupgrader/            # logs/ and RPMs already there are kept
+cd /opt/nfupgrader && ./run.sh
+```
+
+Execute bits survive the zip. Nothing writes `/opt/nfupgrader/VERSION` this way,
+so it keeps showing the last release installed with `install.sh` (or is absent);
+note which commit you copied.
+
+For a host that cannot reach GitHub, prefer the release files: download
+`nfupgrader-<version>.tar.gz` and `install.sh` from the release page, copy both
+to the host, and run (as root):
+
+```sh
+NFU_TARBALL=./nfupgrader-<version>.tar.gz bash install.sh
+```
+
+`install.sh` then uses the local tarball instead of downloading, still checks
+its SHA-256, and writes `VERSION`.
+
 ### Making a release
 
 ```sh
