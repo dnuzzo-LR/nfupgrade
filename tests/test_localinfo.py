@@ -1,5 +1,14 @@
+import os
 import unittest
 from nfupgrader import localinfo
+
+DBCHECK_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "dbcheck")
+
+
+def dbcheck_out(name):
+    """Canned `dbcheck -AV` stdout (tests/fixtures/dbcheck/<name>.out)."""
+    with open(os.path.join(DBCHECK_DIR, name + ".out")) as f:
+        return f.read()
 
 RPM_OUT = """Name        : netFLEX-CORE
 Version     : 5.4.0
@@ -33,12 +42,25 @@ class TestParsers(unittest.TestCase):
     def test_df_keep_none_returns_all(self):
         self.assertEqual(len(localinfo.parse_df(DF_OUT)), 3)
 
-    def test_dbcheck_error_count(self):
-        out = "checking...\nERROR: bad tie\nERROR: bad alarm\nok\n"
-        self.assertEqual(localinfo.parse_dbcheck_errors(out), 2)
+    # dbcheck -AV output, from the printf()s in netFLEX cnc/tools/src/dbcheck.c.
+    def test_dbcheck_clean_is_zero(self):
+        # "0 errors found" mentions "error" but is the all-clear summary.
+        self.assertEqual(localinfo.parse_dbcheck_errors(dbcheck_out("clean"), 0), 0)
 
-    def test_dbcheck_zero(self):
-        self.assertEqual(localinfo.parse_dbcheck_errors("all clean\n"), 0)
+    def test_dbcheck_count_is_the_summary_total(self):
+        # Error lines and the per-type table must not be counted on top of Total.
+        self.assertEqual(localinfo.parse_dbcheck_errors(dbcheck_out("errors3"), 1), 3)
+
+    def test_dbcheck_blocked_audits_still_total(self):
+        self.assertEqual(localinfo.parse_dbcheck_errors(dbcheck_out("blocked1"), 1), 1)
+
+    def test_dbcheck_without_summary_is_unknown(self):
+        self.assertIsNone(localinfo.parse_dbcheck_errors(dbcheck_out("initfail"), 1))
+        self.assertIsNone(localinfo.parse_dbcheck_errors("", 0))
+
+    def test_dbcheck_exit_code_must_agree(self):
+        self.assertIsNone(localinfo.parse_dbcheck_errors(dbcheck_out("clean"), 1))
+        self.assertIsNone(localinfo.parse_dbcheck_errors(dbcheck_out("errors3"), 0))
 
     def test_parse_incinfo_json_becomes_dict(self):
         v = localinfo.parse_incinfo('{"release": "5.5.0", "up": true}')
@@ -77,7 +99,7 @@ class TestGather(unittest.TestCase):
                                         "/dev/sda4 73400320 46000000 27400320 63% /usr4\n", ""),
             ("/usr/cnc/bin/incinfo", "-j"): RunResult(0, '{"release": "5.4.0", "up": true}', ""),
             ("rdb", "version"): RunResult(0, "rdb 1.2.3\n", ""),
-            ("dbcheck", "-AV"): RunResult(0, "clean\n", ""),
+            ("dbcheck", "-AV"): RunResult(0, dbcheck_out("clean"), ""),
             ("/usr/cnc/mbin/nestat", "-B"): RunResult(0, "01 fep2  -> UP 7001 MSG WTR 5\n", ""),
         }
         return FakeHost(r)

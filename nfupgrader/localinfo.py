@@ -2,6 +2,7 @@
 Pure parsers turn command output into structure; gather() composes them. The
 same collectors serve peers over ssh in Phase 4b."""
 import json
+import re
 
 from nfupgrader import site
 
@@ -52,12 +53,38 @@ def parse_df(out, keep=None):
     return rows
 
 
-def parse_dbcheck_errors(out):
-    """Count ERROR lines in dbcheck -AV output."""
-    return sum(1 for ln in out.splitlines() if "ERROR" in ln.upper())
+#: dbcheck's clean summary line (netFLEX cnc/tools/src/dbcheck.c).
+_DBCHECK_CLEAN = re.compile(r"db audit\(s\) complete, 0 errors found")
+#: dbcheck's summary-table total: "  Total<tabs><errors found><tabs><errors corrected>".
+_DBCHECK_TOTAL = re.compile(r"^\s*Total\s+(\d+)\s+\d+\s*$", re.M)
+
+
+def parse_dbcheck_errors(out, rc):
+    """Number of database errors from `dbcheck -AV` output and exit code, or
+    None when it cannot be told (dbcheck failed before its summary, or the
+    summary and exit code disagree). Uses dbcheck's own summary, never a count
+    of lines mentioning "error": the clean summary itself says "0 errors found",
+    and each error appears both as an "Error N:" line and in the per-type table.
+    dbcheck exits 0 only when its total is 0."""
+    clean = _DBCHECK_CLEAN.search(out or "")
+    total = _DBCHECK_TOTAL.search(out or "")
+    if clean and not total:
+        n = 0
+    elif total and not clean:
+        n = int(total.group(1))
+    else:
+        return None
+    if (rc == 0) != (n == 0):
+        return None
+    return n
 
 
 _DISK_KEEP = ("/usr4", "/usr2", "/tmp", "/var")
+
+
+def _dbcheck_errors(host):
+    r = host.run(["dbcheck", "-AV"])
+    return parse_dbcheck_errors(r.out, r.rc)
 
 
 def _readlink(host, path):
@@ -122,7 +149,7 @@ def gather(host, hostname, cnc_cnfg_path="/usr/cnc/features/cnc.cnfg", tier1_onl
         info["app_detail"] = {
             "incinfo": parse_incinfo(host.run(["/usr/cnc/bin/incinfo", "-j"]).out),
             "rdb_version": host.run(["rdb", "version"]).out.strip(),
-            "dbcheck_errors": parse_dbcheck_errors(host.run(["dbcheck", "-AV"]).out),
+            "dbcheck_errors": _dbcheck_errors(host),
         }
         info["links"] = host.run(["/usr/cnc/mbin/nestat", "-B"]).out.strip()
 

@@ -1,0 +1,19 @@
+
+Error 8: multiple nxt_ts pointers to this timeslot
+  neid 2 dg 1 ts 1
+
+********************************************************************
+    Cannot run nxt_dg, xcc, or dest audits until all          
+    nxt_ts and frame_num errors are corrected in database                   
+********************************************************************
+
+********************************************************************
+ db audit(s) complete
+
+ db error type   errors found   errors corrected
+ -------------   ------------   ----------------
+  Error 8 		1		0
+ -------------   ------------   ----------------
+  Total			1		0
+********************************************************************
+

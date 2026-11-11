@@ -69,6 +69,11 @@ class TestWebAssets(unittest.TestCase):
         self.assertIn('"&file=" + encodeURIComponent(logFile)', self.js)
         self.assertIn("if (d.reset)", self.js)
 
+    def test_overview_dbcheck_unknown_is_not_shown_as_blank(self):
+        # /api/info reports dbcheck_errors null when dbcheck did not complete.
+        self.assertIn('i.app_detail.dbcheck_errors === null ? "unknown (dbcheck did not complete)"',
+                      self.js)
+
     def test_overview_shows_upgrade_logdir(self):
         self.assertIn('row("Upgrade logs"', self.js)
 

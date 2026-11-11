@@ -9,7 +9,7 @@
   },
   {
     "name": "Database Check Alarm Count",
-    "command": "/usr/cnc/bin/dbcheck -AV | grep -i error | wc -l"
+    "command": "/usr/cnc/bin/dbcheck -AV | awk '/ 0 errors found/ {n = 0; f = 1} /^ *Total[ \\t]/ {n = $2; f = 1} END {if (f) print n; else print \"unknown (dbcheck did not complete)\"}'"
   },
   {
     "name": "Apache Version",

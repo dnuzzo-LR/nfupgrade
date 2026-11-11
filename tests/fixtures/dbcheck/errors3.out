@@ -1,0 +1,21 @@
+
+Error 5: multiple nxt_ts pointers to this timeslot
+  neid 12 dg 3 ts 7
+
+Error 5: multiple nxt_ts pointers to this timeslot
+  neid 12 dg 3 ts 9
+
+Error 31: inconsistent dest values for these timeslots
+  neid 4 dg 1 ts 2
+
+********************************************************************
+ db audit(s) complete
+
+ db error type   errors found   errors corrected
+ -------------   ------------   ----------------
+  Error 5 		2		0
+  Error 31 		1		0
+ -------------   ------------   ----------------
+  Total			3		0
+********************************************************************
+

@@ -7,6 +7,7 @@ import re
 import unittest
 from nfupgrader import checks
 from nfupgrader.host import FakeHost, RunResult
+from tests.test_localinfo import dbcheck_out
 
 
 class RecordingHost(object):
@@ -69,10 +70,18 @@ class TestKinds(unittest.TestCase):
         self.assertTrue(checks.KINDS["service_active"](h, {"name": "httpd"})[0])
 
     def test_dbcheck_clean(self):
-        h = FakeHost({("dbcheck", "-AV"): RunResult(0, "all good\n", "")})
-        self.assertTrue(checks.KINDS["dbcheck_clean"](h, {})[0])
-        h2 = FakeHost({("dbcheck", "-AV"): RunResult(0, "ERROR: x\n", "")})
-        self.assertFalse(checks.KINDS["dbcheck_clean"](h2, {})[0])
+        h = FakeHost({("dbcheck", "-AV"): RunResult(0, dbcheck_out("clean"), "")})
+        self.assertEqual(checks.KINDS["dbcheck_clean"](h, {}), (True, "0 error(s)"))
+        h2 = FakeHost({("dbcheck", "-AV"): RunResult(1, dbcheck_out("errors3"), "")})
+        self.assertEqual(checks.KINDS["dbcheck_clean"](h2, {}), (False, "3 error(s)"))
+
+    def test_dbcheck_that_did_not_complete_fails(self):
+        h = FakeHost({("dbcheck", "-AV"): RunResult(1, dbcheck_out("initfail"), "")})
+        self.assertEqual(checks.KINDS["dbcheck_clean"](h, {}),
+                         (False, "dbcheck did not complete: data base initialization failed"))
+        h2 = FakeHost({("dbcheck", "-AV"): RunResult(127, "", "dbcheck: command not found\n")})
+        self.assertEqual(checks.KINDS["dbcheck_clean"](h2, {}),
+                         (False, "dbcheck did not complete: dbcheck: command not found"))
 
     def test_staged_present(self):
         h = FakeHost({("readlink", "/usr/cnc_stage"): RunResult(0, "/usr4/inc5.5.103\n", "")})
@@ -164,7 +173,7 @@ class TestRun(unittest.TestCase):
             ("readlink", "/usr/cnc_stage"): RunResult(0, "/usr4/inc5.5.103\n", ""),
             ("df", "-kP"): RunResult(0, "H\n/d 1 1 1048576 99% /usr4\n", ""),  # 1 GiB free
             ("test", "-f", "/nope"): RunResult(1, "", ""),
-            ("dbcheck", "-AV"): RunResult(0, "clean\n", ""),
+            ("dbcheck", "-AV"): RunResult(0, dbcheck_out("clean"), ""),
         })
 
     def test_load_checks(self):

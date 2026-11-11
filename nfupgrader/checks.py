@@ -64,7 +64,13 @@ def _service_active(host, p):
 
 
 def _dbcheck_clean(host, p):
-    n = localinfo.parse_dbcheck_errors(host.run(["dbcheck", "-AV"]).out)
+    r = host.run(["dbcheck", "-AV"])
+    n = localinfo.parse_dbcheck_errors(r.out, r.rc)
+    if n is None:
+        # No usable summary: the database was not checked, so it is not clean.
+        first = next((ln.strip() for ln in (r.out + "\n" + r.err).splitlines() if ln.strip()),
+                     "exit {}".format(r.rc))
+        return False, "dbcheck did not complete: {}".format(first)
     return n == 0, "{} error(s)".format(n)
 
 

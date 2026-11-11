@@ -63,6 +63,23 @@ class TestDefinitions(unittest.TestCase):
         self.assertEqual(len(reps), 21)
         self.assertIn("INC Info", [r["name"] for r in reps])
 
+    def test_default_dbcheck_count_uses_the_summary(self):
+        # Run the shipped command with dbcheck replaced by canned output: the
+        # count must be dbcheck's own total, not the lines mentioning "error".
+        import subprocess
+        from tests.test_localinfo import DBCHECK_DIR
+        path = os.path.join(os.path.dirname(reports.__file__), "reports.default.json")
+        cmd = [r["command"] for r in reports.load_reports(path)
+               if r["name"] == "Database Check Alarm Count"][0]
+        self.assertIn("/usr/cnc/bin/dbcheck -AV", cmd)
+        for name, want in (("clean", "0"), ("errors3", "3"), ("blocked1", "1"),
+                           ("initfail", "unknown (dbcheck did not complete)")):
+            fixture = os.path.join(DBCHECK_DIR, name + ".out")
+            out = subprocess.run(
+                ["sh", "-c", cmd.replace("/usr/cnc/bin/dbcheck -AV", "cat " + fixture)],
+                stdout=subprocess.PIPE, universal_newlines=True).stdout
+            self.assertEqual(out.strip(), want, name)
+
     def test_safe_name(self):
         self.assertEqual(reports.safe_name("Disk File Check /usr4!"), "Disk_File_Check_usr4")
         self.assertEqual(reports.safe_name("///"), "report")

@@ -9,6 +9,7 @@ from nfupgrader import reports, snapjobs
 from nfupgrader.auth import TokenAuth
 from nfupgrader.audit import AuditLog
 from nfupgrader.host import FakeHost, RunResult
+from tests.test_localinfo import dbcheck_out
 
 
 def running_responses(running):
@@ -41,7 +42,7 @@ def make_ctx(tmp, running=True):
         ("rpm", "-q", "netFLEX-CORE"): RunResult(0, "netFLEX-CORE-5.4.0-29\n", ""),
         # default-check commands: stage pre-flight all pass; upgrade blocks on
         # staged-present (no staged load) — see readlink /usr/cnc_stage rc 1 above.
-        ("dbcheck", "-AV"): RunResult(0, "clean\n", ""),
+        ("dbcheck", "-AV"): RunResult(0, dbcheck_out("clean"), ""),
         ("find", "/depot", "-maxdepth", "1", "-name", "netFLEX-CORE*.rpm"):
             RunResult(0, "/depot/netFLEX-CORE-5.5.0.03-1.x86_64.rpm\n", ""),
     })
@@ -196,7 +197,7 @@ class TestApi(unittest.TestCase):
         return [json.loads(l) for l in open(path).read().splitlines()]
 
     def test_launch_partial_override_names_missing(self):
-        self.ctx.host.responses[("dbcheck", "-AV")] = RunResult(0, "ERROR: x\n", "")
+        self.ctx.host.responses[("dbcheck", "-AV")] = RunResult(1, dbcheck_out("errors3"), "")
         status, data = self._launch({"mode": "upgrade", "overrides": ["staged-present"],
                                      "reason": "known good"})
         self.assertEqual(status, 409)
@@ -215,7 +216,7 @@ class TestApi(unittest.TestCase):
         self.assertEqual(status, 400)
 
     def test_launch_full_override_with_reason_audits_names(self):
-        self.ctx.host.responses[("dbcheck", "-AV")] = RunResult(0, "ERROR: x\n", "")
+        self.ctx.host.responses[("dbcheck", "-AV")] = RunResult(1, dbcheck_out("errors3"), "")
         status, _ = self._launch({"mode": "upgrade",
                                   "overrides": ["staged-present", "dbcheck-clean"],
                                   "reason": "known good"})

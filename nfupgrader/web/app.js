@@ -254,7 +254,8 @@ function refreshInfo() {
         html += row("incinfo", inc);
       }
       html += row("rdb", i.app_detail.rdb_version);
-      html += row("dbcheck errors", i.app_detail.dbcheck_errors);
+      html += row("dbcheck errors", i.app_detail.dbcheck_errors === null ? "unknown (dbcheck did not complete)"
+                                    : i.app_detail.dbcheck_errors);
     }
     document.getElementById("about-grid").innerHTML = html;
     document.getElementById("links").textContent =
