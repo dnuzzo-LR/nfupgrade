@@ -342,6 +342,69 @@ def _fix_stage_state(host, p):
     return True, "archived as " + dest
 
 
+RDB_FEATURES = "/usr/cnc/features/rdb"
+DEFAULT_PGDATA = "/usr/cnc/rdb/data"
+
+
+def rdb_data_dir(host):
+    """The local PostgreSQL data directory as nf_upgrader's get_data_dir finds
+    it (data_directory= in features/rdb, else /usr/cnc/rdb/data), or None for
+    a remote RDB (no local data)."""
+    r = host.run(["cat", RDB_FEATURES])
+    vals = {}
+    for ln in (r.out if r.rc == 0 else "").splitlines():
+        if "=" in ln:
+            k, v = ln.split("=", 1)
+            vals[k.strip()] = v.strip()
+    if vals.get("rdb_server_location") == "remote":
+        return None
+    return vals.get("data_directory") or DEFAULT_PGDATA
+
+
+def _rdb_data_mode(host, p):
+    """Upgrade post-flight (#12): the RDB data directory is 700 or 750, the
+    modes PostgreSQL accepts. nf_upgrader's boot runs as root (as netFLEX's own
+    inc_upgrader does), and root boots have left it 775 before."""
+    d = rdb_data_dir(host)
+    if d is None:
+        return True, "remote RDB: no local data directory"
+    r = host.run(["stat", "-c", "%a", d])
+    mode = r.out.strip() if r.rc == 0 else ""
+    if not mode:
+        return False, "cannot read the mode of {}".format(d)
+    if mode in ("700", "750"):
+        return True, "{} is mode {}".format(d, mode)
+    return False, ("{} is mode {}; PostgreSQL needs 700 or 750 (a root boot can leave it so): "
+                   "chmod 700 {}".format(d, mode, d))
+
+
+ROOT_HOME_PROCS = localinfo.APP_PROCS | frozenset(["niimxd"])
+
+
+def _app_home_not_root(host, p):
+    """Upgrade post-flight (#12): no netFLEX process runs with HOME=/root, the
+    mark of a root boot (niimxd loops on it). Reads /proc/<pid>/environ."""
+    r = host.run(["ps", "-e", "-o", "pid=,user=,comm="])
+    if r.rc != 0:
+        return False, "cannot list processes"
+    procs = []
+    for ln in r.out.splitlines():
+        f = ln.split()
+        if len(f) >= 3 and f[2] in ROOT_HOME_PROCS and f[0].isdigit():
+            procs.append((f[0], f[2]))
+    if not procs:
+        return True, "no netFLEX processes running"
+    bad = []
+    for pid, comm in procs:
+        env = host.run(["cat", "/proc/{}/environ".format(pid)])
+        if env.rc == 0 and "HOME=/root" in env.out.split("\0"):
+            bad.append("{} (pid {})".format(comm, pid))
+    if bad:
+        return False, ("{} runs with HOME=/root (booted as root): stop netFLEX and boot netFLEX "
+                       "again as cmm from the Boot menu".format(", ".join(bad)))
+    return True, "{} netFLEX processes checked; none has HOME=/root".format(len(procs))
+
+
 def _touchfile_name_ok(name):
     """A touchfile is a plain name directly under /usr/cnc/features."""
     return bool(name) and "/" not in name and name not in (".", "..")
@@ -598,6 +661,8 @@ KINDS = {
     "upgrade_bundle": _upgrade_bundle,
     "web_staged": _web_staged,
     "stage_state": _stage_state,
+    "rdb_data_mode": _rdb_data_mode,
+    "app_home_not_root": _app_home_not_root,
 }
 
 # Kinds that read facts the API supplies (the saved config's target version)

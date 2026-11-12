@@ -171,6 +171,26 @@
     "params": {}
   },
   {
+    "name": "post-rdb-data-mode",
+    "category": "NETFLEX",
+    "description": "RDB data directory is mode 700/750 (the upgrade's boot runs as root)",
+    "fail_text": "WARNING",
+    "when": "postflight",
+    "phase": "upgrade",
+    "kind": "rdb_data_mode",
+    "params": {}
+  },
+  {
+    "name": "post-no-root-home",
+    "category": "NETFLEX",
+    "description": "No netFLEX process runs with HOME=/root (the upgrade's boot runs as root)",
+    "fail_text": "WARNING",
+    "when": "postflight",
+    "phase": "upgrade",
+    "kind": "app_home_not_root",
+    "params": {}
+  },
+  {
     "name": "lvm2",
     "category": "SYSTEM",
     "description": "Logical Volume Management",

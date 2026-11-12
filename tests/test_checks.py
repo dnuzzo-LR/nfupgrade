@@ -1284,3 +1284,67 @@ class TestStageState(unittest.TestCase):
         c = [c for c in lst if c["name"] == "stage-state"][0]
         self.assertEqual((c["kind"], c["phase"], c.get("hard")), ("stage_state", "stage", True))
         self.assertIn("stage_state", checks.FACT_KINDS)
+
+
+class TestRootBootSideEffects(unittest.TestCase):
+    """#12 (option 1): nf_upgrader's boot runs as root (as netFLEX's own
+    inc_upgrader does). Warn after the upgrade about the two problems root
+    boots have caused: RDB data dir no longer 700/750, and netFLEX processes
+    with HOME=/root (the niimxd loop)."""
+
+    def test_rdb_data_mode(self):
+        kind = checks.KINDS["rdb_data_mode"]
+        for mode, ok in (("700", True), ("750", True), ("775", False), ("755", False)):
+            h = FakeHost({("stat", "-c", "%a", "/usr/cnc/rdb/data"): RunResult(0, mode + "\n", "")})
+            passed, detail = kind(h, {})
+            self.assertEqual(passed, ok, mode)
+            if not ok:
+                self.assertIn("/usr/cnc/rdb/data is mode " + mode, detail)
+                self.assertIn("chmod 700 /usr/cnc/rdb/data", detail)
+
+    def test_rdb_data_mode_external_and_remote(self):
+        h = FakeHost({("cat", "/usr/cnc/features/rdb"): RunResult(0, "data_directory=/usr4/pg\n", ""),
+                      ("stat", "-c", "%a", "/usr4/pg"): RunResult(0, "700\n", "")})
+        self.assertEqual(checks.KINDS["rdb_data_mode"](h, {}), (True, "/usr4/pg is mode 700"))
+        h = FakeHost({("cat", "/usr/cnc/features/rdb"):
+                      RunResult(0, "rdb_server_location=remote\n", "")})
+        self.assertEqual(checks.KINDS["rdb_data_mode"](h, {}), (True, "remote RDB: no local data directory"))
+
+    def test_rdb_data_mode_unreadable(self):
+        passed, detail = checks.KINDS["rdb_data_mode"](FakeHost({}), {})
+        self.assertFalse(passed)
+        self.assertIn("cannot read the mode", detail)
+
+    PS = ("101 cmm AT\n102 cmm niimxd\n103 root sshd\n104 cmm screen\n")
+
+    def home_host(self, homes):
+        r = {("ps", "-e", "-o", "pid=,user=,comm="): RunResult(0, self.PS, "")}
+        for pid, home in homes.items():
+            r[("cat", "/proc/{}/environ".format(pid))] = RunResult(
+                0, "PATH=/bin\0HOME={}\0USER=cmm\0".format(home), "")
+        return FakeHost(r)
+
+    def test_no_root_home(self):
+        kind = checks.KINDS["app_home_not_root"]
+        ok, detail = kind(self.home_host({101: "/home/cmm", 102: "/home/cmm", 104: "/home/cmm"}), {})
+        self.assertTrue(ok)
+        self.assertEqual(detail, "3 netFLEX processes checked; none has HOME=/root")
+        ok, detail = kind(self.home_host({101: "/home/cmm", 102: "/root", 104: "/home/cmm"}), {})
+        self.assertFalse(ok)
+        self.assertIn("niimxd (pid 102) runs with HOME=/root", detail)
+        self.assertIn("boot netFLEX again as cmm from the Boot menu", detail)
+
+    def test_no_root_home_nothing_running(self):
+        ok, detail = checks.KINDS["app_home_not_root"](
+            FakeHost({("ps", "-e", "-o", "pid=,user=,comm="): RunResult(0, "103 root sshd\n", "")}), {})
+        self.assertTrue(ok)
+        self.assertEqual(detail, "no netFLEX processes running")
+
+    def test_shipped_postflight_checks(self):
+        lst = checks.load_checks(os.path.join(os.path.dirname(checks.__file__), "checks.default.json"))
+        by = dict((c["name"], c) for c in lst)
+        for name, kind in (("post-rdb-data-mode", "rdb_data_mode"),
+                           ("post-no-root-home", "app_home_not_root")):
+            c = by[name]
+            self.assertEqual((c["kind"], c["when"], c["phase"], c["fail_text"]),
+                             (kind, "postflight", "upgrade", "WARNING"))

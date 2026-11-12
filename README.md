@@ -204,6 +204,22 @@ opening netFLEX's boot menu clears it. This rule drives the header badge,
 Overview and Site view, the License tab, the Patches tab, `nf_patch`, and the
 `post-app-up` post-flight check. If `ps` itself fails, the file is trusted.
 
+### The upgrade's boot runs as root
+
+At the end of an Upgrade, `nf_upgrader` boots netFLEX with
+`/usr/cnc/bin/new_boot_nms remote_autoboot` from its own (root) process, exactly
+as netFLEX's `inc_upgrader` does when Support runs it by hand; the fork must stay
+identical, so the tool does not change it. (The Boot menu tab boots as `cmm`.)
+Root boots have caused two problems before, so the Upgrade post-flight checks
+warn about them:
+
+- **post-rdb-data-mode** — the RDB data directory must be mode 700 or 750
+  (PostgreSQL refuses others); the warning gives the `chmod 700` command.
+- **post-no-root-home** — no netFLEX process (`AT`, `sdi`, `dacs`, `screen`,
+  `arm`, `bill`, `dump`, `niimxd`) may run with `HOME=/root` (read from
+  `/proc/<pid>/environ`); if one does, stop netFLEX and boot it again as `cmm`
+  from the Boot menu.
+
 ### Old release records on Overview
 
 An upgrade never removes the old release's rpm records, so after 5.4.0.36 →

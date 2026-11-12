@@ -12,8 +12,6 @@ import re
 from nfupgrader import checks
 
 STAGE_DBUPGRADE = "/usr/cnc_stage/bin/dbupgrade.sh"
-RDB_FEATURES = "/usr/cnc/features/rdb"
-DEFAULT_PGDATA = "/usr/cnc/rdb/data"
 _UPGRADE_VERSION = re.compile(r"^\s*UPGRADE_VERSION=[\"']?(\d+)", re.M)
 
 
@@ -45,17 +43,7 @@ def _users(host):
 
 
 def _rdb_data_dir(host):
-    """The local PostgreSQL data directory as nf_upgrader's get_data_dir finds
-    it, or None for a remote RDB (no local data)."""
-    text = _out(host, ["cat", RDB_FEATURES]) or ""
-    vals = {}
-    for ln in text.splitlines():
-        if "=" in ln:
-            k, v = ln.split("=", 1)
-            vals[k.strip()] = v.strip()
-    if vals.get("rdb_server_location") == "remote":
-        return None
-    return vals.get("data_directory") or DEFAULT_PGDATA
+    return checks.rdb_data_dir(host)
 
 
 def _rdb_gb(host, pgdata):
