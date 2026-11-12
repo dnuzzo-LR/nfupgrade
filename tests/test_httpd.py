@@ -5,7 +5,7 @@ import time
 import threading
 import unittest
 from unittest import mock
-from nfupgrader import api, httpd, snapjobs
+from nfupgrader import api, httpd, launcher, snapjobs
 from nfupgrader.audit import AuditLog
 from nfupgrader.host import FakeHost, RunResult
 
@@ -151,6 +151,35 @@ class TestLaunchCwd(unittest.TestCase):
 
     def test_none_when_nothing_known(self):
         self.assertIsNone(httpd.resolve_launch_cwd(None, None))
+
+
+class TestPerformLaunchCwd(unittest.TestCase):
+    """#2: the stage runs from the CORE RPM's folder (the extracted UPGRADEPKG
+    bundle beside it), unless NFU_LAUNCH_CWD says otherwise."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.calls = []
+        self._orig = launcher.launch
+        launcher.launch = lambda path, cfgp, mode, cwd=None: self.calls.append((mode, cwd))
+
+    def tearDown(self):
+        launcher.launch = self._orig
+
+    def ctx(self, **kw):
+        user = os.path.join(self.tmp, "u.cfg")
+        with open(user, "w") as fh:
+            fh.write("DEPOTFILE={}/netFLEX-CORE-5.4.1.28-1.rhel8.x86_64.rpm\n".format(self.tmp))
+        return launch_ctx(self.tmp)._replace(state={"user_config": user},
+                                             effective_config=os.path.join(self.tmp, "eff.cfg"), **kw)
+
+    def test_runs_from_core_rpm_folder(self):
+        httpd.perform_launch(self.ctx(launch_cwd="/opt/cfgdir"), "stage")
+        self.assertEqual(self.calls, [("stage", self.tmp)])
+
+    def test_explicit_env_wins(self):
+        httpd.perform_launch(self.ctx(launch_cwd="/opt/b", launch_cwd_env="/opt/b"), "stage")
+        self.assertEqual(self.calls, [("stage", "/opt/b")])
 
 
 def launch_ctx(tmp, runner=None, host=None):

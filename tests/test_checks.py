@@ -1075,3 +1075,77 @@ class TestStageVersion(unittest.TestCase):
                          ("target_newer", "preflight", "stage", "ERROR", True))
         self.assertEqual((m["kind"], m["when"], m["phase"], m["fail_text"], m.get("hard", False)),
                          ("rpm_matches_load", "preflight", "stage", "ERROR", False))
+
+
+class TestUpgradeBundle(unittest.TestCase):
+    """#2 (2026-11-11 test): nf_upgrader runs ./inc_linux_web_install from its
+    launch directory; without the extracted UPGRADEPKG bundle the web install
+    fails and the stage still reports complete."""
+
+    def host(self, present=(), tars=()):
+        r = {}
+        for f in present:
+            r[("test", "-f", "/depot/" + f)] = RunResult(0, "", "")
+        for t in tars:
+            r[("test", "-f", "/rpms/" + t)] = RunResult(0, "", "")
+        return FakeHost(r)
+
+    def run_kind(self, h, web=True, launch="/depot", depot="/rpms"):
+        return checks.KINDS["upgrade_bundle"](h, {"bundle": {
+            "launch_dir": launch, "launch_source": "the CORE RPM's folder",
+            "install_web": web, "depot_dir": depot}})
+
+    def test_bundle_present(self):
+        ok, detail = self.run_kind(self.host(("inc_linux_web_install", "linux_packages")))
+        self.assertTrue(ok)
+        self.assertEqual(detail, "upgrade bundle files in /depot (the CORE RPM's folder)")
+
+    def test_web_installer_missing(self):
+        ok, detail = self.run_kind(self.host(("linux_packages",)))
+        self.assertFalse(ok)
+        self.assertIn("/depot (the CORE RPM's folder) has no inc_linux_web_install", detail)
+        self.assertIn("UPGRADEPKGnetFLEX.tar.gz", detail)
+
+    def test_both_missing_names_both_and_extract_command(self):
+        ok, detail = self.run_kind(self.host(tars=("UPGRADEPKGnetFLEX.tar.gz",)))
+        self.assertFalse(ok)
+        self.assertIn("has no inc_linux_web_install, linux_packages", detail)
+        self.assertIn("tar xzf /rpms/UPGRADEPKGnetFLEX.tar.gz -C /depot", detail)
+
+    def test_web_installer_not_needed_without_web(self):
+        ok, _ = self.run_kind(self.host(("linux_packages",)), web=False)
+        self.assertTrue(ok)
+        ok, detail = self.run_kind(self.host(()), web=False)
+        self.assertFalse(ok)
+        self.assertIn("has no linux_packages", detail)
+        self.assertNotIn("inc_linux_web_install", detail.split("has no")[1].split(":")[0])
+
+    def test_no_facts(self):
+        ok, detail = checks.KINDS["upgrade_bundle"](self.host(), {})
+        self.assertFalse(ok)
+        self.assertIn("no launch directory", detail)
+
+    def test_web_staged(self):
+        def h(state):
+            return FakeHost({("cat", "/logs/.h1_web_STATE"):
+                             RunResult(0, state + "\n", "") if state else RunResult(1, "", "")})
+        kind = checks.KINDS["web_staged"]
+        p = {"web_state_file": "/logs/.h1_web_STATE"}
+        self.assertEqual(kind(h("webdone"), p), (True, "web GUI staged (webdone)"))
+        ok, detail = kind(h("webfailed"), p)
+        self.assertFalse(ok)
+        self.assertIn("the stage's web GUI install failed", detail)
+        self.assertIn(".web trace in /logs", detail)
+        self.assertTrue(kind(h(None), p)[0])          # no web step ran (INSTALLWEBGUI=NO)
+        self.assertFalse(kind(h("webdone"), {})[0])
+
+    def test_shipped_checks(self):
+        lst = checks.load_checks(os.path.join(os.path.dirname(checks.__file__), "checks.default.json"))
+        by = dict((c["name"], c) for c in lst)
+        b, w = by["upgrade-bundle"], by["web-staged"]
+        self.assertEqual((b["kind"], b["phase"], b["fail_text"], b.get("hard", False)),
+                         ("upgrade_bundle", "stage", "ERROR", False))
+        self.assertEqual((w["kind"], w["phase"], w["fail_text"], w.get("hard", False)),
+                         ("web_staged", "upgrade", "ERROR", False))
+        self.assertIn("upgrade_bundle", checks.FACT_KINDS)
+        self.assertIn("web_staged", checks.FACT_KINDS)

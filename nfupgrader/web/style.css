@@ -213,3 +213,7 @@ pre.lic-error { background: #fdecea; padding: .5rem .7rem; border-radius: 6px;
 .patch-last .warn { color: var(--warn); }
 .patch-web-opt { margin-top: .3rem; font-weight: normal; color: var(--fg, inherit); }
 .patch-web-opt.greyed label { color: var(--muted); }
+
+.launch-dir { color: var(--muted); font-size: 12px; margin-top: .25rem; }
+.stage-warn { margin-top: .4rem; padding: .4rem .6rem; border-left: 3px solid var(--warn, #c80);
+  background: var(--warn-bg, rgba(204, 136, 0, .08)); }

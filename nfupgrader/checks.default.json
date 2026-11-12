@@ -119,6 +119,26 @@
     "params": {}
   },
   {
+    "name": "upgrade-bundle",
+    "category": "NETFLEX",
+    "description": "The extracted UPGRADEPKG bundle (inc_linux_web_install, linux_packages) is in the launch directory",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "stage",
+    "kind": "upgrade_bundle",
+    "params": {}
+  },
+  {
+    "name": "web-staged",
+    "category": "NETFLEX",
+    "description": "The stage's web GUI install did not fail",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "upgrade",
+    "kind": "web_staged",
+    "params": {}
+  },
+  {
     "name": "post-dbcheck",
     "category": "NETFLEX",
     "description": "Database check clean after upgrade",

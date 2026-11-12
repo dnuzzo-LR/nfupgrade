@@ -106,13 +106,42 @@ function suggestUpgradeMode(p) {
   if (!(p.phase === "stage" && p.status === "done") || modeTouched || sel.value !== "stage") return;
   sel.value = "upgrade";
   resetPreflight();
-  document.getElementById("launch-msg").textContent =
-    "Staging complete — next step: Upgrade. Run pre-flight checks.";
+  document.getElementById("launch-msg").textContent = p.web_state === "webfailed"
+    ? "Staging complete, but the web GUI install FAILED — see below. Run pre-flight checks."
+    : "Staging complete — next step: Upgrade. Run pre-flight checks.";
+}
+
+// Where nf_upgrade runs from (#2): the extracted UPGRADEPKG bundle's
+// inc_linux_web_install and linux_packages must be there.
+function launchDirText(p) {
+  if (!p.launch_dir) return "";
+  return "Stage runs from " + p.launch_dir + " (" + p.launch_source + "): extract the " +
+    "UPGRADEPKGnetFLEX.tar.gz bundle there.";
+}
+
+// nf_upgrader only WARNs when the stage's web GUI install fails and still
+// finishes the stage; say so until an upgrade has completed.
+function stageWebWarn(p) {
+  if (p.web_state !== "webfailed" || (p.phase === "upgrade" && p.status === "done")) return "";
+  return "Web GUI install FAILED during staging (webfailed). See the .web trace in " +
+    (p.logdir || "the log directory") + ". Fix it and re-stage, or override the web-staged " +
+    "check to upgrade without the new web GUI.";
+}
+
+function showLaunchDir(p) {
+  var t = hostMode === "install" ? "" : launchDirText(p);
+  document.getElementById("launch-dir").textContent = t;
+  document.getElementById("cfg-launch-dir").textContent = t;
+  var w = document.getElementById("stage-web-warn");
+  var wt = hostMode === "install" ? "" : stageWebWarn(p);
+  w.textContent = wt;
+  w.style.display = wt ? "" : "none";
 }
 
 function refreshProgress() {
   getJSON("/api/progress", function (p) {
     suggestUpgradeMode(p);
+    showLaunchDir(p);
     document.getElementById("phase").textContent = p.phase;
     document.getElementById("status").textContent = p.status;
     document.getElementById("current").textContent =

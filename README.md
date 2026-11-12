@@ -147,6 +147,21 @@ directory you run it from is remembered as the default RPM depot (see
 `NFU_DEPOT_DIRS`). It prints a single-use `/auth?token=…` URL. Run it as root on
 the host being upgraded.
 
+### Files you need for a stage
+
+Put these in one folder (e.g. `/opt/apt/upgrade`) and pick the CORE RPM there on
+the Config tab:
+
+- `netFLEX-CORE-<version>-1.rhel<N>.x86_64.rpm` — the target release.
+- `UPGRADEPKGnetFLEX.tar.gz` for the **same release**, **extracted in that folder**
+  (`tar xzf UPGRADEPKGnetFLEX.tar.gz`). The stage runs from the RPM's folder and
+  needs the bundle's `inc_linux_web_install` (web GUI install) and
+  `linux_packages`. Without `inc_linux_web_install`, netFLEX's stage only warns
+  `WEB GUI install failed` and still finishes; the **upgrade-bundle** pre-flight
+  check catches it before the stage, and **web-staged** stops the Upgrade after a
+  stage whose web install failed (both overridable with a reason).
+- Optionally a `netFLEX-CORE-PATCH-<target generic>…rpm`: the stage installs it too.
+
 ### Environment variables
 
 | Var | Default | Purpose |
@@ -159,7 +174,7 @@ the host being upgraded.
 | `NFU_TRACEFILE` | newest `<upgrade log dir>/${phase}_inc_$(hostname).<pid>` (the upgrade log dir is `INCLOGDIR` from the active upgrade config) | Trace file the Log tab tails. Unset (recommended), the newest trace nf_upgrader wrote for the current phase is followed, switching automatically on a new run. |
 | `NFU_USER_CONFIG` | (unset) | Customer's upgrade `.cfg`. On Launch, an effective copy is generated that sources it and forces `PROMPTFORVALIDATE=NO`; the original is never edited. Required to use the Launch buttons. |
 | `NFU_EFFECTIVE_CONFIG` | `${INCLOGDIR}/nfupgrader_effective.cfg` | Where the generated effective config is written and read. |
-| `NFU_LAUNCH_CWD` | dir of `NFU_USER_CONFIG` | Directory `nf_upgrade` runs from (for relative `DEPOTFILE`/`linux_packages` lookup). |
+| `NFU_LAUNCH_CWD` | the CORE RPM's folder (`DEPOTFILE`'s directory), else dir of `NFU_USER_CONFIG`, else the tool's own directory | Directory `nf_upgrade` runs a stage/upgrade from. The extracted UPGRADEPKG bundle must be there (see *Files you need*); `nf_upgrader` also installs a `netFLEX-CORE-PATCH-<target generic>…rpm` it finds there. The Config and Upgrade tabs show the directory in use. |
 | `NFU_DEPOT_DIRS` | directory `run.sh` was started from, then `/opt/apt/upgrade` | Colon-separated directories scanned (top level only) for `netFLEX-CORE*.rpm` (the CORE list excludes any file with `PATCH` in its name; the Patches tab scans the same directories for `*PATCH*.rpm`). The Config tab lists them automatically on page load; **Refresh depots** re-scans. Picking one fills `DEPOTFILE`, `NEW_GENERIC` and `NEW_LOAD` from the filename. Missing directories are skipped. |
 | `NFU_PREVIEW_INSTALL` | (unset: off) | Preview the install screens on any box, even one already running netFLEX. Set to `1` (or `before`, `running`, `failed`, `done`). The UI shows install mode with sample data and a yellow PREVIEW banner whose picker switches between those scenarios. Pre-flight checks run for real (read-only). **Launch, Resume, Reset and Fix are refused**; Save writes `nfupgrader_preview.cfg` / `nfupgrader_preview_cnc.cnfg` beside — never over — the real saved config. |
 | `NFU_REPORTS` | `nfupgrader/reports.default.json` | Report list for the Reports tab. Snapshots go to `${INCLOGDIR}/nfupgrader_reports/` (newest 20 kept); an Upgrade launch takes a *before* snapshot first and an *after* snapshot when the upgrade ends. |

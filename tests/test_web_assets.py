@@ -653,3 +653,32 @@ process.stdout.write(JSON.stringify(out));
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLaunchDirAndWebFailed(unittest.TestCase):
+    """#2: show where the stage runs from (the bundle must be there) and warn
+    when the stage's web GUI install failed."""
+
+    def setUp(self):
+        self.html = open(os.path.join(WEB, "index.html"), encoding="utf-8").read()
+        self.js = open(os.path.join(WEB, "app.js"), encoding="utf-8").read()
+
+    def fn(self, name):
+        return self.js.split("function %s(" % name, 1)[1].split("\nfunction ", 1)[0]
+
+    def test_launch_dir_shown_on_config_and_upgrade_tabs(self):
+        cfg = self.html.split('id="tab-config"', 1)[1].split("</section>", 1)[0]
+        self.assertIn('id="cfg-launch-dir"', cfg)
+        self.assertIn('id="launch-dir"', self.html)
+        t = self.fn("launchDirText")
+        self.assertIn("p.launch_dir", t)
+        self.assertIn("p.launch_source", t)
+        self.assertIn("UPGRADEPKGnetFLEX.tar.gz", t)
+        self.assertIn("showLaunchDir(p);", self.fn("refreshProgress"))
+
+    def test_web_failed_warning(self):
+        self.assertIn('id="stage-web-warn"', self.html)
+        w = self.fn("stageWebWarn")
+        self.assertIn('p.web_state !== "webfailed"', w)
+        self.assertIn("web-staged", w)
+        self.assertIn("web GUI install FAILED", self.fn("suggestUpgradeMode"))

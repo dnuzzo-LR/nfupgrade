@@ -212,6 +212,49 @@ def _rpm_matches_load(host, p):
     return False, "; ".join(problems + ([hint] if hint else []))
 
 
+BUNDLE_TARS = ("UPGRADEPKGnetFLEX.tar.gz", "UPGRADEPKGINC.tar.gz")
+
+
+def _upgrade_bundle(host, p):
+    """Stage pre-flight: the extracted UPGRADEPKG bundle's scripts are in the
+    directory nf_upgrade runs from. nf_upgrader runs ./inc_linux_web_install
+    from there (a missing one only WARNs, and the stage still "completes") and
+    nf_upgrade runs ./linux_packages from there. (2026-11-11 test, finding #2)"""
+    b = p.get("bundle") or {}
+    d = b.get("launch_dir")
+    if not d:
+        return False, "no launch directory known"
+    need = (["inc_linux_web_install"] if b.get("install_web", True) else []) + ["linux_packages"]
+    where = "{} ({})".format(d, b.get("launch_source") or "launch directory")
+    missing = [f for f in need if host.run(["test", "-f", os.path.join(d, f)]).rc != 0]
+    if not missing:
+        return True, "upgrade bundle files in " + where
+    tar = None
+    if b.get("depot_dir"):
+        for t in BUNDLE_TARS:
+            if host.run(["test", "-f", os.path.join(b["depot_dir"], t)]).rc == 0:
+                tar = os.path.join(b["depot_dir"], t)
+                break
+    how = ("extract the bundle there: tar xzf {} -C {}".format(tar, d) if tar else
+           "extract the release's {} there".format(BUNDLE_TARS[0]))
+    return False, "{} has no {}: {}".format(where, ", ".join(missing), how)
+
+
+def _web_staged(host, p):
+    """Upgrade pre-flight: the stage's web GUI install did not fail. nf_upgrader
+    records webfailed in .<host>_web_STATE but still finishes the stage."""
+    path = p.get("web_state_file")
+    if not path:
+        return False, "no web state file known"
+    r = host.run(["cat", path])
+    state = r.out.strip() if r.rc == 0 else ""
+    if state == "webfailed":
+        return False, ("the stage's web GUI install failed (webfailed in {}); see the .web trace "
+                       "in {}, fix it and re-stage, or override to upgrade without the new web GUI"
+                       .format(path, os.path.dirname(path)))
+    return True, "web GUI staged ({})".format(state) if state else "no web GUI step recorded"
+
+
 def _touchfile_name_ok(name):
     """A touchfile is a plain name directly under /usr/cnc/features."""
     return bool(name) and "/" not in name and name not in (".", "..")
@@ -465,11 +508,13 @@ KINDS = {
     "path_mode": _path_mode,
     "target_newer": _target_newer,
     "rpm_matches_load": _rpm_matches_load,
+    "upgrade_bundle": _upgrade_bundle,
+    "web_staged": _web_staged,
 }
 
 # Kinds that read facts the API supplies (the saved config's target version)
 # rather than anything on the box; evaluate() merges facts into their params.
-FACT_KINDS = ("target_newer",)
+FACT_KINDS = ("target_newer", "upgrade_bundle", "web_staged")
 
 
 # --- fixes (ported from nf-install system_checks fix_*; the service runs as root) ---

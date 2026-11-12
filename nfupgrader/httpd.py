@@ -134,7 +134,9 @@ def perform_launch(ctx, mode):
     resolved = (ctx.state or {}).get("user_config") or ctx.user_config
     if resolved:
         launcher.write_effective_config(resolved, ctx.effective_config)
-    launcher.launch(ctx.nf_upgrade_path, ctx.effective_config, mode, cwd=ctx.launch_cwd)
+    # From the CORE RPM's folder by default: the bundle's inc_linux_web_install
+    # and linux_packages are run from there (see api.launch_dir).
+    launcher.launch(ctx.nf_upgrade_path, ctx.effective_config, mode, cwd=api.launch_dir(ctx)[0])
 
 
 def perform_install(ctx, action):
@@ -637,7 +639,8 @@ def main(argv=None):
         audit=audit,
         webdir=webdir, nf_upgrade_path=nf_upgrade_path,
         effective_config=effective_config, user_config=user_config,
-        launch_cwd=launch_cwd, cnc_cnfg_path=cnc_cnfg_path,
+        launch_cwd=launch_cwd, launch_cwd_env=os.environ.get("NFU_LAUNCH_CWD") or None,
+        cnc_cnfg_path=cnc_cnfg_path,
         peer_host_factory=lambda name: SshHost(name),
         checks_path=checks_path, state=state, depot_dirs=depot_dirs,
         reports_path=reports_path, reports_root=reports_root, runner=runner,

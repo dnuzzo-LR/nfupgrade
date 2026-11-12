@@ -210,6 +210,51 @@ class TestApi(unittest.TestCase):
         self.assertNotIn("launch", events)
         self.assertNotIn("override", events)
 
+    def _saved_cfg(self, text):
+        saved = os.path.join(self.tmp, "launch.cfg")
+        with open(saved, "w") as fh:
+            fh.write(text)
+        self.ctx.state["user_config"] = saved
+
+    def test_launch_dir_prefers_explicit_env(self):
+        self._saved_cfg("DEPOTFILE={}/netFLEX-CORE-5.4.1.28-1.rhel8.x86_64.rpm\n".format(self.tmp))
+        ctx = self.ctx._replace(launch_cwd_env="/opt/bundle", launch_cwd="/opt/cfgdir")
+        self.assertEqual(api.launch_dir(ctx), ("/opt/bundle", "NFU_LAUNCH_CWD"))
+
+    def test_launch_dir_is_core_rpm_folder(self):
+        # #2: extracting the UPGRADEPKG bundle beside the CORE RPM just works
+        self._saved_cfg('DEPOTFILE="{}/netFLEX-CORE-5.4.1.28-1.rhel8.x86_64.rpm"\n'.format(self.tmp))
+        ctx = self.ctx._replace(launch_cwd="/opt/cfgdir")
+        self.assertEqual(api.launch_dir(ctx), (self.tmp, "the CORE RPM's folder"))
+
+    def test_launch_dir_falls_back(self):
+        self._saved_cfg("DEPOTFILE=/no/such/dir/x.rpm\n")
+        ctx = self.ctx._replace(launch_cwd="/opt/cfgdir")
+        self.assertEqual(api.launch_dir(ctx), ("/opt/cfgdir", "NFU_USER_CONFIG's folder"))
+        self.assertEqual(api.launch_dir(self.ctx._replace(launch_cwd=None)),
+                         (os.getcwd(), "the tool's own directory"))
+
+    def test_check_facts_bundle_and_web_state(self):
+        self._saved_cfg("DEPOTFILE={}/n.rpm\nINSTALLWEBGUI=NO\nINCLOGDIR={}\n".format(self.tmp, self.tmp))
+        f = api.check_facts(self.ctx)
+        self.assertEqual(f["bundle"], {"launch_dir": self.tmp, "launch_source": "the CORE RPM's folder",
+                                       "install_web": False, "depot_dir": self.tmp})
+        self.assertEqual(f["web_state_file"], os.path.join(self.tmp, ".h1_web_STATE"))
+        self._saved_cfg("DEPOTFILE={}/n.rpm\n".format(self.tmp))
+        self.assertTrue(api.check_facts(self.ctx)["bundle"]["install_web"])
+
+    def test_progress_carries_launch_dir_and_web_state(self):
+        self._saved_cfg("DEPOTFILE={}/n.rpm\nINCLOGDIR={}\n".format(self.tmp, self.tmp))
+        with open(os.path.join(self.tmp, ".h1_web_STATE"), "w") as fh:
+            fh.write("webfailed\n")
+        status, _, body = api.dispatch("GET", "/api/progress", {}, b"",
+                                       {"nfu_sid": self._session()}, "127.0.0.1", self.ctx)
+        data = json.loads(body.decode())
+        self.assertEqual(status, 200)
+        self.assertEqual((data["launch_dir"], data["launch_source"]),
+                         (self.tmp, "the CORE RPM's folder"))
+        self.assertEqual(data["web_state"], "webfailed")
+
     def test_launch_needs_session(self):
         status, _, _ = api.dispatch(
             "POST", "/api/launch", {}, json.dumps({"mode": "stage"}).encode(),
@@ -832,8 +877,9 @@ class TestActivePhase(unittest.TestCase):
         self.assertEqual(self.get(ctx, "/api/log", offset="0")["file"], "stage_inc_h1.10")
 
     def test_context_defaults_cover_nf_patch_path(self):
-        self.assertEqual(len(api.Context.__new__.__defaults__), 15)
+        self.assertEqual(len(api.Context.__new__.__defaults__), 16)
         self.assertIn("nf_patch_path", api.Context._fields)
+        self.assertEqual(api.Context._fields[-1], "launch_cwd_env")
 
     def test_log_reports_full_path_and_existence(self):
         ctx = self.ctx(phase=None, tracefile=None)

@@ -22,11 +22,12 @@ Context = collections.namedtuple("Context", [
     "peer_host_factory", "checks_path", "state", "depot_dirs",
     "reports_path", "reports_root", "runner",
     "nf_install_path", "hosts_path", "license_path", "nf_patch_path",
+    "launch_cwd_env",
 ])
 # The trailing fields are only used by side effects (launch), info gathering,
 # checks, the config builder, or reports; default them so the dispatcher/tests
 # need not supply each one. (namedtuple field defaults via __new__.__defaults__ — py3.6.)
-Context.__new__.__defaults__ = (None,) * 15
+Context.__new__.__defaults__ = (None,) * 16
 
 # One check fix at a time: fixes change system state as root (dnf, sysctl, limits).
 # Held for the whole fix request, so launches and snapshots are refused meanwhile
@@ -117,19 +118,58 @@ def upgrade_logdir(ctx):
     return ctx.inclogdir
 
 
-def check_facts(ctx):
-    """Facts the checks cannot read off the box: the target version from the
-    active config (target-newer). target is None without a readable config."""
+def _active_values(ctx):
+    """The active config's KEY=VALUE pairs ({} without a readable one)."""
     path = active_config(ctx)
     if path:
         try:
             with open(path, encoding="utf-8", errors="replace") as fh:
-                values = cfg.parse_cfg(fh.read())
-            return {"target": {"generic": values.get("NEW_GENERIC", "").strip(),
-                               "load": values.get("NEW_LOAD", "").strip()}}
+                return cfg.parse_cfg(fh.read())
         except (IOError, OSError):
             pass
-    return {"target": None}
+    return {}
+
+
+def launch_dir(ctx, values=None):
+    """(directory, why) nf_upgrade runs from. nf_upgrader runs the UPGRADEPKG
+    bundle's ./inc_linux_web_install and ./linux_packages from there and picks up
+    PATCH rpms there, so by default it is the CORE RPM's folder (extract the
+    bundle beside the RPM). An explicit NFU_LAUNCH_CWD wins; without a usable
+    DEPOTFILE, NFU_USER_CONFIG's folder, else the tool's own cwd (run.sh cds there)."""
+    if ctx.launch_cwd_env:
+        return ctx.launch_cwd_env, "NFU_LAUNCH_CWD"
+    if values is None:
+        values = _active_values(ctx)
+    dep = values.get("DEPOTFILE", "").strip()
+    if _plain_abs_path(dep) and os.path.isdir(os.path.dirname(dep)):
+        return os.path.dirname(dep), "the CORE RPM's folder"
+    if ctx.launch_cwd:
+        return ctx.launch_cwd, "NFU_USER_CONFIG's folder"
+    return os.getcwd(), "the tool's own directory"
+
+
+def web_state_file(ctx):
+    """nf_upgrader's .<host>_web_STATE (webdone/webfailed) in its log dir."""
+    return os.path.join(upgrade_logdir(ctx), ".{}_web_STATE".format(ctx.hostname))
+
+
+def check_facts(ctx):
+    """Facts the checks cannot read off the box: the target version from the
+    active config (target-newer; None without a readable config), where the
+    stage will run and whether it installs the web GUI (upgrade-bundle), and
+    the web state file (web-staged)."""
+    values = _active_values(ctx)
+    d, why = launch_dir(ctx, values)
+    dep = values.get("DEPOTFILE", "").strip()
+    return {
+        "target": ({"generic": values.get("NEW_GENERIC", "").strip(),
+                    "load": values.get("NEW_LOAD", "").strip()} if active_config(ctx) and values
+                   else None),
+        "bundle": {"launch_dir": d, "launch_source": why,
+                   "install_web": values.get("INSTALLWEBGUI", "").strip().upper() != "NO",
+                   "depot_dir": os.path.dirname(dep) if _plain_abs_path(dep) else None},
+        "web_state_file": web_state_file(ctx),
+    }
 
 
 def _plain_abs_path(value):
@@ -650,6 +690,12 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         logdir = upgrade_logdir(ctx)
         rec = progress.read_progress(ctx.hostname, _active_phase(ctx), logdir, running)
         rec["logdir"] = logdir
+        rec["launch_dir"], rec["launch_source"] = launch_dir(ctx)
+        try:
+            with open(web_state_file(ctx), encoding="utf-8", errors="replace") as fh:
+                rec["web_state"] = fh.read().strip() or None
+        except (IOError, OSError):
+            rec["web_state"] = None
         return _json(200, rec)
 
     if path == "/api/log/live" and method == "GET":
