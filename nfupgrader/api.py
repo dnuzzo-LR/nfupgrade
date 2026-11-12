@@ -14,6 +14,7 @@ from nfupgrader import reports, snapjobs, installstate, steps, cnccnfg, bootmenu
 from nfupgrader import patches
 from nfupgrader import preview as previewdata
 from nfupgrader import license as licmod
+from nfupgrader import summary
 
 Context = collections.namedtuple("Context", [
     "host", "hostname", "inclogdir", "phase", "tracefile",
@@ -829,6 +830,10 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
             "trace": trace,
             "fatal": fatal,
         })
+
+    if path == "/api/upgrade/summary" and method == "GET":
+        # #9: what an Upgrade launched now will do (read-only)
+        return _json(200, summary.upgrade_summary(ctx.host, _active_values(ctx)))
 
     if path == "/api/upgrade/resume" and method == "POST":
         # #3: the upgrade manual's recovery (edit "<step> failed" back to

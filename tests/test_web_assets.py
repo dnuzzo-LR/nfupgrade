@@ -776,3 +776,30 @@ class TestLongStepProgress(unittest.TestCase):
         f = self.fn("refreshLive")
         self.assertIn("d.file", f)
         self.assertIn("d.age", f)
+
+
+class TestUpgradeSummaryUI(unittest.TestCase):
+    """#9: "What this upgrade will do" shown with the Upgrade pre-flight and in
+    the Launch confirmation."""
+
+    def setUp(self):
+        self.html = open(os.path.join(WEB, "index.html"), encoding="utf-8").read()
+        self.js = open(os.path.join(WEB, "app.js"), encoding="utf-8").read()
+
+    def fn(self, name):
+        return self.js.split("function %s(" % name, 1)[1].split("\nfunction ", 1)[0]
+
+    def test_box_and_fetch(self):
+        self.assertIn('id="upgrade-summary"', self.html)
+        self.assertIn('"/api/upgrade/summary"', self.fn("loadUpgradeSummary"))
+        self.assertIn("loadUpgradeSummary()", self.fn("runPreflight"))
+        self.assertIn("upgradeSummary = null", self.fn("resetPreflight"))
+
+    def test_lines(self):
+        t = self.fn("summaryLines")
+        for s in ("will be disconnected", "PostgreSQL ", "Backs up the RDB", "b.why",
+                  "Stops netFLEX"):
+            self.assertIn(s, t)
+
+    def test_in_launch_confirmation(self):
+        self.assertIn("summaryLines(upgradeSummary)", self.fn("launchConfirmText"))

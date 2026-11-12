@@ -204,6 +204,21 @@ opening netFLEX's boot menu clears it. This rule drives the header badge,
 Overview and Site view, the License tab, the Patches tab, `nf_patch`, and the
 `post-app-up` post-flight check. If `ps` itself fails, the file is trusted.
 
+### What an upgrade will do
+
+In the Upgrade phase, **Run pre-flight checks** also shows *What this upgrade
+will do* (repeated in the Launch confirmation), read from the box, the saved
+config and the staged load — nothing is changed:
+
+- from → to versions;
+- netFLEX is stopped, and how many `USER` sessions are logged in now
+  (`nf_upgrader` `kill -9`s them);
+- the RDB backup (size of the PostgreSQL data directory) and the load copy;
+- **PostgreSQL X → Y** when the staged load's `bin/dbupgrade.sh`
+  (`UPGRADE_VERSION`) targets a newer major than the box's `PG_VERSION`
+  ("could not tell" when either cannot be read);
+- whether netFLEX is booted at the end (up now and `RESTARTINC` not `NO`).
+
 ### Following a long step
 
 Some upgrade steps are silent in the trace for many minutes (the permission

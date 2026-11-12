@@ -474,8 +474,46 @@ function updateLaunchState() {
 }
 
 // after (optional) runs once the new results are rendered (not on an error).
+var upgradeSummary = null;   // #9: /api/upgrade/summary for the Upgrade phase
+
+// What an Upgrade launched now will do (#9): user sessions killed, RDB backup,
+// PostgreSQL major upgrade from the staged load's dbupgrade.sh, boot at the end.
+function summaryLines(s) {
+  if (!s) return [];
+  var gb = function (v) { return v === null || v === undefined ? "" : " (" + v + " GB of data)"; };
+  var lines = ["What this upgrade will do" +
+               (s.from && s.to ? " (" + s.from + " → " + s.to + ")" : "") + ":"];
+  lines.push("  - Stops netFLEX. " + (s.users === null || s.users === undefined
+    ? "Logged-in user sessions will be disconnected."
+    : s.users + " user session" + (s.users === 1 ? " is" : "s are") +
+      " logged in now and will be disconnected."));
+  lines.push("  - Backs up the RDB" + gb(s.rdb_gb) + ", then copies the new load (with a long, silent permission pass).");
+  var pg = s.pg || {};
+  if (pg.upgrade) lines.push("  - Upgrades PostgreSQL " + pg.current + " → " + pg.target +
+    " (the new load's dbupgrade.sh): this adds time and changes the server's PostgreSQL.");
+  else if (pg.upgrade === null || pg.upgrade === undefined) lines.push(
+    "  - PostgreSQL: could not tell whether this release upgrades it" +
+    (pg.current ? " (this box runs " + pg.current + ")" : "") + ".");
+  var b = s.boot || {};
+  lines.push(b.will_boot ? "  - Boots netFLEX at the end (" + b.why + ")."
+                         : "  - Does NOT boot netFLEX at the end (" + (b.why || "unknown") + ").");
+  return lines;
+}
+
+function loadUpgradeSummary() {
+  var box = document.getElementById("upgrade-summary");
+  getJSON("/api/upgrade/summary", function (s) {
+    upgradeSummary = s;
+    box.textContent = summaryLines(s).join("\n");
+    box.style.display = "";
+  }, function () { upgradeSummary = null; box.style.display = "none"; });
+}
+
 function runPreflight(after) {
   var mode = document.getElementById("mode").value;
+  var sbox = document.getElementById("upgrade-summary");
+  if (mode === "upgrade" && hostMode !== "install") loadUpgradeSummary();
+  else { upgradeSummary = null; sbox.style.display = "none"; }
   getJSON("/api/checks?when=preflight&phase=" + mode, function (data) {
     preflight = data;
     renderChecks(document.getElementById("preflight"), data, true);
@@ -593,6 +631,8 @@ function preflightPlaceholder() {
 
 function resetPreflight() {
   preflight = null;
+  upgradeSummary = null;
+  document.getElementById("upgrade-summary").style.display = "none";
   preflightPlaceholder();
   document.getElementById("override-box").style.display = "none";
   document.getElementById("fix-msg").textContent = "";
@@ -629,6 +669,9 @@ function launchConfirmText(mode) {
   var base = mode === "install" ? installConfirmBase()
            : "Start the " + mode.toUpperCase() +
              " now? This runs the real upgrade and cannot be paused.";
+  if (mode === "upgrade" && upgradeSummary) {
+    base = summaryLines(upgradeSummary).join("\n") + "\n\n" + base;
+  }
   var ticked = overriddenNames();
   var over = preflight.results.filter(function (r) {
     return r.blocking && ticked.indexOf(r.name) >= 0;

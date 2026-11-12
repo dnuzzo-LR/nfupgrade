@@ -397,6 +397,18 @@ class TestApi(unittest.TestCase):
         self.assertIsNone(p["step_secs"])
         self.assertIsNone(p["trace_idle_secs"])
 
+    def test_upgrade_summary_endpoint(self):
+        # #9: read-only "what this upgrade will do", from the saved config
+        self._saved_cfg("NEW_GENERIC=5.4.1\nNEW_LOAD=28\nRESTARTINC=NO\n")
+        status, _, body = api.dispatch("GET", "/api/upgrade/summary", {}, b"",
+                                       {"nfu_sid": self._session()}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 200)
+        d = json.loads(body.decode())
+        self.assertEqual(d["to"], "5.4.1.28")
+        self.assertEqual(d["boot"], {"will_boot": False, "why": "RESTARTINC=NO"})
+        status, _, _ = api.dispatch("GET", "/api/upgrade/summary", {}, b"", {}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 401)
+
     def test_launch_needs_session(self):
         status, _, _ = api.dispatch(
             "POST", "/api/launch", {}, json.dumps({"mode": "stage"}).encode(),
