@@ -210,6 +210,22 @@ function applyResume(reason, boot) {
   });
 }
 
+// A way to the Log tab while a stage, upgrade or install runs (or has just
+// failed): beside the launch message and the header's APP UP/DOWN.
+function showViewLog(p) {
+  var show = p.status === "running" || p.status === "failed";
+  document.getElementById("view-log").style.display = show ? "" : "none";
+  document.getElementById("hdr-view-log").style.display = p.status === "running" ? "" : "none";
+}
+
+// The upgrade finished but netFLEX is down (RESTARTINC=NO, it was down at
+// launch, or its boot did not come up): say so and offer the Boot menu.
+function showUpgradeDoneDown(p) {
+  var down = p.phase === "upgrade" && p.status === "done" && hostMode !== "install" &&
+             !!lastInfo && !lastInfo.app_up;
+  document.getElementById("upgrade-done-down").style.display = down ? "" : "none";
+}
+
 function showLaunchDir(p) {
   var t = hostMode === "install" ? "" : launchDirText(p);
   document.getElementById("launch-dir").textContent = t;
@@ -225,6 +241,8 @@ function refreshProgress() {
     suggestUpgradeMode(p);
     showLaunchDir(p);
     showFailure(p);
+    showViewLog(p);
+    showUpgradeDoneDown(p);
     document.getElementById("phase").textContent = p.phase;
     document.getElementById("status").textContent = p.status;
     document.getElementById("current").textContent =
@@ -1430,6 +1448,8 @@ function loadDepots() {
     msg.textContent = d.depots.length
       ? d.depots.length + (d.depots.length === 1 ? " RPM" : " RPMs") + " found"
       : "no netFLEX-CORE RPMs in " + (d.dirs || []).join(", ");
+    document.getElementById("cfg-depot-dirs").textContent =
+      "Scanned: " + (d.dirs || []).join(", ") + " (top level only; set NFU_DEPOT_DIRS to change)";
   }, function (status) {
     msg.textContent = "could not list depots (HTTP " + status + ")";
   });
@@ -2305,6 +2325,10 @@ document.getElementById("btn-check").onclick = function () { runPreflight(); };
 document.getElementById("btn-install-resume").onclick = resumeInstall;
 document.getElementById("btn-install-reset").onclick = confirmReset;
 document.getElementById("btn-resume").onclick = confirmResume;
+["view-log", "hdr-view-log"].forEach(function (id) {
+  document.getElementById(id).onclick = function (e) { e.preventDefault(); showTab("log"); };
+});
+document.getElementById("btn-open-bootmenu").onclick = function () { showTab("bootmenu"); };
 document.getElementById("btn-install-continue").onclick = continueAfterInstall;
 document.getElementById("not-installed-cfg").onclick = function (ev) {
   ev.preventDefault();

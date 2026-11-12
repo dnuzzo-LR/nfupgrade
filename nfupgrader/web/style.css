@@ -220,3 +220,5 @@ pre.lic-error { background: #fdecea; padding: .5rem .7rem; border-radius: 6px;
   background: var(--warn-bg, rgba(204, 136, 0, .08)); }
 .upgrade-summary { margin: .4rem 0; padding: .4rem .6rem; border-left: 3px solid var(--muted);
   white-space: pre-wrap; }
+.view-log { margin-left: .5rem; font-size: 13px; }
+.app-header .view-log { color: inherit; }

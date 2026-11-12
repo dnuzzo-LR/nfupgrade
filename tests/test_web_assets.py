@@ -817,3 +817,40 @@ class TestVersionNotesUI(unittest.TestCase):
             self.assertIn('versionRow("%s", v.%s, notes.%s)' % (k.upper(), k, k), self.js)
         f = self.js.split("function versionRow(", 1)[1].split("\nfunction ", 1)[0]
         self.assertIn("pill stale", f)
+
+
+class TestReportUiSuggestions(unittest.TestCase):
+    """2026-11-11 full-upgrade test, UI suggestions: a View log link while a
+    run goes; "Upgrade complete — netFLEX is not running" with a way to the
+    Boot menu; the depot directories scanned."""
+
+    def setUp(self):
+        self.html = open(os.path.join(WEB, "index.html"), encoding="utf-8").read()
+        self.js = open(os.path.join(WEB, "app.js"), encoding="utf-8").read()
+
+    def fn(self, name):
+        return self.js.split("function %s(" % name, 1)[1].split("\nfunction ", 1)[0]
+
+    def test_view_log_links(self):
+        header = self.html.split('<header class="app-header">', 1)[1].split("</header>", 1)[0]
+        self.assertIn('id="hdr-view-log"', header)
+        self.assertIn('id="view-log"', self.html)
+        f = self.fn("showViewLog")
+        self.assertIn('p.status === "running"', f)
+        self.assertIn("showViewLog(p);", self.fn("refreshProgress"))
+        self.assertIn('showTab("log")', self.js)
+
+    def test_upgrade_done_app_down(self):
+        self.assertIn('id="upgrade-done-down"', self.html)
+        self.assertIn('id="btn-open-bootmenu"', self.html)
+        f = self.fn("showUpgradeDoneDown")
+        self.assertIn('p.phase === "upgrade" && p.status === "done"', f)
+        self.assertIn("lastInfo.app_up", f)
+        self.assertIn("Upgrade complete — netFLEX is not running", self.html + f)
+        self.assertIn('showTab("bootmenu")', self.js)
+
+    def test_depot_dirs_listed(self):
+        f = self.fn("loadDepots")
+        self.assertIn("Scanned: ", f)
+        self.assertIn('getElementById("cfg-depot-dirs")', f)
+        self.assertIn('id="cfg-depot-dirs"', self.html)

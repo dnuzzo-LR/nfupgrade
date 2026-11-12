@@ -13,6 +13,7 @@
     <h1>netFLEX Upgrade</h1>
     <span class="host" id="host">this host</span>
     <span id="app-badge" class="badge unknown">APP ?</span>
+    <a href="#" id="hdr-view-log" class="view-log" style="display:none">View log</a>
   </header>
 
   <div id="stopping-banner" class="preview-banner" style="display:none">
@@ -84,6 +85,7 @@
           <select id="cfg-depot"><option value="">— choose a CORE RPM —</option></select>
           <button id="cfg-load-depots">Refresh depots</button>
           <span id="cfg-depot-msg"></span>
+          <div class="hint launch-dir" id="cfg-depot-dirs"></div>
           <div class="hint launch-dir" id="cfg-launch-dir"></div>
         </div>
         <div id="install-cfg" style="display:none">
@@ -170,8 +172,13 @@
           <button id="btn-check">Run pre-flight checks</button>
           <button id="btn-launch" class="primary" disabled>Launch</button>
           <span id="launch-msg"></span>
+          <a href="#" id="view-log" class="view-log" style="display:none">View log</a>
           <div class="hint launch-dir" id="launch-dir"></div>
           <div class="stage-warn" id="stage-web-warn" style="display:none"></div>
+          <div class="stage-warn" id="upgrade-done-down" style="display:none">
+            Upgrade complete — netFLEX is not running.
+            <button id="btn-open-bootmenu">Open the Boot menu</button>
+          </div>
           <div class="stage-warn" id="run-failed" style="display:none">
             <span id="run-failed-msg"></span>
             <button id="btn-resume" class="danger" style="display:none">Resume upgrade</button>
