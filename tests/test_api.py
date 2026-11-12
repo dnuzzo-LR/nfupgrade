@@ -784,7 +784,13 @@ class TestReportsApi(unittest.TestCase):
                          [(sid, "manual", "complete")])
         self.assertEqual(self._json(self._get("/api/reports/job")),
                          {"job": None, "launch_error": None, "notice": None,
-                          "interrupted_fix": None})
+                          "interrupted_fix": None, "waiting": None})
+
+    def test_job_reports_after_snapshot_wait(self):
+        # #7: between the upgrade's end and the after snapshot
+        self.runner.set_waiting("After snapshot: waiting for netFLEX to come up (up to 45 min)")
+        d = self._json(self._get("/api/reports/job"))
+        self.assertEqual(d["waiting"], "After snapshot: waiting for netFLEX to come up (up to 45 min)")
 
     def test_busy_run_and_launch_409(self):
         held = []

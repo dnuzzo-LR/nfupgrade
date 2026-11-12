@@ -735,3 +735,19 @@ class TestStaleStage(unittest.TestCase):
 
     def test_stale_never_suggests_upgrade(self):
         self.assertIn('p.status === "done"', self.fn("suggestUpgradeMode"))
+
+
+class TestAfterSnapshotWait(unittest.TestCase):
+    """#7: the wait for netFLEX before the after snapshot is shown, and a
+    launch that continues an interrupted upgrade says so."""
+
+    def setUp(self):
+        self.js = open(os.path.join(WEB, "app.js"), encoding="utf-8").read()
+
+    def test_waiting_shown(self):
+        f = self.js.split("function refreshReportsJob(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("d.waiting", f)
+
+    def test_continued_launch_message(self):
+        self.assertIn("body.continued", self.js)
+        self.assertIn("Continuing the interrupted upgrade from ", self.js)

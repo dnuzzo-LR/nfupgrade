@@ -676,6 +676,10 @@ function startLaunch(mode) {
       if (status === 202) {
         if (body.snapshot) { msg.textContent = "Taking before snapshot…"; refreshReportsJob(); }
         else if (body.action === "resume") { msg.textContent = "Resuming install…"; }
+        else if (body.continued) {
+          msg.textContent = "Continuing the interrupted upgrade from " + body.continued +
+            " (no new before snapshot; the after snapshot pairs with the original).";
+        }
         else { msg.textContent = "Launched " + mode + "…"; }
       }
       // A failed hard check is a stop, not something to override.
@@ -904,6 +908,11 @@ function refreshReportsJob() {
     else if (was && was.label === "before") msg.textContent = "Before snapshot done — upgrade starting.";
     if (was && !reportsJob) refreshReports();
     if (d.launch_error) msg.textContent = "Launch failed: " + d.launch_error;
+    else if (!reportsJob && d.waiting) {
+      // #7: the upgrade finished; the after snapshot waits for netFLEX to be up
+      msg.textContent = d.waiting;
+      document.getElementById("reports-job").textContent = d.waiting;
+    }
     else if (!reportsJob && d.notice) {
       msg.textContent = d.notice;
       document.getElementById("reports-job").textContent = d.notice;

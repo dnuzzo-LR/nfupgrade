@@ -224,7 +224,7 @@ class TestLaunchSideEffect(unittest.TestCase):
     def test_upgrade_goes_through_before_snapshot(self):
         seen = {}
 
-        def begin(runner, launch, read_status, client, audit=None):
+        def begin(runner, launch, read_status, client, audit=None, **kw):
             seen.update(runner=runner, client=client)
             launch()
             return "20260923_140000_before"
@@ -295,7 +295,7 @@ class TestLaunchSideEffect(unittest.TestCase):
         self.assertIn("launch_rejected", self.events())
 
     def test_async_launch_error_surfaced_in_state(self):
-        def begin(runner, launch, read_status, client, audit=None, on_error=None):
+        def begin(runner, launch, read_status, client, audit=None, on_error=None, **kw):
             on_error("boom")
             return "20260923_140000_before"
         ctx = launch_ctx(self.tmp, runner=FakeRunner())
@@ -306,7 +306,7 @@ class TestLaunchSideEffect(unittest.TestCase):
         self.assertEqual(ctx.state["launch_error"], "boom")
 
     def test_async_launch_error_cleared_on_next_launch(self):
-        def begin_ok(runner, launch, read_status, client, audit=None, on_error=None):
+        def begin_ok(runner, launch, read_status, client, audit=None, on_error=None, **kw):
             return "20260923_140100_before"
         ctx = launch_ctx(self.tmp, runner=FakeRunner())
         ctx = ctx._replace(state={"launch_error": "stale"})
@@ -347,7 +347,7 @@ class TestLaunchSideEffect(unittest.TestCase):
             held.append(api.fix_in_progress())
         httpd.launch_side_effect(launch_ctx(self.tmp), "stage", "ip", perform=perform)
 
-        def begin(runner, launch, read_status, client, audit=None):
+        def begin(runner, launch, read_status, client, audit=None, **kw):
             held.append(api.fix_in_progress())
             return "20260923_140300_before"
         httpd.launch_side_effect(launch_ctx(self.tmp, runner=FakeRunner()), "upgrade", "ip",
@@ -388,7 +388,7 @@ class TestLaunchSideEffect(unittest.TestCase):
     def test_no_state_dict_does_not_pass_on_error_or_raise(self):
         seen = {}
 
-        def begin(runner, launch, read_status, client, audit=None):
+        def begin(runner, launch, read_status, client, audit=None, **kw):
             seen["called"] = True
             launch()
             return "20260923_140200_before"
@@ -833,34 +833,86 @@ class TestUpgradeResume(unittest.TestCase):
 
 
 class TestUpgradeLaunchRecord(unittest.TestCase):
-    """#3: a fresh Upgrade launch records whether netFLEX was up, the test
-    nf_upgrader's doswistart uses (.CNC_UP or .MUX_UP)."""
+    """#3/#7: a fresh Upgrade launch records whether netFLEX was up (the test
+    nf_upgrader's doswistart uses: .CNC_UP or .MUX_UP) and its before snapshot;
+    continuing an interrupted upgrade takes no new before and pairs its after
+    with the recorded one."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
-        self._orig = launcher.launch
-        self.calls = []
-        launcher.launch = lambda *a, **kw: self.calls.append(kw)
+        self.performed = []
+        self.followed = []
+        self._follow = snapjobs.follow_upgrade
+        snapjobs.follow_upgrade = lambda runner, rs, before, **kw: self.followed.append(before)
 
     def tearDown(self):
-        launcher.launch = self._orig
+        snapjobs.follow_upgrade = self._follow
+
+    def perform(self, ctx, mode, env=None):
+        self.performed.append((mode, env))
 
     def record(self):
         with open(os.path.join(self.tmp, ".nfupgrader_h1_upgrade.json")) as fh:
             return json.load(fh)
 
-    def test_records_app_up(self):
+    def state(self, value):
+        with open(os.path.join(self.tmp, ".h1_STATE"), "w") as fh:
+            fh.write(value + "\n")
+
+    def begin(self, runner, launch, read_status, client, audit=None, **kw):
+        self.begin_kw = kw
+        kw["on_before"]("20261111-191100-before")
+        launch()
+        return "20261111-191100-before"
+
+    def test_fresh_upgrade_records_app_and_before(self):
+        self.state("swscomplete")
         h = FakeHost({("test", "-f", "/usr/cnc/.MUX_UP"): RunResult(0, "", "")})
-        httpd.perform_launch(launch_ctx(self.tmp, host=h), "upgrade")
-        self.assertIs(self.record()["app_was_running"], True)
-        self.assertNotIn("env", self.calls[0])
+        ctx = launch_ctx(self.tmp, runner=FakeRunner(), host=h)
+        status, body = httpd.launch_side_effect(ctx, "upgrade", "ip", perform=self.perform,
+                                                begin=self.begin)
+        self.assertEqual(status, 202)
+        self.assertEqual(self.record()["app_was_running"], True)
+        self.assertEqual(self.record()["before"], "20261111-191100-before")
+        self.assertIn("app_up", self.begin_kw)
+        self.assertEqual(self.performed, [("upgrade", None)])
 
-    def test_records_app_down(self):
-        httpd.perform_launch(launch_ctx(self.tmp), "upgrade")
-        self.assertIs(self.record()["app_was_running"], False)
+    def test_fresh_upgrade_without_runner_records_app_down(self):
+        self.state("swscomplete")
+        httpd.launch_side_effect(launch_ctx(self.tmp), "upgrade", "ip", perform=self.perform)
+        self.assertEqual((self.record()["app_was_running"], self.record()["before"]), (False, None))
 
-    def test_stage_and_resume_do_not_record(self):
-        httpd.perform_launch(launch_ctx(self.tmp), "stage")
-        httpd.perform_launch(launch_ctx(self.tmp), "upgrade", env={"APP_WAS_RUNNING": "YES"})
+    def test_continue_interrupted_upgrade_takes_no_before(self):
+        self.state("swicopycnc")
+        with open(os.path.join(self.tmp, ".nfupgrader_h1_upgrade.json"), "w") as fh:
+            json.dump({"app_was_running": True, "before": "B0"}, fh)
+        ctx = launch_ctx(self.tmp, runner=FakeRunner())
+
+        def no_begin(*a, **kw):
+            raise AssertionError("no before snapshot when continuing")
+        status, body = httpd.launch_side_effect(ctx, "upgrade", "ip", perform=self.perform,
+                                                begin=no_begin)
+        self.assertEqual(status, 202)
+        self.assertEqual(body, {"accepted": True, "mode": "upgrade", "continued": "swicopycnc"})
+        self.assertEqual(self.performed, [("upgrade", None)])
+        self.assertEqual(self.followed, ["B0"])
+        self.assertEqual(self.record(), {"app_was_running": True, "before": "B0"})   # untouched
+
+    def test_resume_follows_with_recorded_before(self):
+        self.state("swibootinc failed")
+        with open(os.path.join(self.tmp, ".nfupgrader_h1_upgrade.json"), "w") as fh:
+            json.dump({"app_was_running": True, "before": "B0"}, fh)
+        status, _ = httpd.resume_side_effect(launch_ctx(self.tmp, runner=FakeRunner()), "ip",
+                                             {"state": "swibootinc", "boot": True},
+                                             perform=self.perform)
+        self.assertEqual(status, 202)
+        self.assertEqual(self.followed, ["B0"])
+
+    def test_perform_launch_never_records(self):
+        orig = launcher.launch
+        launcher.launch = lambda *a, **kw: None
+        try:
+            httpd.perform_launch(launch_ctx(self.tmp), "upgrade")
+        finally:
+            launcher.launch = orig
         self.assertFalse(os.path.exists(os.path.join(self.tmp, ".nfupgrader_h1_upgrade.json")))
-        self.assertEqual(self.calls[1]["env"], {"APP_WAS_RUNNING": "YES"})

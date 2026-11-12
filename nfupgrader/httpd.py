@@ -19,7 +19,7 @@ class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
     http.server.ThreadingHTTPServer only in 3.7.)"""
     daemon_threads = True
 
-from nfupgrader import api, bootmenu, bootmenu_ws, launcher, preview, progress, snapjobs
+from nfupgrader import api, bootmenu, bootmenu_ws, launcher, localinfo, preview, progress, snapjobs
 from nfupgrader.websocket import WebSocket, accept_key, origin_ok
 from nfupgrader.auth import TokenAuth
 from nfupgrader.audit import AuditLog, last_unfinished_fix
@@ -130,14 +130,11 @@ def ensure_dir(path):
 def perform_launch(ctx, mode, env=None):
     """Spawn nf_upgrade. The active config is one chosen in the UI (state), else
     NFU_USER_CONFIG; an effective config is generated from it (sources it + forces
-    PROMPTFORVALIDATE=NO) — the customer's own file is never edited. A fresh
-    Upgrade records whether netFLEX was up for a later Resume; env is a
+    PROMPTFORVALIDATE=NO) — the customer's own file is never edited. env is a
     resume's APP_WAS_RUNNING."""
     resolved = (ctx.state or {}).get("user_config") or ctx.user_config
     if resolved:
         launcher.write_effective_config(resolved, ctx.effective_config)
-    if mode == "upgrade" and env is None:
-        record_upgrade_launch(ctx)
     # From the CORE RPM's folder by default: the bundle's inc_linux_web_install
     # and linux_packages are run from there (see api.launch_dir).
     kw = {"cwd": api.launch_dir(ctx)[0]}
@@ -146,17 +143,53 @@ def perform_launch(ctx, mode, env=None):
     launcher.launch(ctx.nf_upgrade_path, ctx.effective_config, mode, **kw)
 
 
-def record_upgrade_launch(ctx):
-    """Write whether netFLEX is up now, by nf_upgrader's own doswistart test
-    (.CNC_UP or .MUX_UP). doswistart's APP_WAS_RUNNING is lost when the engine
-    fails, and a resumed run skips doswistart, so Resume restores it from here.
-    Best effort: a failed write only loses the Resume dialog's default."""
+def record_upgrade_launch(ctx, before_id=None):
+    """At a fresh Upgrade launch, write whether netFLEX is up now (nf_upgrader's
+    own doswistart test: .CNC_UP or .MUX_UP) and the before snapshot's id.
+    doswistart's APP_WAS_RUNNING is lost when the engine fails and a resumed
+    run skips doswistart, so Resume restores it from here (#3); a continued or
+    resumed upgrade pairs its after snapshot with this before (#7). Best
+    effort: a failed write only loses those defaults."""
     up = any(ctx.host.run(["test", "-f", "/usr/cnc/" + f]).rc == 0 for f in (".CNC_UP", ".MUX_UP"))
     try:
         with open(api.upgrade_record_path(ctx), "w") as fh:
-            json.dump({"app_was_running": up, "at": time.strftime("%Y-%m-%d %H:%M:%S")}, fh)
+            json.dump({"app_was_running": up, "before": before_id,
+                       "at": time.strftime("%Y-%m-%d %H:%M:%S")}, fh)
     except (IOError, OSError):
         pass
+
+
+def _recorded_before(ctx):
+    """The before snapshot id recorded at the fresh launch, or None."""
+    try:
+        with open(api.upgrade_record_path(ctx), encoding="utf-8") as fh:
+            rec = json.load(fh)
+        return rec.get("before") if isinstance(rec, dict) else None
+    except (IOError, OSError, ValueError):
+        return None
+
+
+def _app_up(ctx):
+    """The after snapshot's wait test: the Overview's "up" (#7)."""
+    return lambda: localinfo.app_state(ctx.host) == "up"
+
+
+def _follow(ctx):
+    """Take the after snapshot of an upgrade launched without a before (a
+    continued or resumed one), paired with the original before."""
+    if ctx.runner is not None:
+        snapjobs.follow_upgrade(ctx.runner, lambda: upgrade_status(ctx), _recorded_before(ctx),
+                                app_up=_app_up(ctx))
+
+
+def _continuing_upgrade(ctx):
+    """The upgrade step an Upgrade launch would continue from (an upgrade
+    interrupted part-way, not failed), or None for a fresh upgrade."""
+    current = progress.read_state(ctx.hostname, api.upgrade_logdir(ctx))
+    if (current and not progress.failed_step(current) and current != "swidone"
+            and progress.infer_phase(current) == "upgrade"):
+        return current
+    return None
 
 
 def resume_side_effect(ctx, ip, accepted, perform=None):
@@ -189,6 +222,7 @@ def resume_side_effect(ctx, ip, accepted, perform=None):
             ctx.audit.record("launch_error", error=str(e), client=ip)
             return 500, {"error": "resume failed: {}".format(e)}
         ctx.audit.record("upgrade_resumed", state=step, boot=boot, client=ip)
+        _follow(ctx)
         if has_state:
             ctx.state.pop("launch_error", None)
             ctx.state["phase"] = "upgrade"
@@ -368,9 +402,26 @@ def reset_side_effect(ctx, ip, perform_inst=None):
 
 
 def _launch_locked(ctx, mode, ip, perform, begin, has_state):
-    """launch_side_effect's body, run while holding api._FIX_LOCK."""
+    """launch_side_effect's body, run while holding api._FIX_LOCK. A fresh
+    Upgrade takes the before snapshot first and records it; one continuing an
+    interrupted run takes none and pairs its after with the recorded before."""
+    cont = _continuing_upgrade(ctx) if mode == "upgrade" else None
+    if cont:
+        try:
+            perform(ctx, mode)
+        except Exception as e:
+            ctx.audit.record("launch_error", error=str(e), client=ip)
+            return 500, {"error": "launch failed: {}".format(e)}
+        _follow(ctx)
+        if has_state:
+            ctx.state["phase"] = mode
+            ctx.state["log_follow"] = None
+        return 202, {"accepted": True, "mode": mode, "continued": cont}
+    if mode == "upgrade" and ctx.runner is None:
+        record_upgrade_launch(ctx)
     if mode == "upgrade" and ctx.runner is not None:
-        kwargs = {"client": ip, "audit": ctx.audit}
+        kwargs = {"client": ip, "audit": ctx.audit, "app_up": _app_up(ctx),
+                  "on_before": lambda before_id: record_upgrade_launch(ctx, before_id)}
         if has_state:
             kwargs["on_error"] = lambda msg: ctx.state.__setitem__("launch_error", msg)
         try:

@@ -400,3 +400,77 @@ class TestBeginUpgrade(RunnerBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAfterWaitsForApp(unittest.TestCase):
+    """#7 (2026-11-11 test): the after snapshot was taken the moment the engine
+    exited, while netFLEX was still booting. Wait for it to be up (bounded)."""
+
+    def watch(self, seq, ups, **kw):
+        calls, waits = [], []
+        it = iter(ups)
+        last = {"v": False}
+
+        def app_up():
+            try:
+                last["v"] = next(it)
+            except StopIteration:
+                pass
+            return last["v"]
+        note = snapjobs.watch_upgrade(statuses(seq), calls.append, sleep=lambda s: None,
+                                      clock=clock(), app_up=app_up, on_wait=waits.append, **kw)
+        return note, calls, waits
+
+    def test_waits_until_up(self):
+        note, calls, waits = self.watch(["running", "done"], [False, False, True])
+        self.assertEqual(calls, [""])
+        self.assertIn("After snapshot: waiting for netFLEX to come up (up to 45 min)", waits)
+        self.assertIsNone(waits[-1])                 # cleared before the snapshot
+
+    def test_already_up_no_wait(self):
+        note, calls, waits = self.watch(["running", "done"], [True])
+        self.assertEqual(calls, [""])
+        self.assertEqual(waits, [None])
+
+    def test_gives_up_after_limit(self):
+        note, calls, waits = self.watch(["running", "done"], [False], up_wait=120)
+        self.assertEqual(calls, ["netFLEX was not up 2 min after the upgrade finished"])
+        self.assertIsNone(waits[-1])
+
+    def test_failed_upgrade_not_waited_for(self):
+        note, calls, waits = self.watch(["running", "failed"], [False])
+        self.assertEqual(calls, ["upgrade failed before completion"])
+        self.assertEqual(waits, [])
+
+    def test_runner_waiting_text(self):
+        r = snapjobs.SnapshotRunner(None, "/x", "/y", spawn=lambda fn: None)
+        self.assertIsNone(r.waiting())
+        r.set_waiting("w")
+        self.assertEqual(r.waiting(), "w")
+        r.set_waiting(None)
+        self.assertIsNone(r.waiting())
+
+
+class TestFollowUpgrade(RunnerBase):
+    """#7: continuing an interrupted upgrade or a Resume takes no new before
+    snapshot; its after is paired with the original before."""
+
+    def test_after_paired_with_given_before(self):
+        events = []
+        r = self.runner(h=host(events))
+        hold = Hold()
+        snapjobs.follow_upgrade(r, statuses(["running", "done"]), "20261111-191100-before",
+                                app_up=lambda: True, spawn=hold, sleep=lambda s: None, clock=clock())
+        self.assertEqual(events, [])                 # nothing until the watcher runs
+        hold.fns[0]()
+        snaps = reports.list_snapshots(self.root)
+        self.assertEqual([s["label"] for s in snaps], ["after"])
+        self.assertEqual(snaps[0]["pair_of"], "20261111-191100-before")
+
+    def test_begin_upgrade_reports_before_id(self):
+        seen = []
+        r = self.runner()
+        before = snapjobs.begin_upgrade(r, lambda: None, statuses(["running", "done"]), client="ip",
+                                        spawn=Hold(), sleep=lambda s: None, clock=clock(),
+                                        on_before=seen.append)
+        self.assertEqual(seen, [before])

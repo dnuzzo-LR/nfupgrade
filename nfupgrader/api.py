@@ -1052,7 +1052,9 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         return _json(200, {"job": job,
                            "launch_error": (ctx.state or {}).get("launch_error"),
                            "notice": None if job else _interrupted_notice(ctx),
-                           "interrupted_fix": (ctx.state or {}).get("interrupted_fix")})
+                           "interrupted_fix": (ctx.state or {}).get("interrupted_fix"),
+                           # #7: the after snapshot waiting for netFLEX to come up
+                           "waiting": ctx.runner.waiting() if ctx.runner is not None else None})
 
     if path == "/api/reports/run" and method == "POST":
         if ctx.runner is None:
