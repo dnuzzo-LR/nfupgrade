@@ -761,3 +761,106 @@ class TestSafeDispatch(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestUpgradeResume(unittest.TestCase):
+    """#3: Resume rewrites "<step> failed" to "<step>" and re-runs the upgrade
+    with APP_WAS_RUNNING from what the tool recorded at the original launch."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.state = os.path.join(self.tmp, ".h1_STATE")
+        with open(self.state, "w") as fh:
+            fh.write("swibootinc failed\n")
+        self.calls = []
+
+    def perform(self, ctx, mode, env=None):
+        with open(self.state) as fh:
+            self.calls.append((mode, env, fh.read().strip()))
+
+    def read_state(self):
+        with open(self.state) as fh:
+            return fh.read().strip()
+
+    def test_resume_rewrites_state_and_launches_with_boot(self):
+        ctx = launch_ctx(self.tmp)._replace(state={"log_follow": "patch"})
+        status, body = httpd.resume_side_effect(
+            ctx, "ip", {"state": "swibootinc", "boot": True}, perform=self.perform)
+        self.assertEqual(status, 202)
+        self.assertEqual(body, {"accepted": True, "mode": "upgrade", "action": "resume",
+                                "state": "swibootinc", "boot": True})
+        self.assertEqual(self.calls, [("upgrade", {"APP_WAS_RUNNING": "YES"}, "swibootinc")])
+        self.assertEqual((ctx.state["phase"], ctx.state["log_follow"]), ("upgrade", None))
+        self.assertIn("upgrade_resumed", [json.loads(l)["event"]
+                                          for l in open(os.path.join(self.tmp, "audit.jsonl"))])
+
+    def test_resume_without_boot(self):
+        httpd.resume_side_effect(launch_ctx(self.tmp), "ip", {"state": "swibootinc", "boot": False},
+                                 perform=self.perform)
+        self.assertEqual(self.calls[0][1], {"APP_WAS_RUNNING": "NO"})
+
+    def test_state_changed_since_accept_refused(self):
+        with open(self.state, "w") as fh:
+            fh.write("swicopycnc failed\n")
+        status, body = httpd.resume_side_effect(
+            launch_ctx(self.tmp), "ip", {"state": "swibootinc", "boot": True}, perform=self.perform)
+        self.assertEqual(status, 409)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.read_state(), "swicopycnc failed")
+
+    def test_launch_error_restores_failed_state(self):
+        def boom(ctx, mode, env=None):
+            raise OSError("no such file")
+        status, body = httpd.resume_side_effect(
+            launch_ctx(self.tmp), "ip", {"state": "swibootinc", "boot": True}, perform=boom)
+        self.assertEqual(status, 500)
+        self.assertEqual(self.read_state(), "swibootinc failed")
+
+    def test_safe_dispatch_routes_resume(self):
+        seen = []
+
+        def disp(method, path, query, body, cookies, ip, ctx):
+            return 202, [], json.dumps({"accepted": True, "mode": "upgrade", "action": "resume",
+                                        "state": "swibootinc", "boot": False}).encode()
+
+        def resume(ctx, ip, accepted):
+            seen.append(accepted)
+            return 202, {"accepted": True}
+        status, _, _ = httpd.safe_dispatch("POST", "/api/upgrade/resume", {}, b"{}", {}, "ip",
+                                           launch_ctx(self.tmp), dispatch=disp, resume=resume)
+        self.assertEqual(status, 202)
+        self.assertEqual(seen[0]["state"], "swibootinc")
+
+
+class TestUpgradeLaunchRecord(unittest.TestCase):
+    """#3: a fresh Upgrade launch records whether netFLEX was up, the test
+    nf_upgrader's doswistart uses (.CNC_UP or .MUX_UP)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self._orig = launcher.launch
+        self.calls = []
+        launcher.launch = lambda *a, **kw: self.calls.append(kw)
+
+    def tearDown(self):
+        launcher.launch = self._orig
+
+    def record(self):
+        with open(os.path.join(self.tmp, ".nfupgrader_h1_upgrade.json")) as fh:
+            return json.load(fh)
+
+    def test_records_app_up(self):
+        h = FakeHost({("test", "-f", "/usr/cnc/.MUX_UP"): RunResult(0, "", "")})
+        httpd.perform_launch(launch_ctx(self.tmp, host=h), "upgrade")
+        self.assertIs(self.record()["app_was_running"], True)
+        self.assertNotIn("env", self.calls[0])
+
+    def test_records_app_down(self):
+        httpd.perform_launch(launch_ctx(self.tmp), "upgrade")
+        self.assertIs(self.record()["app_was_running"], False)
+
+    def test_stage_and_resume_do_not_record(self):
+        httpd.perform_launch(launch_ctx(self.tmp), "stage")
+        httpd.perform_launch(launch_ctx(self.tmp), "upgrade", env={"APP_WAS_RUNNING": "YES"})
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, ".nfupgrader_h1_upgrade.json")))
+        self.assertEqual(self.calls[1]["env"], {"APP_WAS_RUNNING": "YES"})

@@ -172,6 +172,31 @@ def check_facts(ctx):
     }
 
 
+def upgrade_record_path(ctx):
+    """What the tool recorded at the last fresh Upgrade launch (whether netFLEX
+    was up), for a later Resume; in the upgrade log directory."""
+    return os.path.join(upgrade_logdir(ctx), ".nfupgrader_{}_upgrade.json".format(ctx.hostname))
+
+
+def resume_info(ctx):
+    """A failed upgrade the Resume button can restart, or None: the state file
+    says "<upgrade step> failed". boot_default is whether netFLEX was up at the
+    original launch (nf_upgrader's APP_WAS_RUNNING); True when not recorded."""
+    current = progress.read_state(ctx.hostname, upgrade_logdir(ctx))
+    step = progress.failed_step(current)
+    if not step or progress.infer_phase(current) != "upgrade":
+        return None
+    try:
+        with open(upgrade_record_path(ctx), encoding="utf-8") as fh:
+            rec = json.load(fh)
+        was = rec.get("app_was_running") if isinstance(rec, dict) else None
+    except (IOError, OSError, ValueError):
+        was = None
+    return {"state": step, "failed": current,
+            "boot_default": True if not isinstance(was, bool) else was,
+            "recorded": isinstance(was, bool)}
+
+
 def _plain_abs_path(value):
     """True for an absolute path the shell would not expand ($VAR, `cmd`)."""
     return value.startswith("/") and "$" not in value and "`" not in value
@@ -674,7 +699,7 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         return _json(200, {"preview": scenario})
 
     if method == "POST" and preview_scenario(ctx) and path in (
-            "/api/launch", "/api/install/reset", "/api/checks/fix",
+            "/api/launch", "/api/install/reset", "/api/checks/fix", "/api/upgrade/resume",
             "/api/license/save", "/api/license/create", "/api/license/migrate",
             "/api/license/repair"):
         return _json(409, {"error": PREVIEW_REFUSED})
@@ -696,6 +721,7 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
                 rec["web_state"] = fh.read().strip() or None
         except (IOError, OSError):
             rec["web_state"] = None
+        rec["resume"] = resume_info(ctx) if rec.get("status") == "failed" else None
         return _json(200, rec)
 
     if path == "/api/log/live" and method == "GET":
@@ -758,6 +784,37 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
             "trace": trace,
             "fatal": fatal,
         })
+
+    if path == "/api/upgrade/resume" and method == "POST":
+        # #3: the upgrade manual's recovery (edit "<step> failed" back to
+        # "<step>" and re-run -u), done by the httpd side effect. No pre-flight
+        # (it judges a box before an upgrade) and no before snapshot.
+        payload = _json_object(body)
+        if payload is None:
+            return _json(400, {"error": "bad json"})
+        reason = payload.get("reason") or ""
+        reason = reason.strip() if isinstance(reason, str) else ""
+        if not reason:
+            return _json(400, {"error": "resume requires a reason"})
+        boot = payload.get("boot")
+        if not isinstance(boot, bool):
+            return _json(400, {"error": "boot must be true or false"})
+        session = _bootmenu_session(ctx)
+        if session is not None and session.running():
+            return _json(409, {"error": "the boot menu is open"})
+        if launcher.anything_running(ctx.host):
+            return _json(409, {"error": "upgrade already running"})
+        if fix_in_progress():
+            return _json(409, {"error": "check fix in progress"})
+        if _snapshot_busy(ctx):
+            return _json(409, {"error": "report snapshot in progress"})
+        info = resume_info(ctx)
+        if info is None:
+            return _json(409, {"error": "no failed upgrade to resume"})
+        ctx.audit.record("upgrade_resume", state=info["state"], boot=boot, reason=reason,
+                         client=client_ip)
+        return _json(202, {"accepted": True, "mode": "upgrade", "action": "resume",
+                           "state": info["state"], "boot": boot})
 
     if path == "/api/install/reset" and method == "POST":
         payload = _json_object(body)

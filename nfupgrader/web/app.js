@@ -128,6 +128,81 @@ function stageWebWarn(p) {
     "check to upgrade without the new web GUI.";
 }
 
+var lastProgress = null;
+var failureShown = null;   // the failed state already announced in launch-msg
+
+// #3: nf_upgrader's fail_upgrade leaves "<step> failed" and exits; say so (the
+// launch message would otherwise keep "upgrade starting"), and offer Resume
+// for a failed upgrade.
+function showFailure(p) {
+  lastProgress = p;
+  var box = document.getElementById("run-failed");
+  var failed = p.status === "failed" && hostMode !== "install";
+  box.style.display = failed ? "" : "none";
+  document.getElementById("btn-resume").style.display = failed && p.resume ? "" : "none";
+  if (!failed) { failureShown = null; return; }
+  var what = (p.phase === "upgrade" ? "Upgrade" : "Stage") + " FAILED at " + p.label +
+    " (" + p.current + "). See the Log tab.";
+  var next = p.resume
+    ? " Fix the cause, then Resume to re-run from that step."
+    : (p.phase === "stage" ? " Clean up the stage and stage again." : "");
+  document.getElementById("run-failed-msg").textContent = what + next;
+  if (failureShown !== p.current) {
+    failureShown = p.current;
+    document.getElementById("launch-msg").textContent = what;
+  }
+}
+
+function confirmResume() {
+  var r = (lastProgress || {}).resume;
+  if (!r) return;
+  var lines = [
+    "This re-runs the upgrade on " + thisHost() +
+    " from the step that failed, as the upgrade manual describes:",
+    "",
+    "  - the state file is set from '" + r.failed + "' back to '" + r.state + "'",
+    "  - nf_upgrade -u runs again and continues from " + r.state,
+    "  - no pre-flight checks and no before snapshot (the box is part-way through the upgrade)",
+    "",
+    "Fix the cause of the failure first (see the Log tab), or the same step fails again.",
+    ""
+  ];
+  var html = esc(lines.join("\n")) +
+    "<label><input type='checkbox' id='resume-boot'" + (r.boot_default ? " checked" : "") +
+    "> Boot netFLEX when the upgrade finishes</label> <span class='hint'>(" +
+    (r.recorded ? "netFLEX was " + (r.boot_default ? "up" : "down") + " when this upgrade was launched"
+                : "not recorded for this upgrade") + "; RESTARTINC=NO still skips the boot)</span>\n" +
+    "<label for='resume-reason'>Reason (required, recorded in the audit log):</label>\n" +
+    "<input id='resume-reason' type='text' size='50'> <span id='resume-reason-msg' class='issue ERROR'></span>";
+  showConfirm({
+    title: "Resume the failed upgrade on " + thisHost() + "?",
+    html: html,
+    ok: "Resume upgrade",
+    danger: true,
+    focus: "resume-reason",
+    validate: function () {
+      var ok = document.getElementById("resume-reason").value.trim() !== "";
+      document.getElementById("resume-reason-msg").textContent = ok ? "" : "A reason is required.";
+      return ok;
+    }
+  }, function () {
+    applyResume(document.getElementById("resume-reason").value.trim(),
+                document.getElementById("resume-boot").checked);
+  });
+}
+
+function applyResume(reason, boot) {
+  if (!reason) return;
+  var msg = document.getElementById("launch-msg");
+  msg.textContent = "Resuming upgrade…";
+  postJSON("/api/upgrade/resume", { reason: reason, boot: boot }, function (status, body) {
+    msg.textContent = status === 202
+      ? "Upgrade resumed from " + body.state + " — follow it on the Log tab."
+      : "Not resumed: " + (body.error || status);
+    if (status === 202) { failureShown = null; refreshProgress(); }
+  });
+}
+
 function showLaunchDir(p) {
   var t = hostMode === "install" ? "" : launchDirText(p);
   document.getElementById("launch-dir").textContent = t;
@@ -142,6 +217,7 @@ function refreshProgress() {
   getJSON("/api/progress", function (p) {
     suggestUpgradeMode(p);
     showLaunchDir(p);
+    showFailure(p);
     document.getElementById("phase").textContent = p.phase;
     document.getElementById("status").textContent = p.status;
     document.getElementById("current").textContent =
@@ -2143,6 +2219,7 @@ loadDepots();
 document.getElementById("btn-check").onclick = function () { runPreflight(); };
 document.getElementById("btn-install-resume").onclick = resumeInstall;
 document.getElementById("btn-install-reset").onclick = confirmReset;
+document.getElementById("btn-resume").onclick = confirmResume;
 document.getElementById("btn-install-continue").onclick = continueAfterInstall;
 document.getElementById("not-installed-cfg").onclick = function (ev) {
   ev.preventDefault();

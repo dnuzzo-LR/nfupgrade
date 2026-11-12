@@ -118,3 +118,34 @@ class TestLauncher(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLaunchEnv(unittest.TestCase):
+    """#3: a resumed upgrade gets APP_WAS_RUNNING from the tool's environment;
+    nf_upgrader only assigns it in doswistart, so a function reading it later
+    (doswibootinc) sees the exported value."""
+
+    def test_env_reaches_a_ksh_function(self):
+        import time
+        d = tempfile.mkdtemp()
+        script = os.path.join(d, "fake_nf_upgrade")
+        out = os.path.join(d, "out")
+        with open(script, "w") as fh:
+            fh.write("#!/usr/bin/ksh\nfunction boot\n{\n\tprint \"${APP_WAS_RUNNING:-unset}\" > %s\n}\n"
+                     "boot\n" % out)
+        os.chmod(script, 0o755)
+        p = launcher.launch(script, "/x/eff.cfg", "upgrade", cwd=d, env={"APP_WAS_RUNNING": "YES"})
+        p.wait(10)
+        with open(out) as fh:
+            self.assertEqual(fh.read().strip(), "YES")
+
+    def test_no_env_inherits(self):
+        d = tempfile.mkdtemp()
+        script = os.path.join(d, "s")
+        out = os.path.join(d, "out")
+        with open(script, "w") as fh:
+            fh.write("#!/bin/sh\necho \"${APP_WAS_RUNNING:-unset} ${PATH:+path}\" > %s\n" % out)
+        os.chmod(script, 0o755)
+        launcher.launch(script, "/x/eff.cfg", "upgrade", cwd=d).wait(10)
+        with open(out) as fh:
+            self.assertEqual(fh.read().strip(), "unset path")

@@ -682,3 +682,37 @@ class TestLaunchDirAndWebFailed(unittest.TestCase):
         self.assertIn('p.web_state !== "webfailed"', w)
         self.assertIn("web-staged", w)
         self.assertIn("web GUI install FAILED", self.fn("suggestUpgradeMode"))
+
+
+class TestUpgradeFailedAndResume(unittest.TestCase):
+    """#3: a failed stage/upgrade is shown on the Upgrade tab, and a failed
+    upgrade offers Resume (reason + boot checkbox)."""
+
+    def setUp(self):
+        self.html = open(os.path.join(WEB, "index.html"), encoding="utf-8").read()
+        self.js = open(os.path.join(WEB, "app.js"), encoding="utf-8").read()
+
+    def fn(self, name):
+        return self.js.split("function %s(" % name, 1)[1].split("\nfunction ", 1)[0]
+
+    def test_markup(self):
+        self.assertIn('id="btn-resume"', self.html)
+        self.assertIn('id="run-failed"', self.html)
+        self.assertIn('getElementById("btn-resume").onclick = confirmResume;', self.js)
+
+    def test_failure_shown_and_replaces_launch_message(self):
+        f = self.fn("showFailure")
+        self.assertIn('p.status === "failed"', f)
+        self.assertIn("FAILED at", f)
+        self.assertIn('getElementById("launch-msg")', f)
+        self.assertIn("p.resume", f)
+        self.assertIn("showFailure(p);", self.fn("refreshProgress"))
+
+    def test_resume_dialog(self):
+        c = self.fn("confirmResume")
+        for s in ("resume-boot", "resume-reason", "boot_default", "A reason is required.",
+                  "as the upgrade manual describes"):
+            self.assertIn(s, c)
+        a = self.fn("applyResume")
+        self.assertIn('postJSON("/api/upgrade/resume"', a)
+        self.assertIn("boot: boot", a)

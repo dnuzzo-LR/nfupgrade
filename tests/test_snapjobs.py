@@ -271,6 +271,11 @@ class TestWatch(unittest.TestCase):
         note, calls = self.run_watch(["not_started", "running", "running", "done"])
         self.assertEqual(calls, [""])
 
+    def test_failed_after_running(self):
+        # #3: fail_upgrade's "<state> failed" ends the watch like a death
+        note, calls = self.run_watch(["running", "failed"])
+        self.assertEqual(calls, ["upgrade failed before completion"])
+
     def test_died_after_running(self):
         note, calls = self.run_watch(["running", "died"])
         self.assertEqual(calls, ["upgrade died before completion"])

@@ -127,16 +127,77 @@ def ensure_dir(path):
     return path
 
 
-def perform_launch(ctx, mode):
+def perform_launch(ctx, mode, env=None):
     """Spawn nf_upgrade. The active config is one chosen in the UI (state), else
     NFU_USER_CONFIG; an effective config is generated from it (sources it + forces
-    PROMPTFORVALIDATE=NO) — the customer's own file is never edited."""
+    PROMPTFORVALIDATE=NO) — the customer's own file is never edited. A fresh
+    Upgrade records whether netFLEX was up for a later Resume; env is a
+    resume's APP_WAS_RUNNING."""
     resolved = (ctx.state or {}).get("user_config") or ctx.user_config
     if resolved:
         launcher.write_effective_config(resolved, ctx.effective_config)
+    if mode == "upgrade" and env is None:
+        record_upgrade_launch(ctx)
     # From the CORE RPM's folder by default: the bundle's inc_linux_web_install
     # and linux_packages are run from there (see api.launch_dir).
-    launcher.launch(ctx.nf_upgrade_path, ctx.effective_config, mode, cwd=api.launch_dir(ctx)[0])
+    kw = {"cwd": api.launch_dir(ctx)[0]}
+    if env:
+        kw["env"] = env
+    launcher.launch(ctx.nf_upgrade_path, ctx.effective_config, mode, **kw)
+
+
+def record_upgrade_launch(ctx):
+    """Write whether netFLEX is up now, by nf_upgrader's own doswistart test
+    (.CNC_UP or .MUX_UP). doswistart's APP_WAS_RUNNING is lost when the engine
+    fails, and a resumed run skips doswistart, so Resume restores it from here.
+    Best effort: a failed write only loses the Resume dialog's default."""
+    up = any(ctx.host.run(["test", "-f", "/usr/cnc/" + f]).rc == 0 for f in (".CNC_UP", ".MUX_UP"))
+    try:
+        with open(api.upgrade_record_path(ctx), "w") as fh:
+            json.dump({"app_was_running": up, "at": time.strftime("%Y-%m-%d %H:%M:%S")}, fh)
+    except (IOError, OSError):
+        pass
+
+
+def resume_side_effect(ctx, ip, accepted, perform=None):
+    """Carry out an accepted /api/upgrade/resume: under the fix lock (and with
+    the boot menu closed), set the state file from "<step> failed" back to
+    "<step>" -- the upgrade manual's recovery -- and re-run nf_upgrade -u with
+    APP_WAS_RUNNING from the request. No before snapshot: it would record a
+    half-upgraded system as "before". A failed spawn restores the state file."""
+    perform = perform or perform_launch
+    step = accepted.get("state")
+    boot = bool(accepted.get("boot"))
+    has_state = isinstance(ctx.state, dict)
+    if not api._FIX_LOCK.acquire(False):
+        return 409, {"error": "check fix in progress"}
+    try:
+        session = api._bootmenu_session(ctx)
+        if session is not None and session.running():
+            return 409, {"error": "the boot menu is open"}
+        path = os.path.join(api.upgrade_logdir(ctx), progress.state_file(ctx.hostname))
+        failed = "{}{}".format(step, progress.FAILED_SUFFIX)
+        if not step or progress.read_state(ctx.hostname, api.upgrade_logdir(ctx)) != failed:
+            return 409, {"error": "the upgrade state changed; reload"}
+        with open(path, "w") as fh:
+            fh.write(step + "\n")
+        try:
+            perform(ctx, "upgrade", env={"APP_WAS_RUNNING": "YES" if boot else "NO"})
+        except Exception as e:
+            with open(path, "w") as fh:
+                fh.write(failed + "\n")
+            ctx.audit.record("launch_error", error=str(e), client=ip)
+            return 500, {"error": "resume failed: {}".format(e)}
+        ctx.audit.record("upgrade_resumed", state=step, boot=boot, client=ip)
+        if has_state:
+            ctx.state.pop("launch_error", None)
+            ctx.state["phase"] = "upgrade"
+            ctx.state["log_follow"] = None
+            ctx.state["launched_at"] = api._now()
+        return 202, {"accepted": True, "mode": "upgrade", "action": "resume",
+                     "state": step, "boot": boot}
+    finally:
+        api._FIX_LOCK.release()
 
 
 def perform_install(ctx, action):
@@ -339,7 +400,7 @@ def _json_response(status, obj):
 
 
 def safe_dispatch(method, path, query, body, cookies, ip, ctx, dispatch=None, launch=None,
-                  reset=None, patch=None):
+                  reset=None, patch=None, resume=None):
     """api.dispatch plus the launch/reset side effect after an accepted (202)
     launch or install reset. Any exception becomes a 500 JSON error (traceback
     to stderr) so the client gets an answer instead of a dropped connection."""
@@ -347,6 +408,7 @@ def safe_dispatch(method, path, query, body, cookies, ip, ctx, dispatch=None, la
     launch = launch or launch_side_effect
     reset = reset or reset_side_effect
     patch = patch or patch_side_effect
+    resume = resume or resume_side_effect
     try:
         status, headers, out = dispatch(method, path, query, body, cookies, ip, ctx)
         if path == "/api/launch" and status == 202:
@@ -360,6 +422,9 @@ def safe_dispatch(method, path, query, body, cookies, ip, ctx, dispatch=None, la
             accepted = json.loads(out.decode("utf-8"))
             status, obj = patch(ctx, ip, accepted.get("path"), version=accepted.get("version"),
                                 web_tar=accepted.get("web"))
+            status, headers, out = _json_response(status, obj)
+        elif path == "/api/upgrade/resume" and status == 202:
+            status, obj = resume(ctx, ip, json.loads(out.decode("utf-8")))
             status, headers, out = _json_response(status, obj)
         elif path == "/api/install/reset" and status == 202:
             status, obj = reset(ctx, ip)

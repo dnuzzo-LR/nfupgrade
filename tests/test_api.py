@@ -255,6 +255,62 @@ class TestApi(unittest.TestCase):
                          (self.tmp, "the CORE RPM's folder"))
         self.assertEqual(data["web_state"], "webfailed")
 
+    def _fail_upgrade(self, state="swibootinc failed", record=None):
+        with open(os.path.join(self.tmp, ".h1_STATE"), "w") as fh:
+            fh.write(state + "\n")
+        if record is not None:
+            with open(api.upgrade_record_path(self.ctx), "w") as fh:
+                json.dump(record, fh)
+        self._set_running(False)
+
+    def _resume(self, payload):
+        status, _, body = api.dispatch("POST", "/api/upgrade/resume", {}, json.dumps(payload).encode(),
+                                       {"nfu_sid": self._session()}, "127.0.0.1", self.ctx)
+        return status, json.loads(body.decode())
+
+    def test_resume_info(self):
+        self._fail_upgrade(record={"app_was_running": False})
+        self.assertEqual(api.resume_info(self.ctx),
+                         {"state": "swibootinc", "failed": "swibootinc failed",
+                          "boot_default": False, "recorded": True})
+        os.remove(api.upgrade_record_path(self.ctx))
+        self.assertEqual(api.resume_info(self.ctx)["boot_default"], True)     # unknown -> boot
+        self.assertFalse(api.resume_info(self.ctx)["recorded"])
+        self._fail_upgrade("swicopycnc")                                       # not failed
+        self.assertIsNone(api.resume_info(self.ctx))
+        self._fail_upgrade("swsretropass1 failed")                             # a stage failure
+        self.assertIsNone(api.resume_info(self.ctx))
+
+    def test_progress_offers_resume_for_failed_upgrade(self):
+        self._fail_upgrade(record={"app_was_running": True})
+        self.ctx.state["phase"] = "upgrade"
+        status, _, body = api.dispatch("GET", "/api/progress", {}, b"",
+                                       {"nfu_sid": self._session()}, "127.0.0.1", self.ctx)
+        data = json.loads(body.decode())
+        self.assertEqual((data["status"], data["failed_state"]), ("failed", "swibootinc"))
+        self.assertEqual(data["resume"]["state"], "swibootinc")
+
+    def test_resume_accepted_and_audited(self):
+        self._fail_upgrade(record={"app_was_running": True})
+        status, data = self._resume({"reason": "fixed pg_hba", "boot": True})
+        self.assertEqual(status, 202)
+        self.assertEqual(data, {"accepted": True, "mode": "upgrade", "action": "resume",
+                                "state": "swibootinc", "boot": True})
+        ev = [json.loads(l) for l in open(os.path.join(self.tmp, "audit.jsonl")).read().splitlines()]
+        r = [e for e in ev if e["event"] == "upgrade_resume"][0]
+        self.assertEqual((r["state"], r["boot"], r["reason"]), ("swibootinc", True, "fixed pg_hba"))
+
+    def test_resume_refusals(self):
+        self._fail_upgrade()
+        self.assertEqual(self._resume({"boot": True})[0], 400)                   # no reason
+        self.assertEqual(self._resume({"reason": "x", "boot": "yes"})[0], 400)   # boot not bool
+        self._fail_upgrade("swidone")
+        status, data = self._resume({"reason": "x", "boot": True})
+        self.assertEqual((status, data["error"]), (409, "no failed upgrade to resume"))
+        self._fail_upgrade()
+        self._set_running(True)
+        self.assertEqual(self._resume({"reason": "x", "boot": True})[0], 409)
+
     def test_launch_needs_session(self):
         status, _, _ = api.dispatch(
             "POST", "/api/launch", {}, json.dumps({"mode": "stage"}).encode(),

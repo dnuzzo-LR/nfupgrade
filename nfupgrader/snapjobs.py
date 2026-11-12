@@ -152,6 +152,9 @@ def watch_upgrade(read_status, start_after, sleep=time.sleep, clock=time.time,
         elif seen_running and st == "died":
             note = "upgrade died before completion"
             break
+        elif seen_running and st == "failed":
+            note = "upgrade failed before completion"
+            break
         elif seen_running and read_errors >= max_read_errors:
             note = "progress unreadable after upgrade started"
             break

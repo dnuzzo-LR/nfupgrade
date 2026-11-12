@@ -106,14 +106,19 @@ def build_install_argv(nf_install_path, config_path, action):
     return [nf_install_path, "-c", config_path, INSTALL_ACTIONS[action]]
 
 
-def launch(nf_upgrade_path, config_path, mode, cwd=None):
+def launch(nf_upgrade_path, config_path, mode, cwd=None, env=None):
     """Launch nf_upgrade detached. Returns the Popen (which exits quickly, as
     nf_upgrade backgrounds nf_upgrader). Progress is tracked via the state file
-    and upgrader_running(), not this handle."""
+    and upgrader_running(), not this handle. env adds variables to the
+    inherited environment (a resumed upgrade's APP_WAS_RUNNING)."""
     argv = build_launch_argv(nf_upgrade_path, config_path, mode)
+    full_env = None
+    if env:
+        full_env = dict(os.environ)
+        full_env.update(env)
     return subprocess.Popen(
         argv, cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        start_new_session=True,
+        start_new_session=True, env=full_env,
     )
 
 

@@ -99,3 +99,30 @@ class TestStepNumber(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFailedState(unittest.TestCase):
+    """#3: nf_upgrader's fail_upgrade writes "<state> failed"; show it as a
+    failure at that step, not as an unknown state that "died"."""
+
+    def test_failed_upgrade_step(self):
+        p = progress.compute_progress("upgrade", "swibootinc failed", False)
+        self.assertEqual(p["status"], "failed")
+        self.assertEqual(p["failed_state"], "swibootinc")
+        self.assertEqual(p["label"], "Boot the application")
+        self.assertEqual((p["step"], p["completed"]), (7, 6))
+
+    def test_failed_even_if_a_process_is_seen(self):
+        self.assertEqual(progress.compute_progress("upgrade", "swicopycnc failed", True)["status"],
+                         "failed")
+
+    def test_failed_stage_step(self):
+        p = progress.compute_progress("stage", "swswebinstall failed", False)
+        self.assertEqual((p["status"], p["failed_state"], p["step"]), ("failed", "swswebinstall", 3))
+
+    def test_not_failed_has_no_failed_state(self):
+        self.assertIsNone(progress.compute_progress("upgrade", "swicopycnc", True)["failed_state"])
+
+    def test_infer_phase_of_failed_upgrade_state(self):
+        self.assertEqual(progress.infer_phase("swibootinc failed"), "upgrade")
+        self.assertEqual(progress.infer_phase("swsretropass1 failed"), "stage")

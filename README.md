@@ -246,6 +246,24 @@ provides `nc`) or EPEL's `netcat`, and its Fix installs `nmap-ncat`.
 confirmed click runs the real upgrade immediately. Only click on a host prepared
 for it. Just running the service launches nothing; it only observes.
 
+### When a stage or upgrade fails
+
+`nf_upgrader` records a failure as `<step> failed` in `.<host>_STATE` and exits.
+The Upgrade tab shows **Stage/Upgrade FAILED at <step>**; the Log tab has why.
+
+| What failed | What to do |
+|---|---|
+| A **stage** | Fix the cause, clean up the stage (`/usr/cnc_stage`, the new load directory, the state file, and the new `netFLEX-CORE` RPM record — the **target-newer** / **rpm-matches-load** checks catch a leftover record), then stage again. |
+| An **upgrade** | Fix the cause, then **Resume upgrade** (reason required, audited as `upgrade_resume` / `upgrade_resumed`). It does the upgrade manual's recovery: sets the state file back from `<step> failed` to `<step>` and re-runs `nf_upgrade -u`, which continues from that step. No pre-flight checks (they judge a box before an upgrade) and no before snapshot. |
+
+A resumed run skips `doswistart`, the only place `nf_upgrader` decides whether to
+boot netFLEX at the end (`APP_WAS_RUNNING`). The tool records at each fresh
+Upgrade launch whether netFLEX was up (`.CNC_UP` or `.MUX_UP`, in
+`.nfupgrader_<host>_upgrade.json` in the log directory) and passes it to the
+resumed run in its environment; the Resume dialog's **Boot netFLEX when the
+upgrade finishes** box starts from that record (ticked when there is none).
+`RESTARTINC=NO` still skips the boot.
+
 ### Example — reach it by hostname on a lab box
 
 ```sh

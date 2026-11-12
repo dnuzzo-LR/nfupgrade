@@ -15,14 +15,19 @@ def compute_progress(phase, current, running):
     number of the state in progress (total once done, None when not started or
     the state is unknown).
 
-    status is one of: done, running, not_started, died. In the upgrade phase a
+    status is one of: done, running, not_started, died, failed (the state
+    file says "<state> failed": failed_state names that step). In the upgrade phase a
     box still at the stage terminal state with nothing running has simply not
     started the upgrade yet. (A missing state file is not_started too; that is
     decided by the reader.)"""
     total = steps.total(phase)
-    idx = steps.index_of(phase, current)
+    failed_state = failed_step(current)
+    idx = steps.index_of(phase, failed_state or current)
     completed = idx if idx >= 0 else 0
-    if current == _TERMINAL[phase]:
+    if failed_state:
+        # fail_upgrade wrote "<state> failed" and the engine exited.
+        status = "failed"
+    elif current == _TERMINAL[phase]:
         completed = total
         status = "done"
     elif running:
@@ -40,12 +45,24 @@ def compute_progress(phase, current, running):
     return {
         "phase": phase,
         "current": current,
-        "label": steps.label(current),
+        "label": steps.label(failed_state or current),
         "completed": completed,
         "step": step,
         "total": total,
         "status": status,
+        "failed_state": failed_state,
     }
+
+
+FAILED_SUFFIX = " failed"
+
+
+def failed_step(current):
+    """The step a "<state> failed" state file names (nf_upgrader's
+    fail_upgrade), else None."""
+    if current and current.endswith(FAILED_SUFFIX):
+        return current[:-len(FAILED_SUFFIX)].strip() or None
+    return None
 
 
 # States that only occur once the upgrade phase has begun.
@@ -77,7 +94,7 @@ def phase_done(hostname, inclogdir, phase):
 
 def infer_phase(current):
     """'upgrade' once the state machine is past staging, else 'stage'."""
-    return "upgrade" if current in _UPGRADE_ONLY else "stage"
+    return "upgrade" if (failed_step(current) or current) in _UPGRADE_ONLY else "stage"
 
 
 def read_progress(hostname, phase, inclogdir, running):
@@ -88,5 +105,6 @@ def read_progress(hostname, phase, inclogdir, running):
         return {
             "phase": phase, "current": None, "label": "",
             "completed": 0, "step": None, "total": steps.total(phase), "status": "not_started",
+            "failed_state": None,
         }
     return compute_progress(phase, current, running)
