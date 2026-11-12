@@ -156,8 +156,8 @@ def web_state_file(ctx):
 def check_facts(ctx):
     """Facts the checks cannot read off the box: the target version from the
     active config (target-newer; None without a readable config), where the
-    stage will run and whether it installs the web GUI (upgrade-bundle), and
-    the web state file (web-staged)."""
+    stage will run and whether it installs the web GUI (upgrade-bundle), the
+    web state file (web-staged), and the stage/upgrade state file (staged-present)."""
     values = _active_values(ctx)
     d, why = launch_dir(ctx, values)
     dep = values.get("DEPOTFILE", "").strip()
@@ -169,6 +169,7 @@ def check_facts(ctx):
                    "install_web": values.get("INSTALLWEBGUI", "").strip().upper() != "NO",
                    "depot_dir": os.path.dirname(dep) if _plain_abs_path(dep) else None},
         "web_state_file": web_state_file(ctx),
+        "state_file": os.path.join(upgrade_logdir(ctx), progress.state_file(ctx.hostname)),
     }
 
 

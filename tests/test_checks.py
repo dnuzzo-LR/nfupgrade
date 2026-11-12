@@ -1149,3 +1149,56 @@ class TestUpgradeBundle(unittest.TestCase):
                          ("web_staged", "upgrade", "ERROR", False))
         self.assertIn("upgrade_bundle", checks.FACT_KINDS)
         self.assertIn("web_staged", checks.FACT_KINDS)
+
+
+class TestStagedPresentHard(unittest.TestCase):
+    """#5 (2026-11-11 test): staged-present is hard, so it must only pass when
+    an Upgrade launch is right: a finished stage, or an upgrade to continue."""
+
+    def host(self, link=True, state=None):
+        r = {("readlink", "/usr/cnc_stage"): RunResult(0, "/usr4/inc5.4.128\n", "") if link
+             else RunResult(1, "", "")}
+        if state is not None:
+            r[("cat", "/logs/.h1_STATE")] = RunResult(0, state + "\n", "")
+        return FakeHost(r)
+
+    def run_kind(self, h):
+        return checks.KINDS["staged_present"](h, {"state_file": "/logs/.h1_STATE"})
+
+    def test_finished_stage_passes(self):
+        self.assertEqual(self.run_kind(self.host(state="swscomplete")),
+                         (True, "/usr4/inc5.4.128 (swscomplete)"))
+
+    def test_killed_upgrade_can_continue(self):
+        self.assertTrue(self.run_kind(self.host(state="swicopycnc"))[0])
+
+    def test_no_stage(self):
+        ok, detail = self.run_kind(self.host(link=False, state="swscomplete"))
+        self.assertFalse(ok)
+        self.assertEqual(detail, "no staged load")
+
+    def test_unfinished_stage(self):
+        ok, detail = self.run_kind(self.host(state="swscopycnc"))
+        self.assertFalse(ok)
+        self.assertIn("the stage has not finished (state swscopycnc)", detail)
+
+    def test_no_state_file(self):
+        ok, detail = self.run_kind(self.host())
+        self.assertFalse(ok)
+        self.assertIn("no state file", detail)
+
+    def test_failed_upgrade_points_to_resume(self):
+        ok, detail = self.run_kind(self.host(state="swibootinc failed"))
+        self.assertFalse(ok)
+        self.assertIn("Resume upgrade", detail)
+
+    def test_failed_stage(self):
+        ok, detail = self.run_kind(self.host(state="swsretropass1 failed"))
+        self.assertFalse(ok)
+        self.assertIn("the stage failed", detail)
+
+    def test_shipped_check_is_hard_and_gets_state_fact(self):
+        lst = checks.load_checks(os.path.join(os.path.dirname(checks.__file__), "checks.default.json"))
+        c = [c for c in lst if c["name"] == "staged-present"][0]
+        self.assertIs(c.get("hard"), True)
+        self.assertIn("staged_present", checks.FACT_KINDS)

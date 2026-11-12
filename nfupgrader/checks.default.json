@@ -94,6 +94,7 @@
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "upgrade",
+    "hard": true,
     "kind": "staged_present",
     "params": {}
   },

@@ -311,6 +311,27 @@ class TestApi(unittest.TestCase):
         self._set_running(True)
         self.assertEqual(self._resume({"reason": "x", "boot": True})[0], 409)
 
+    def test_launch_upgrade_unfinished_stage_never_overridable(self):
+        # #5: staged-present is hard; with the stage half done (swscopycnc)
+        path = os.path.join(self.tmp, "checks.sp.json")
+        with open(path, "w") as fh:
+            json.dump([{"name": "staged-present", "fail_text": "ERROR", "when": "preflight",
+                        "phase": "upgrade", "hard": True, "kind": "staged_present", "params": {}}], fh)
+        self.ctx = self.ctx._replace(checks_path=path)
+        self.ctx.host.responses[("readlink", "/usr/cnc_stage")] = RunResult(0, "/usr4/inc5.4.128\n", "")
+        self.ctx.host.responses[("cat", os.path.join(self.tmp, ".h1_STATE"))] = \
+            RunResult(0, "swscopycnc\n", "")
+        self.assertEqual(api.check_facts(self.ctx)["state_file"], os.path.join(self.tmp, ".h1_STATE"))
+        self._set_running(False)
+        for payload in ({"mode": "upgrade"},
+                        {"mode": "upgrade", "overrides": ["staged-present"], "reason": "go"}):
+            status, _, body = api.dispatch("POST", "/api/launch", {}, json.dumps(payload).encode(),
+                                           {"nfu_sid": self._session()}, "127.0.0.1", self.ctx)
+            data = json.loads(body.decode())
+            self.assertEqual(status, 409, payload)
+            self.assertEqual([h["name"] for h in data["hard"]], ["staged-present"])
+            self.assertIn("the stage has not finished (state swscopycnc)", data["hard"][0]["detail"])
+
     def test_launch_needs_session(self):
         status, _, _ = api.dispatch(
             "POST", "/api/launch", {}, json.dumps({"mode": "stage"}).encode(),

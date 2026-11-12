@@ -102,9 +102,36 @@ def _dbcheck_clean(host, p):
     return n == 0, "{} error(s)".format(n)
 
 
+_STAGE_DONE = "swscomplete"
+_UPGRADE_STEPS = ("swistart", "swicopycnc", "swipackages", "swipreboot", "swiretropass2",
+                  "swibootinc", "postinstall", "swiretropass3")
+
+
 def _staged_present(host, p):
+    """Upgrade pre-flight (hard, #5): a staged load to upgrade to. With the
+    state file (an API fact) it also requires the stage to have finished, or an
+    upgrade step to continue (an upgrade killed part-way is re-launched); an
+    unfinished stage would make nf_upgrader -u fail with "Unsupported state"
+    and overwrite the stage's state."""
     r = host.run(["readlink", "/usr/cnc_stage"])
-    return (r.rc == 0 and bool(r.out.strip())), r.out.strip() or "no staged load"
+    link = r.out.strip() if r.rc == 0 else ""
+    if not link:
+        return False, "no staged load"
+    path = p.get("state_file")
+    if not path:
+        return True, link
+    sr = host.run(["cat", path])
+    state = sr.out.strip() if sr.rc == 0 else ""
+    if not state:
+        return False, "{} exists but there is no state file {}: stage again".format(link, path)
+    if state.endswith(" failed"):
+        step = state[:-len(" failed")].strip()
+        if step in _UPGRADE_STEPS:
+            return False, "the upgrade failed at {}: fix the cause and use Resume upgrade".format(step)
+        return False, "the stage failed at {}: clean up and stage again".format(step)
+    if state == _STAGE_DONE or state in _UPGRADE_STEPS:
+        return True, "{} ({})".format(link, state)
+    return False, "the stage has not finished (state {}): wait for it, or clean up and stage again".format(state)
 
 
 def _rpm_qi_versions(host, pkg):
@@ -514,7 +541,7 @@ KINDS = {
 
 # Kinds that read facts the API supplies (the saved config's target version)
 # rather than anything on the box; evaluate() merges facts into their params.
-FACT_KINDS = ("target_newer", "upgrade_bundle", "web_staged")
+FACT_KINDS = ("target_newer", "upgrade_bundle", "web_staged", "staged_present")
 
 
 # --- fixes (ported from nf-install system_checks fix_*; the service runs as root) ---

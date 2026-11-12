@@ -228,6 +228,12 @@ upgrade "from" the target and silently skip the database retrofits.
   `rpm -e --justdb --noscripts netFLEX-CORE-…` command for the leftover record;
   the tool never edits the RPM database itself.
 
+The Upgrade check **staged-present** is hard too: it needs the `/usr/cnc_stage`
+link and a state file showing the stage finished (`swscomplete`) or an upgrade
+step to continue (an upgrade killed part-way is launched again). An unfinished
+stage would make `nf_upgrader -u` fail with "Unsupported state" and overwrite the
+stage's state; a failed upgrade points to **Resume upgrade**.
+
 ### Pre-flight Fix buttons and EPEL packages
 
 A failed pre-flight check whose problem the tool knows how to correct gets a
