@@ -803,3 +803,17 @@ class TestUpgradeSummaryUI(unittest.TestCase):
 
     def test_in_launch_confirmation(self):
         self.assertIn("summaryLines(upgradeSummary)", self.fn("launchConfirmText"))
+
+
+class TestVersionNotesUI(unittest.TestCase):
+    """#10: Overview flags a leftover CORE record and an old-release PATCH."""
+
+    def setUp(self):
+        self.js = open(os.path.join(WEB, "app.js"), encoding="utf-8").read()
+
+    def test_rows_carry_notes(self):
+        self.assertIn("function versionRow(", self.js)
+        for k in ("core", "patch", "ipatch"):
+            self.assertIn('versionRow("%s", v.%s, notes.%s)' % (k.upper(), k, k), self.js)
+        f = self.js.split("function versionRow(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("pill stale", f)

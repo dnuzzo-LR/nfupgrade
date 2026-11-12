@@ -96,6 +96,41 @@ def _rpm(host, pkg):
     return parse_rpm_version(host.run(["rpm", "-qi", pkg]).out)
 
 
+def _rpm_records(host, pkg):
+    """Every installed record of pkg as Version-Release, in rpm's order."""
+    r = host.run(["rpm", "-q", "--qf", "%{VERSION}-%{RELEASE}\\n", pkg])
+    if r.rc != 0:
+        return []
+    return [ln.strip() for ln in r.out.splitlines() if ln.strip()]
+
+
+def _generic(record):
+    """'5.4.1.28-1' -> '5.4.1' (the first three components of the Version)."""
+    return ".".join(record.split("-", 1)[0].split(".")[:3])
+
+
+def version_notes(host):
+    """Flags for the Overview's CORE/PATCH/IPATCH rows (#10): more than one
+    netFLEX-CORE record, or a PATCH/IPATCH of another generic than the running
+    CORE (the last record, as shown and as nf_upgrade reads it) -- left by an
+    upgrade, which never removes the old release's records. None when fine.
+    Nothing is hidden or removed."""
+    notes = {"core": None, "patch": None, "ipatch": None}
+    core = _rpm_records(host, "netFLEX-CORE")
+    if not core:
+        return notes
+    if len(core) > 1:
+        notes["core"] = ("{} netFLEX-CORE records: {} (a leftover? see the rpm-matches-load check)"
+                         .format(len(core), ", ".join(core)))
+    gen = _generic(core[-1])
+    for key, pkg in (("patch", "netFLEX-CORE-PATCH"), ("ipatch", "netFLEX-CORE-IPATCH")):
+        stale = sorted(set(_generic(r) for r in _rpm_records(host, pkg)) - {gen})
+        if stale:
+            notes[key] = "left from {}: not part of the running {} release".format(
+                ", ".join(stale), gen)
+    return notes
+
+
 def _test_f(host, path):
     return host.run(["test", "-f", path]).rc == 0
 
@@ -161,6 +196,7 @@ def gather(host, hostname, cnc_cnfg_path="/usr/cnc/features/cnc.cnfg", tier1_onl
             "core": _rpm(host, "netFLEX-CORE"),
             "patch": _rpm(host, "netFLEX-CORE-PATCH"),
             "ipatch": _rpm(host, "netFLEX-CORE-IPATCH"),
+            "notes": version_notes(host),
         },
         "loads": {
             "installed": _readlink(host, "/usr/cnc"),

@@ -209,3 +209,36 @@ class TestGather(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestVersionNotes(unittest.TestCase):
+    """#10 (2026-11-11 test): after 5.4.0.36 -> 5.4.1.28 Overview showed PATCH
+    5.4.0.36-1 next to CORE 5.4.1.28-1 as if current, and a leftover
+    netFLEX-CORE-5.4.0.29 record. Flag them; never hide or remove them."""
+
+    QF = ("rpm", "-q", "--qf", "%{VERSION}-%{RELEASE}\\n")
+
+    def host(self, core, patch=(), ipatch=()):
+        r = {}
+        for pkg, recs in (("netFLEX-CORE", core), ("netFLEX-CORE-PATCH", patch),
+                          ("netFLEX-CORE-IPATCH", ipatch)):
+            r[self.QF + (pkg,)] = (RunResult(0, "".join(v + "\n" for v in recs), "") if recs
+                                   else RunResult(1, "package {} is not installed\n".format(pkg), ""))
+        return FakeHost(r)
+
+    def test_clean_box_has_no_notes(self):
+        n = localinfo.version_notes(self.host(["5.4.0.29-1"], ["5.4.0.36-1"]))
+        self.assertEqual(n, {"core": None, "patch": None, "ipatch": None})
+
+    def test_after_upgrade(self):
+        n = localinfo.version_notes(self.host(["5.4.0.29-1", "5.4.1.28-1"], ["5.4.0.36-1"]))
+        self.assertEqual(n["core"], "2 netFLEX-CORE records: 5.4.0.29-1, 5.4.1.28-1 "
+                                    "(a leftover? see the rpm-matches-load check)")
+        self.assertEqual(n["patch"], "left from 5.4.0: not part of the running 5.4.1 release")
+        self.assertIsNone(n["ipatch"])
+
+    def test_ipatch_and_no_core(self):
+        n = localinfo.version_notes(self.host(["5.4.1.28-1"], [], ["5.4.0.31-1"]))
+        self.assertEqual(n["ipatch"], "left from 5.4.0: not part of the running 5.4.1 release")
+        self.assertEqual(localinfo.version_notes(self.host([])),
+                         {"core": None, "patch": None, "ipatch": None})

@@ -204,6 +204,16 @@ opening netFLEX's boot menu clears it. This rule drives the header badge,
 Overview and Site view, the License tab, the Patches tab, `nf_patch`, and the
 `post-app-up` post-flight check. If `ps` itself fails, the file is trusted.
 
+### Old release records on Overview
+
+An upgrade never removes the old release's rpm records, so after 5.4.0.36 →
+5.4.1.28 the rpm database still lists `netFLEX-CORE-PATCH-5.4.0.36` (and maybe a
+second `netFLEX-CORE` record). Overview keeps showing them but flags them
+**stale**: a PATCH/IPATCH whose generic is not the running CORE's ("left from
+5.4.0: not part of the running 5.4.1 release"), and more than one
+`netFLEX-CORE` record. The Patches tab and the web GUI check already ignore a
+PATCH of another generic. The tool never removes rpm records.
+
 ### What an upgrade will do
 
 In the Upgrade phase, **Run pre-flight checks** also shows *What this upgrade

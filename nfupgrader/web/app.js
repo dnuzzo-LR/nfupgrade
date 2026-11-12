@@ -327,6 +327,13 @@ function row(label, value) {
          (value === null || value === undefined || value === "" ? "-" : value) + "</div>";
 }
 
+// #10: an upgrade leaves the old release's rpm records; flag them, never hide.
+function versionRow(label, value, note) {
+  if (value === null || value === undefined || value === "") return row(label, null);
+  return row(label, esc(value) + (note ? " <span class='pill stale'>stale</span> " +
+                                         "<span class='muted'>" + esc(note) + "</span>" : ""));
+}
+
 function refreshInfo() {
   getJSON("/api/info", function (i) {
     lastInfo = i;
@@ -345,9 +352,10 @@ function refreshInfo() {
     html += row("Mate", t.mate);
     html += row("Application", i.app_up ? "UP"
       : (i.app_state === "stale" ? "DOWN (stale .CNC_UP: no netFLEX processes running)" : "DOWN"));
-    html += row("CORE", v.core);
-    html += row("PATCH", v.patch);
-    html += row("IPATCH", v.ipatch);
+    var notes = v.notes || {};
+    html += versionRow("CORE", v.core, notes.core);
+    html += versionRow("PATCH", v.patch, notes.patch);
+    html += versionRow("IPATCH", v.ipatch, notes.ipatch);
     var w = i.web;
     html += row("Web GUI", w ? esc(w.web) + (w.matches === false
       ? " <span class='pill down'>mismatch</span> " + esc(webMismatchText(w)) : "") : null);
