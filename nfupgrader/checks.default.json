@@ -99,6 +99,17 @@
     "params": {}
   },
   {
+    "name": "stage-state",
+    "category": "NETFLEX",
+    "description": "No state file left from a removed stage or the previous upgrade (the stage resumes from it)",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "stage",
+    "hard": true,
+    "kind": "stage_state",
+    "params": {}
+  },
+  {
     "name": "target-newer",
     "category": "NETFLEX",
     "description": "The target release is newer than the release the stage upgrades from",

@@ -716,3 +716,22 @@ class TestUpgradeFailedAndResume(unittest.TestCase):
         a = self.fn("applyResume")
         self.assertIn('postJSON("/api/upgrade/resume"', a)
         self.assertIn("boot: boot", a)
+
+
+class TestStaleStage(unittest.TestCase):
+    """#4: a stage record left after the stage was removed is shown as such,
+    and never announced as "Staging complete"."""
+
+    def setUp(self):
+        self.js = open(os.path.join(WEB, "app.js"), encoding="utf-8").read()
+
+    def fn(self, name):
+        return self.js.split("function %s(" % name, 1)[1].split("\nfunction ", 1)[0]
+
+    def test_stale_shown(self):
+        f = self.fn("showFailure")
+        self.assertIn('p.status === "stale"', f)
+        self.assertIn("p.stale", f)
+
+    def test_stale_never_suggests_upgrade(self):
+        self.assertIn('p.status === "done"', self.fn("suggestUpgradeMode"))

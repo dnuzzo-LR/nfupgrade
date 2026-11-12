@@ -282,6 +282,66 @@ def _web_staged(host, p):
     return True, "web GUI staged ({})".format(state) if state else "no web GUI step recorded"
 
 
+def _stage_state(host, p):
+    """Stage pre-flight (hard, #4): nf_upgrader's stage resumes from whatever
+    the state file says. Passes with no state file, or a stage step with the
+    staged load present (a killed stage continues). A leftover from a removed
+    stage or the previous upgrade fails with a Fix (archive the file); a real
+    stage or upgrade in progress fails with none. Returns (passed, detail,
+    fixable)."""
+    path = p.get("state_file")
+    if not path:
+        return False, "no state file path known", False
+    r = host.run(["cat", path])
+    state = r.out.strip() if r.rc == 0 else ""
+    if not state:
+        return True, "no state file: a fresh stage", False
+    lr = host.run(["readlink", "/usr/cnc_stage"])
+    link = lr.out.strip() if lr.rc == 0 else ""
+    stage_steps = ("swsstart", "swspatchinstall", "swswebinstall", "swscopycnc", "swsretropass1")
+    removed = "{} says '{}', left from a removed stage (no /usr/cnc_stage)".format(path, state)
+    if state.endswith(" failed"):
+        step = state[:-len(" failed")].strip()
+        if step in _UPGRADE_STEPS:
+            return False, "the upgrade failed at {}: fix the cause and use Resume upgrade".format(step), False
+        if link:
+            return False, ("the stage failed at {} and {} is still there: clean up the stage first "
+                           "(see the README), then archive {}".format(step, link, path)), False
+        return False, removed, True
+    if state == "swidone":
+        return False, "{} says 'swidone', left from the previous upgrade".format(path), True
+    if state in _UPGRADE_STEPS:
+        return False, ("an upgrade is in progress or was interrupted at {}: continue it with "
+                       "Upgrade".format(state)), False
+    if state == _STAGE_DONE:
+        if link:
+            return False, "already staged ({}): the next step is Upgrade".format(link), False
+        return False, removed, True
+    if state in stage_steps:
+        if link:
+            return True, "continues the stage from {} ({})".format(state, link), False
+        return False, removed, True
+    return False, "unknown state '{}' in {}".format(state, path), False
+
+
+_STATE_FILE_RE = re.compile(r"^\.[A-Za-z0-9_.-]+_STATE$")
+
+
+def _fix_stage_state(host, p):
+    """Archive a leftover state file (rename, never delete), only after
+    re-checking that its state is one the check offers to archive."""
+    res = _stage_state(host, p)
+    if res[0] or not res[2]:
+        return False, "not archived: " + res[1]
+    path = p["state_file"]
+    ts = host.run(["date", "+%Y%m%d%H%M%S"]).out.strip() or "old"
+    dest = "{}.old.{}".format(path, ts)
+    r = host.run(["mv", path, dest])
+    if r.rc != 0:
+        return False, "mv failed: {}".format((r.err or r.out).strip())
+    return True, "archived as " + dest
+
+
 def _touchfile_name_ok(name):
     """A touchfile is a plain name directly under /usr/cnc/features."""
     return bool(name) and "/" not in name and name not in (".", "..")
@@ -537,11 +597,12 @@ KINDS = {
     "rpm_matches_load": _rpm_matches_load,
     "upgrade_bundle": _upgrade_bundle,
     "web_staged": _web_staged,
+    "stage_state": _stage_state,
 }
 
 # Kinds that read facts the API supplies (the saved config's target version)
 # rather than anything on the box; evaluate() merges facts into their params.
-FACT_KINDS = ("target_newer", "upgrade_bundle", "web_staged", "staged_present")
+FACT_KINDS = ("target_newer", "upgrade_bundle", "web_staged", "staged_present", "stage_state")
 
 
 # --- fixes (ported from nf-install system_checks fix_*; the service runs as root) ---
@@ -783,6 +844,8 @@ FIXES = {
         p["variable"], p.get("default_min", 0),
         " (or {} if larger)".format(p["min_from"]) if p.get("min_from") else "",
         SYSTEM_DEFINES), _fix_system_define_min),
+    "stage_state": (lambda p: "archive {0} (rename to {0}.old.<time>)".format(p["state_file"]),
+                    _fix_stage_state),
 }
 
 # kind -> params -> bool: names that must never reach a root command line.
@@ -792,6 +855,8 @@ _FIX_ARGS_OK = {
     "touchfile": lambda p: _touchfile_name_ok(p["file"]),
     "path_mode": lambda p: p["path"].startswith("/") and re.match(r"^[0-7]{3,4}$", p["mode"]) is not None,
     "system_define_min": lambda p: _VAR_RE.match(p["variable"]) is not None,
+    "stage_state": lambda p: (p["state_file"].startswith("/") and "\n" not in p["state_file"]
+                              and _STATE_FILE_RE.match(os.path.basename(p["state_file"])) is not None),
 }
 
 
@@ -800,12 +865,20 @@ def _fix_args_ok(kind, p):
     return ok is None or ok(p)
 
 
-def describe_fix(check):
+def _params(check, facts=None):
+    """The check's params, plus the API's facts for FACT_KINDS."""
+    p = check.get("params", {})
+    if check.get("kind") in FACT_KINDS:
+        p = dict(p, **(facts or {}))
+    return p
+
+
+def describe_fix(check, facts=None):
     """One line saying what the fix for this check would do, or None."""
     f = FIXES.get(check.get("kind"))
     if f is None:
         return None
-    p = check.get("params", {})
+    p = _params(check, facts)
     if _is_epel(p):
         return None
     try:
@@ -814,12 +887,12 @@ def describe_fix(check):
         return None
 
 
-def apply_fix(host, check):
+def apply_fix(host, check, facts=None):
     """Run the fix for a check; returns (ok, detail). Never raises."""
     f = FIXES.get(check.get("kind"))
     if f is None:
         return False, "no fix for kind {}".format(check.get("kind"))
-    p = check.get("params", {})
+    p = _params(check, facts)
     if _is_epel(p):
         return False, "EPEL packages are not installed by this tool (needs the customer's approval)"
     try:
@@ -892,14 +965,16 @@ def evaluate(host, c, when, facts=None):
     facts (e.g. {"target": {"generic", "load"}}) reach FACT_KINDS only."""
     rec = _RecordingHost(host)
     kind = KINDS.get(c["kind"])
-    params = c.get("params", {})
-    if c["kind"] in FACT_KINDS:
-        params = dict(params, **(facts or {}))
+    params = _params(c, facts)
+    fixable = True        # a kind may return (passed, detail, fixable) to withhold its fix
     if kind is None:
         passed, detail = False, "unknown kind: {}".format(c["kind"])
     else:
         try:
-            passed, detail = kind(rec, params)
+            res = kind(rec, params)
+            passed, detail = res[0], res[1]
+            if len(res) > 2:
+                fixable = bool(res[2])
         except Exception as e:                       # a check must never crash the run
             passed, detail = False, "check error: {}".format(e)
     severity = c.get("fail_text", "ERROR")
@@ -911,7 +986,7 @@ def evaluate(host, c, when, facts=None):
         "passed": passed,
         "detail": detail,
         "blocking": (when == "preflight" and severity == "ERROR" and not passed),
-        "fix": None if passed else describe_fix(c),
+        "fix": None if passed or not fixable else describe_fix(c, facts),
         "output": "" if passed else _captured_output(rec.runs),
         "hard": bool(c.get("hard", False)),
         "source": c.get("params", {}).get("source"),

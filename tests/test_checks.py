@@ -1202,3 +1202,85 @@ class TestStagedPresentHard(unittest.TestCase):
         c = [c for c in lst if c["name"] == "staged-present"][0]
         self.assertIs(c.get("hard"), True)
         self.assertIn("staged_present", checks.FACT_KINDS)
+
+
+class TestStageState(unittest.TestCase):
+    """#4: nf_upgrader's stage resumes from whatever .<host>_STATE says, so a
+    leftover file makes a Stage do nothing (swscomplete), continue a removed
+    stage, or fail (swidone, failed). stage-state (hard) requires a clean start
+    or a stage to continue; Fix archives a leftover file only when that is safe."""
+
+    PATH = "/logs/.h1_STATE"
+
+    def host(self, state=None, link=False, mv_rc=0):
+        r = {("readlink", "/usr/cnc_stage"): RunResult(0, "/usr4/inc5.4.128\n", "") if link
+             else RunResult(1, "", "")}
+        if state is not None:
+            r[("cat", self.PATH)] = RunResult(0, state + "\n", "")
+        h = FakeHost(r)
+        h.mv_rc = mv_rc
+        return h
+
+    def ev(self, h):
+        c = {"name": "stage-state", "kind": "stage_state", "hard": True, "when": "preflight",
+             "phase": "stage", "params": {}}
+        return checks.evaluate(h, c, "preflight", facts={"state_file": self.PATH})
+
+    def test_no_state_file_passes(self):
+        r = self.ev(self.host())
+        self.assertTrue(r["passed"])
+        self.assertEqual(r["detail"], "no state file: a fresh stage")
+
+    def test_continue_a_killed_stage(self):
+        r = self.ev(self.host("swscopycnc", link=True))
+        self.assertTrue(r["passed"])
+        self.assertIn("continues the stage from swscopycnc", r["detail"])
+
+    def test_archivable_states_offer_fix(self):
+        for state, link, words in (("swidone", False, "left from the previous upgrade"),
+                                   ("swidone", True, "left from the previous upgrade"),
+                                   ("swscomplete", False, "left from a removed stage"),
+                                   ("swscopycnc", False, "left from a removed stage"),
+                                   ("swsretropass1 failed", False, "left from a removed stage")):
+            r = self.ev(self.host(state, link=link))
+            self.assertFalse(r["passed"], state)
+            self.assertIn(words, r["detail"], state)
+            self.assertEqual(r["fix"], "archive {0} (rename to {0}.old.<time>)".format(self.PATH), state)
+
+    def test_unsafe_states_have_no_fix(self):
+        for state, link, words in (("swscomplete", True, "already staged"),
+                                   ("swsretropass1 failed", True, "clean up the stage first"),
+                                   ("swicopycnc", True, "an upgrade is in progress"),
+                                   ("swibootinc failed", True, "Resume upgrade"),
+                                   ("bogus", False, "unknown state")):
+            r = self.ev(self.host(state, link=link))
+            self.assertFalse(r["passed"], state)
+            self.assertIn(words, r["detail"], state)
+            self.assertIsNone(r["fix"], state)
+
+    def test_fix_archives(self):
+        h = self.host("swidone")
+        h.responses[("date", "+%Y%m%d%H%M%S")] = RunResult(0, "20261112100000\n", "")
+        h.responses[("mv", self.PATH, self.PATH + ".old.20261112100000")] = RunResult(0, "", "")
+        c = {"kind": "stage_state", "params": {}}
+        ok, detail = checks.apply_fix(h, c, facts={"state_file": self.PATH})
+        self.assertTrue(ok, detail)
+        self.assertIn(["mv", self.PATH, self.PATH + ".old.20261112100000"], h.calls)
+
+    def test_fix_refuses_unsafe_state(self):
+        h = self.host("swibootinc failed", link=True)
+        ok, detail = checks.apply_fix(h, {"kind": "stage_state", "params": {}},
+                                      facts={"state_file": self.PATH})
+        self.assertFalse(ok)
+        self.assertNotIn("mv", [c[0] for c in h.calls])
+
+    def test_fix_refuses_odd_path(self):
+        ok, _ = checks.apply_fix(self.host("swidone"), {"kind": "stage_state", "params": {}},
+                                 facts={"state_file": "/etc/passwd"})
+        self.assertFalse(ok)
+
+    def test_shipped_check(self):
+        lst = checks.load_checks(os.path.join(os.path.dirname(checks.__file__), "checks.default.json"))
+        c = [c for c in lst if c["name"] == "stage-state"][0]
+        self.assertEqual((c["kind"], c["phase"], c.get("hard")), ("stage_state", "stage", True))
+        self.assertIn("stage_state", checks.FACT_KINDS)

@@ -332,6 +332,51 @@ class TestApi(unittest.TestCase):
             self.assertEqual([h["name"] for h in data["hard"]], ["staged-present"])
             self.assertIn("the stage has not finished (state swscopycnc)", data["hard"][0]["detail"])
 
+    def _progress(self):
+        status, _, body = api.dispatch("GET", "/api/progress", {}, b"",
+                                       {"nfu_sid": self._session()}, "127.0.0.1", self.ctx)
+        return json.loads(body.decode())
+
+    def test_progress_stale_stage_without_staged_load(self):
+        # #4: state swscomplete but the stage was removed by hand
+        with open(os.path.join(self.tmp, ".h1_STATE"), "w") as fh:
+            fh.write("swscomplete\n")
+        self._set_running(False)
+        self.ctx.state["phase"] = "stage"
+        self.ctx.host.responses[("readlink", "/usr/cnc_stage")] = RunResult(1, "", "")
+        p = self._progress()
+        self.assertEqual(p["status"], "stale")
+        self.assertIn("No staged load", p["stale"])
+        self.assertIn("'swscomplete'", p["stale"])
+        self.ctx.host.responses[("readlink", "/usr/cnc_stage")] = RunResult(0, "/usr4/inc5.4.128\n", "")
+        p = self._progress()
+        self.assertEqual(p["status"], "done")
+        self.assertIsNone(p["stale"])
+
+    def test_progress_stale_in_upgrade_phase_and_failed_stage(self):
+        self._set_running(False)
+        self.ctx.host.responses[("readlink", "/usr/cnc_stage")] = RunResult(1, "", "")
+        for phase, state in (("upgrade", "swscomplete"), ("stage", "swsretropass1 failed"),
+                             ("stage", "swscopycnc")):
+            with open(os.path.join(self.tmp, ".h1_STATE"), "w") as fh:
+                fh.write(state + "\n")
+            self.ctx.state["phase"] = phase
+            self.assertEqual(self._progress()["status"], "stale", (phase, state))
+        # only stage states are judged: a finished upgrade (which removes
+        # /usr/cnc_stage itself) stays done
+        with open(os.path.join(self.tmp, ".h1_STATE"), "w") as fh:
+            fh.write("swidone\n")
+        self.ctx.state["phase"] = "upgrade"
+        self.assertEqual(self._progress()["status"], "done")
+
+    def test_progress_running_stage_is_not_stale(self):
+        with open(os.path.join(self.tmp, ".h1_STATE"), "w") as fh:
+            fh.write("swsstart\n")
+        self._set_running(True)
+        self.ctx.state["phase"] = "stage"
+        self.ctx.host.responses[("readlink", "/usr/cnc_stage")] = RunResult(1, "", "")
+        self.assertEqual(self._progress()["status"], "running")
+
     def test_launch_needs_session(self):
         status, _, _ = api.dispatch(
             "POST", "/api/launch", {}, json.dumps({"mode": "stage"}).encode(),
@@ -921,6 +966,7 @@ class TestActivePhase(unittest.TestCase):
 
     def test_last_launch_beats_env(self):
         ctx = self.ctx(phase="stage", state={"phase": "upgrade"})
+        ctx.host.responses[("readlink", "/usr/cnc_stage")] = RunResult(0, "/usr4/inc5.5.003\n", "")
         self.state("swscomplete")
         p = self.get(ctx, "/api/progress")
         self.assertEqual((p["phase"], p["status"]), ("upgrade", "not_started"))
@@ -1010,6 +1056,29 @@ class TestCheckFix(unittest.TestCase):
     def events(self):
         path = os.path.join(self.tmp, "audit.jsonl")
         return [json.loads(l) for l in open(path)] if os.path.exists(path) else []
+
+    def test_fix_archives_leftover_state_file(self):
+        # #4: the stage-state Fix needs the state file path, an API fact
+        path = os.path.join(self.tmp, "checks.ss.json")
+        with open(path, "w") as fh:
+            json.dump([{"name": "stage-state", "fail_text": "ERROR", "when": "preflight",
+                        "phase": "stage", "hard": True, "kind": "stage_state", "params": {}}], fh)
+        st = os.path.join(self.tmp, ".h1_STATE")
+        r = self.ctx.host.responses
+        r[("cat", st)] = RunResult(0, "swidone\n", "")
+        r[("readlink", "/usr/cnc_stage")] = RunResult(1, "", "")
+        r[("date", "+%Y%m%d%H%M%S")] = RunResult(0, "20261112100000\n", "")
+        r[("mv", st, st + ".old.20261112100000")] = RunResult(0, "", "")
+        self.ctx = self.ctx._replace(checks_path=path)
+        status, data = self.fix({"name": "stage-state", "phase": "stage"})
+        self.assertEqual(status, 200, data)
+        self.assertTrue(data["fix"]["ok"], data)
+        self.assertEqual(data["fix"]["detail"], "archived as " + st + ".old.20261112100000")
+        # an unsafe state: no fix offered
+        r[("cat", st)] = RunResult(0, "swibootinc failed\n", "")
+        r[("readlink", "/usr/cnc_stage")] = RunResult(0, "/usr4/inc5.4.128\n", "")
+        status, data = self.fix({"name": "stage-state", "phase": "stage"})
+        self.assertEqual(status, 400, data)
 
     def test_requires_session(self):
         self.assertEqual(self.fix({"name": "pkg-ksh"}, cookies={})[0], 401)

@@ -262,6 +262,17 @@ The Upgrade tab shows **Stage/Upgrade FAILED at <step>**; the Log tab has why.
 | A **stage** | Fix the cause, clean up the stage (`/usr/cnc_stage`, the new load directory, the state file, and the new `netFLEX-CORE` RPM record — the **target-newer** / **rpm-matches-load** checks catch a leftover record), then stage again. |
 | An **upgrade** | Fix the cause, then **Resume upgrade** (reason required, audited as `upgrade_resume` / `upgrade_resumed`). It does the upgrade manual's recovery: sets the state file back from `<step> failed` to `<step>` and re-runs `nf_upgrade -u`, which continues from that step. No pre-flight checks (they judge a box before an upgrade) and no before snapshot. |
 
+**Leftover state file.** `nf_upgrade` never clears `.<host>_STATE`, and a stage
+continues from whatever it says: `swscomplete` ends at once without staging
+anything, a part-way state continues a stage that is gone, and `swidone` (after
+every successful upgrade) or `… failed` makes it fail. The hard Stage check
+**stage-state** passes only with no state file or a stage to continue (stage
+state with `/usr/cnc_stage` present). For a file left from a removed stage or
+from the previous upgrade its **Fix** archives it (renamed to
+`.<host>_STATE.old.<time>`, never deleted); a real stage or upgrade in progress
+gets no Fix. The Upgrade tab says *No staged load* instead of *Staging complete*
+when the state file names a stage that is no longer there.
+
 A resumed run skips `doswistart`, the only place `nf_upgrader` decides whether to
 boot netFLEX at the end (`APP_WAS_RUNNING`). The tool records at each fresh
 Upgrade launch whether netFLEX was up (`.CNC_UP` or `.MUX_UP`, in

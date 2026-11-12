@@ -173,6 +173,27 @@ def check_facts(ctx):
     }
 
 
+_STAGE_STATES = ("swsstart", "swspatchinstall", "swswebinstall", "swscopycnc",
+                 "swsretropass1", "swscomplete")
+
+
+def _stale_stage(ctx, rec, running, logdir):
+    """#4: why the state file's stage state is left over, or None. A stage
+    state (finished, part-way or failed) with no /usr/cnc_stage and nothing
+    running means the stage was removed by hand; the stage-state check
+    offers to archive the file."""
+    current = rec.get("current")
+    step = progress.failed_step(current) or current
+    if running or step not in _STAGE_STATES:
+        return None
+    r = ctx.host.run(["readlink", "/usr/cnc_stage"])
+    if r.rc == 0 and r.out.strip():
+        return None
+    return ("No staged load: the state file {} still says '{}', left from a removed stage. "
+            "Run the Stage pre-flight checks: stage-state can archive it."
+            .format(os.path.join(logdir, progress.state_file(ctx.hostname)), current))
+
+
 def upgrade_record_path(ctx):
     """What the tool recorded at the last fresh Upgrade launch (whether netFLEX
     was up), for a later Resume; in the upgrade log directory."""
@@ -715,6 +736,9 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         running = launcher.upgrader_running(ctx.host) or launcher.installer_running(ctx.host)
         logdir = upgrade_logdir(ctx)
         rec = progress.read_progress(ctx.hostname, _active_phase(ctx), logdir, running)
+        rec["stale"] = _stale_stage(ctx, rec, running, logdir)
+        if rec["stale"]:
+            rec["status"] = "stale"
         rec["logdir"] = logdir
         rec["launch_dir"], rec["launch_source"] = launch_dir(ctx)
         try:
@@ -870,22 +894,28 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
                                       _machtype(ctx))
             if check is None:
                 return _json(404, {"error": "unknown check"})
-            what = checks.describe_fix(check)
+            facts = check_facts(ctx)
+            what = checks.describe_fix(check, facts)
             if what is None:
                 return _json(400, {"error": "no fix for this check"})
-            before = checks.evaluate(ctx.host, check, "preflight")
+            before = checks.evaluate(ctx.host, check, "preflight", facts)
             if before["passed"]:
                 return _json(200, {"fix": None, "result": before})
+            if before["fix"] is None:
+                # the check withholds its fix in this state (e.g. stage-state
+                # with an upgrade in progress)
+                return _json(400, {"error": "no fix for this check in its current state",
+                                   "result": before})
             ctx.audit.record("check_fix_start", name=name, kind=check["kind"], fix=what,
                              client=client_ip)
-            ok, detail = checks.apply_fix(ctx.host, check)
+            ok, detail = checks.apply_fix(ctx.host, check, facts)
             ctx.audit.record("check_fix", name=name, kind=check["kind"], ok=ok, detail=detail,
                              client=client_ip)
             # A completed attempt (success or failure) for this check resolves
             # any startup-detected interrupted fix of the same name.
             if isinstance(ctx.state, dict) and (ctx.state.get("interrupted_fix") or {}).get("name") == name:
                 ctx.state["interrupted_fix"] = None
-            after = checks.evaluate(ctx.host, check, "preflight")
+            after = checks.evaluate(ctx.host, check, "preflight", facts)
             return _json(200, {"fix": {"ok": ok, "detail": detail}, "result": after})
         finally:
             _FIX_LOCK.release()

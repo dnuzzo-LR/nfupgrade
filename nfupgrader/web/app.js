@@ -138,8 +138,15 @@ function showFailure(p) {
   lastProgress = p;
   var box = document.getElementById("run-failed");
   var failed = p.status === "failed" && hostMode !== "install";
-  box.style.display = failed ? "" : "none";
+  // #4: a stage record left after the stage was removed by hand
+  var stale = p.status === "stale" && hostMode !== "install" && !!p.stale;
+  box.style.display = failed || stale ? "" : "none";
   document.getElementById("btn-resume").style.display = failed && p.resume ? "" : "none";
+  if (stale) {
+    document.getElementById("run-failed-msg").textContent = p.stale;
+    failureShown = null;
+    return;
+  }
   if (!failed) { failureShown = null; return; }
   var what = (p.phase === "upgrade" ? "Upgrade" : "Stage") + " FAILED at " + p.label +
     " (" + p.current + "). See the Log tab.";
