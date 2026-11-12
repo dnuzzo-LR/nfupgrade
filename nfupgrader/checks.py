@@ -52,7 +52,9 @@ def _app_running(host, p):
 
 
 def _file_absent(host, p):
-    return host.run(["test", "-f", p["path"]]).rc != 0, p["path"]
+    if host.run(["test", "-f", p["path"]]).rc != 0:
+        return True, "{} is not present".format(p["path"])
+    return False, "{} exists".format(p["path"])
 
 
 def _symlink_target(host, p):

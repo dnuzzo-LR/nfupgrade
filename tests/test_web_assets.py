@@ -854,3 +854,19 @@ class TestReportUiSuggestions(unittest.TestCase):
         self.assertIn("Scanned: ", f)
         self.assertIn('getElementById("cfg-depot-dirs")', f)
         self.assertIn('id="cfg-depot-dirs"', self.html)
+
+
+class TestConfigSaveFailureText(unittest.TestCase):
+    """A dropped tunnel showed "Not saved — fix the errors" with no errors."""
+
+    def setUp(self):
+        self.js = open(os.path.join(WEB, "app.js"), encoding="utf-8").read()
+
+    def test_save_failure_says_why(self):
+        f = self.js.split("function saveFailText(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("d.issues && d.issues.length", f)
+        self.assertIn("status === 0", f)
+        self.assertIn("SSH tunnel", f)
+        self.assertIn("d.error", f)
+        self.assertIn("saveFailText(status, d)", self.js)
+        self.assertNotIn('"Not saved — fix the errors."', self.js)

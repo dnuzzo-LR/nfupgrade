@@ -1348,3 +1348,24 @@ class TestRootBootSideEffects(unittest.TestCase):
             c = by[name]
             self.assertEqual((c["kind"], c["when"], c["phase"], c["fail_text"]),
                              (kind, "postflight", "upgrade", "WARNING"))
+
+
+class TestReportMinors(unittest.TestCase):
+    """Minor items from the 2026-11-11 full-upgrade test."""
+
+    def test_file_absent_detail_reads_as_a_result(self):
+        # no-grestore showed the bare pid path when it passed
+        h = FakeHost({("test", "-f", "/usr/cnc/grestore.pid"): RunResult(1, "", "")})
+        self.assertEqual(checks.KINDS["file_absent"](h, {"path": "/usr/cnc/grestore.pid"}),
+                         (True, "/usr/cnc/grestore.pid is not present"))
+        h = FakeHost({("test", "-f", "/usr/cnc/grestore.pid"): RunResult(0, "", "")})
+        self.assertEqual(checks.KINDS["file_absent"](h, {"path": "/usr/cnc/grestore.pid"}),
+                         (False, "/usr/cnc/grestore.pid exists"))
+
+    def test_disk_usr4_wording_fits_every_phase(self):
+        # it runs in the Upgrade phase too, where "before staging" was wrong
+        lst = checks.load_checks(os.path.join(os.path.dirname(checks.__file__), "checks.default.json"))
+        c = [c for c in lst if c["name"] == "disk-usr4"][0]
+        self.assertEqual(c["phase"], "any")
+        self.assertNotIn("staging", c["description"])
+        self.assertEqual(c["description"], "At least 5 GB free on /usr4")

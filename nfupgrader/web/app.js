@@ -2304,11 +2304,19 @@ document.getElementById("cfg-preview").onclick = function () {
   });
 };
 
+// Why a Save failed: the server's issues when it sent some, else what went
+// wrong on the way (a dropped SSH tunnel answers with no status at all).
+function saveFailText(status, d) {
+  if (d.issues && d.issues.length) return "Not saved — fix the errors below.";
+  if (status === 0) return "Not saved — no answer from the tool (connection lost? check the SSH tunnel).";
+  return "Not saved — " + (d.error || "HTTP " + status) + ".";
+}
+
 document.getElementById("cfg-save").onclick = function () {
   postJSON("/api/config/save", { values: formValues(), mode: hostMode }, function (status, d) {
     var msg = document.getElementById("cfg-msg");
     if (status === 200) { msg.textContent = "Saved — this config will be used on launch."; renderIssues([]); }
-    else { msg.textContent = "Not saved — fix the errors."; renderIssues(d.issues || []); }
+    else { msg.textContent = saveFailText(status, d); renderIssues(d.issues || []); }
   });
 };
 

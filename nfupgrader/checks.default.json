@@ -2,7 +2,7 @@
   {
     "name": "disk-usr4",
     "category": "NETFLEX",
-    "description": "At least 5 GB free on /usr4 before staging",
+    "description": "At least 5 GB free on /usr4",
     "fail_text": "ERROR",
     "when": "preflight",
     "phase": "any",
