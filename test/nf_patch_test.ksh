@@ -462,6 +462,22 @@ assert_eq    "web ok: webfloppy removed" "no" "$([ -e "${SB}/usr/cnc/webfloppy" 
 assert_eq    "web ok: no temp left" "" "$(ls -A "${SB}/usr/cnc" "${SB}/logs" | grep '^\.nf')"
 assert_eq    "web ok: rpm ran" 1 "$(uvh_calls)"
 
+# lwebsetup can run for minutes (yum): its output must reach the trace as it
+# is printed, not when it exits. The stub looks for its own first line in the
+# trace before finishing.
+LWEB_LIVE='echo "step one"
+echo "   indented"
+if grep "EXEC  \[lwebsetup\] step one" "${NFT_SB}"/logs/patch_inc_h1.* > /dev/null; then echo "seen live"; else echo "not live"; fi
+'"${LWEB_OK}"
+setup; websetup
+f29=$(patchfile 5.4.1.29)
+mkwebtar "${SB}/depot/LINUXWEB64.rhel8.tar" 5.4.1 29 "${LWEB_LIVE}"
+run_patch -f "${f29}" -w "${SB}/depot/LINUXWEB64.rhel8.tar"
+assert_rc    "lwebsetup live: rc" 0 "$rc"
+assert_match "lwebsetup live: streamed" 'EXEC  \[lwebsetup\] seen live' "$(trace)"
+assert_match "lwebsetup live: says it can take minutes" 'INFO  Running lwebsetup - this can take several minutes' "$(trace)"
+assert_match "lwebsetup live: leading spaces kept" 'EXEC  \[lwebsetup\]    indented$' "$(trace)"
+
 setup; websetup
 f29=$(patchfile 5.4.1.29)
 mkwebtar "${SB}/depot/LINUXWEB64.rhel8.tar" 5.4.1 30 "${LWEB_OK}"

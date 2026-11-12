@@ -369,6 +369,22 @@ class TestWebTar(unittest.TestCase):
         patches.read_tar_build(h, path, WB)
         self.assertEqual(sum(1 for c in h.calls if c[0] == WB), 2)
 
+    def test_read_tar_build_timeout_not_cached(self):
+        # a killed nf_webbuild (timeout rc 124) is not "unreadable": try again
+        path = "/d/LINUXWEB64.rhel8.tar"
+        h = _web(FakeHost(), "/d", ["LINUXWEB64.rhel8.tar"])
+        h.responses[(WB, path)] = RunResult(124, "", "timeout")
+        self.assertIsNone(patches.read_tar_build(h, path, WB))
+        h.responses[(WB, path)] = RunResult(0, webinfo_out("5.4.0", "36"), "")
+        self.assertEqual(patches.read_tar_build(h, path, WB), ("5.4.0", 36))
+
+    def test_read_tar_build_unreadable_is_cached(self):
+        path = "/d/LINUXWEB64.rhel8.tar"
+        h = _web(FakeHost(), "/d", ["LINUXWEB64.rhel8.tar"])
+        patches.read_tar_build(h, path, WB)
+        patches.read_tar_build(h, path, WB)
+        self.assertEqual(sum(1 for c in h.calls if c[0] == WB), 1)
+
     def test_read_tar_build_unreadable(self):
         h = _web(FakeHost(), "/d", ["LINUXWEB64.rhel8.tar"])
         self.assertIsNone(patches.read_tar_build(h, "/d/LINUXWEB64.rhel8.tar", WB))

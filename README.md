@@ -561,7 +561,8 @@ installed) and Install is refused in preview mode.
   unpack, `lwebsetup` printed an `ERROR:` line or no "Installation Complete!" (it
   exits 0 even on its own errors, so its output is what counts), `cmmperm` failed,
   or `webinfo -j` afterwards is not the patch version. There is no timeout on the
-  web step. The trace is `<logdir>/patch_inc_<host>.<pid>`; its last line is
+  web step; `lwebsetup`'s output goes to the trace (and the Log tab) line by line as
+  it runs. The trace is `<logdir>/patch_inc_<host>.<pid>`; its last line is
   `RESULT: installed <version>`, `RESULT: installed <version> (web GUI <version>)`,
   `RESULT: refused: <reason>`, `RESULT: failed: <reason>` or
   `RESULT: installed <version>; web GUI not updated: <reason>`. On refused/failed

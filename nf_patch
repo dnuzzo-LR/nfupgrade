@@ -204,7 +204,7 @@ function webtar_check
 # stdout is the trace, which is why the reason goes to a file.
 function webgui_install
 {
-	typeset why="$1" wf out rc e
+	typeset why="$1" wf out rc e line
 	wf="${INCROOT}/webfloppy"
 	out="${TMP}.lweb"
 	rm -rf "${wf}"
@@ -215,10 +215,21 @@ function webgui_install
 	[ ${rc} -eq 0 ] || { print -r -- "tar xf exited ${rc}" > "${why}"; exit 1; }
 	# lwebsetup asks: save the current WEB GUI DataBase (y), install SAML (n)
 	print 'y\nn' > "${TMP}.ans"
-	run_logged lwebsetup ./lwebsetup -r "${INCROOT}" < "${TMP}.ans" > "${out}"
-	rc=$?
-	cat "${out}"
-	e=$(sed -n 's/^.* EXEC  \[lwebsetup\] \(ERROR:.*\)$/\1/p' "${out}" | sed -n 1p)
+	# Not run_logged: that prints only after the command exits, and lwebsetup
+	# can run for minutes (yum). Each line goes to the trace as it is printed
+	# and to ${out} for the checks below; the exit code travels via a file.
+	loginfo "Running lwebsetup - this can take several minutes (it installs packages with yum); its output follows"
+	: > "${out}"
+	{ ./lwebsetup -r "${INCROOT}" < "${TMP}.ans" 2>&1; print $? > "${TMP}.rc"; } |
+	while IFS= read -r line || [ -n "${line}" ]
+	do
+		print -r -- "$(date '+%Y-%m-%d %H:%M:%S') EXEC  [lwebsetup] ${line}"
+		print -r -- "${line}" >> "${out}"
+	done
+	rc=$(cat "${TMP}.rc" 2>/dev/null)
+	rc=${rc:-1}
+	[ ${rc} -eq 0 ] || logwarn "[lwebsetup] exited ${rc}"
+	e=$(sed -n 's/^\(ERROR:.*\)$/\1/p' "${out}" | sed -n 1p)
 	[ -z "${e}" ] || { print -r -- "lwebsetup: ${e}" > "${why}"; exit 1; }
 	[ ${rc} -eq 0 ] || { print -r -- "lwebsetup exited ${rc}" > "${why}"; exit 1; }
 	grep 'Installation Complete!' "${out}" > /dev/null \

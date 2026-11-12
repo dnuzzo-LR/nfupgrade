@@ -218,7 +218,11 @@ def read_tar_build(host, path, webbuild):
         return _TAR_BUILDS[key]
     r = host.run([webbuild, path], timeout=120)
     build = parse_webinfo(r.out) if r.rc == 0 else None
-    _TAR_BUILDS[key] = build
+    # Cache only nf_webbuild's own answers (0 = build, 1 = unreadable). A
+    # timeout (124) or a missing/killed helper is not a fact about the tar:
+    # the next scan tries again.
+    if r.rc in (0, 1):
+        _TAR_BUILDS[key] = build
     return build
 
 

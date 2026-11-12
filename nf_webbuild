@@ -30,8 +30,15 @@ trap 'exit 1' HUP INT TERM
 
 [ $# -eq 1 ] && [ -n "$1" ] || die "usage: nf_webbuild <web tar>"
 TAR="$1"
+case "${TAR}" in
+/*) ;;
+*) TAR="$(pwd)/${TAR}" ;;   # tar runs after a cd into the temp dir
+esac
 
 [ -f "${TAR}" ] && [ -r "${TAR}" ] || die "cannot read ${TAR}"
+# A run killed by the service's timeout (SIGKILL) cannot run its trap: remove
+# temp dirs such runs left behind (older than an hour; no run takes that long).
+find "${INCROOT}" -maxdepth 1 -name '.nfweb.*' -mmin +60 -exec rm -rf {} + 2>/dev/null
 TMPW=$(mktemp -d "${INCROOT}/.nfweb.XXXXXX") || die "cannot make a temp dir in ${INCROOT}"
 
 tar tf "${TAR}" > "${TMPW}/list" 2>/dev/null || die "cannot read ${TAR}"
@@ -41,9 +48,11 @@ MEMBER=$(grep -x '\(\./\)\{0,1\}lwebdata\.Z' "${TMPW}/list" | sed -n 1p)
 (cd "${TMPW}" && tar xf "${TAR}" "${MEMBER}" > /dev/null 2>&1) && [ -f "${TMPW}/lwebdata.Z" ] \
 	|| die "no lwebdata.Z in ${TAR}"
 
-gzip -dc "${TMPW}/lwebdata.Z" > "${TMPW}/lwebdata" 2>/dev/null || die "cannot unpack lwebdata.Z"
-(cd "${TMPW}" && cpio -id web/bin/webinfo < lwebdata > /dev/null 2>&1)
-[ -f "${TMPW}/web/bin/webinfo" ] || die "no web/bin/webinfo in lwebdata"
+# Streamed: only webinfo is written, not the whole decompressed web tree
+# (/usr/cnc may be short of space). Success is judged by the file existing,
+# so the pipe's status is not needed.
+(cd "${TMPW}" && gzip -dc lwebdata.Z 2>/dev/null | cpio -id web/bin/webinfo > /dev/null 2>&1)
+[ -f "${TMPW}/web/bin/webinfo" ] || die "no web/bin/webinfo in lwebdata.Z"
 
 "${TMPW}/web/bin/webinfo" -j > "${TMPW}/out" 2>/dev/null || die "webinfo did not run"
 cat "${TMPW}/out"

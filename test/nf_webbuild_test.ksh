@@ -84,6 +84,22 @@ assert_match "noexec webinfo: msg" '^nf_webbuild: webinfo did not run' "${ERR}"
 notemp "noexec webinfo"
 
 setup
+mkwebtar "${SB}/LINUXWEB64.rhel8.tar" 5.4.0 36
+OUT=$(cd "${SB}" && "${NFW}" LINUXWEB64.rhel8.tar 2>&1); RC=$?
+assert_rc "relative path: rc" 0 "${RC}"
+assert_eq "relative path: stdout" '{ "release" : "5.4.0", "build" : "36"}' "${OUT}"
+
+# a run killed by the service's timeout (SIGKILL: no trap) leaves its temp
+# dir; the next run removes temp dirs older than an hour
+setup
+mkdir -p "${SB}/usr/cnc/.nfweb.old1" "${SB}/usr/cnc/.nfweb.new1"
+touch -t 202001010000 "${SB}/usr/cnc/.nfweb.old1"
+mkwebtar "${SB}/w.tar" 5.4.0 36
+run "${SB}/w.tar"
+assert_rc "stale temp: rc" 0 "${RC}"
+assert_eq "stale temp: old removed, recent kept" ".nfweb.new1" "$(ls -A "${SB}/usr/cnc" | grep '^\.nfweb')"
+
+setup
 run ""
 assert_rc "no arg: rc" 1 "${RC}"
 assert_match "no arg: usage" 'usage' "${ERR}"
