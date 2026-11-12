@@ -135,3 +135,75 @@ class TestLiveStep(unittest.TestCase):
         path, lines = logtail.live_step(self.d, max_lines=5)
         self.assertEqual(path, p)
         self.assertEqual(lines, ["line 95", "line 96", "line 97", "line 98", "line 99"])
+
+
+class TestCarriageReturns(unittest.TestCase):
+    """#8: zstd and similar redraw a progress bar with \\r; splitting on \\r too
+    flooded the Log tab with hundreds of lines. Keep what a terminal shows."""
+
+    def test_terminal_lines(self):
+        self.assertEqual(logtail.terminal_lines("a\r b\r c\nd\n"), [" c", "d"])
+        self.assertEqual(logtail.terminal_lines("x\r\ny"), ["x", "y"])
+        self.assertEqual(logtail.terminal_lines(""), [])
+
+    def test_tail_since_collapses_progress(self):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "t")
+        bar = "".join("\r{}% done".format(i) for i in range(0, 101))
+        with open(p, "w") as fh:
+            fh.write("2026-11-11 19:12:00 INFO  backing up\n" + bar + "\n"
+                     "2026-11-11 19:15:00 INFO  backup done\n")
+        e = logtail.tail_since(p, 0)["entries"]
+        self.assertEqual([x["msg"] for x in e], ["backing up", "100% done", "backup done"])
+
+
+class TestLiveLog(unittest.TestCase):
+    """#8: the newest log being written while the main trace is quiet: a
+    run_logged buffer, the trace's sub-logs, or /usr/cnc/logs."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.x = tempfile.mkdtemp()
+        self.trace = self.put(self.d, "upgrade_inc_h1.77", "trace\n", 1000)
+
+    def put(self, d, name, text, mtime):
+        p = os.path.join(d, name)
+        with open(p, "w") as fh:
+            fh.write(text)
+        os.utime(p, (mtime, mtime))
+        return p
+
+    def live(self, now=2000):
+        return logtail.live_log(self.d, self.trace, extra_dirs=(self.x,), now=now)
+
+    def test_sub_log_newer_than_trace(self):
+        p = self.put(self.d, "upgrade_inc_h1.77.copy_cnc", "copying\r50%\r100%\ncmmperm\n", 1900)
+        self.assertEqual(self.live(), {"file": p, "lines": ["100%", "cmmperm"], "age": 100})
+
+    def test_extra_dir_newest_wins(self):
+        self.put(self.d, "upgrade_inc_h1.77.rpm", "rpm\n", 1500)
+        p = self.put(self.x, "rdb_deploy.log", "pg_upgrade\n", 1990)
+        self.assertEqual(self.live()["file"], p)
+
+    def test_nothing_newer_than_trace(self):
+        self.put(self.d, "upgrade_inc_h1.77.copy_cnc", "old\n", 900)
+        self.put(self.x, "old.log", "old\n", 800)
+        self.assertEqual(self.live(), {"file": None, "lines": [], "age": None})
+
+    def test_run_logged_buffer_counts(self):
+        p = self.put(self.d, ".nfrun.4242", "Installing nodejs\n", 1200)
+        self.assertEqual(self.live()["file"], p)
+
+    def test_run_logged_buffer_even_if_older_than_trace(self):
+        # the step in progress by definition (the trace is written around it)
+        p = self.put(self.d, ".nfrun.4242", "Installing nodejs\n", 500)
+        self.assertEqual(self.live()["file"], p)
+
+    def test_other_traces_ignored(self):
+        self.put(self.d, "stage_inc_h1.70", "older run\n", 1999)
+        self.put(self.d, "upgrade_inc_h1.7", "a different pid\n", 1999)
+        self.assertIsNone(self.live()["file"])
+
+    def test_missing_dirs(self):
+        self.assertEqual(logtail.live_log("/nonexistent", None, extra_dirs=("/nope",), now=1),
+                         {"file": None, "lines": [], "age": None})

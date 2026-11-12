@@ -228,7 +228,7 @@ function refreshProgress() {
     document.getElementById("phase").textContent = p.phase;
     document.getElementById("status").textContent = p.status;
     document.getElementById("current").textContent =
-      (p.current || "-") + (p.label ? " — " + p.label : "");
+      (p.current || "-") + (p.label ? " — " + p.label : "") + stepTiming(p);
     document.getElementById("counter").textContent =
       "Step " + (p.step ? p.step : "–") + " / " + p.total;
     var pct = p.total ? Math.round((p.completed / p.total) * 100) : 0;
@@ -1216,8 +1216,26 @@ function refreshLive() {
   getJSON("/api/log/live", function (d) {
     var show = !!(d.running && d.lines && d.lines.length);
     document.getElementById("log-live-box").style.display = show ? "" : "none";
-    if (show) setTextIfChanged("log-live", d.lines.join("\n"));
+    if (show) {
+      setTextIfChanged("log-live-file", (d.file || "") +
+        (d.age !== null && d.age !== undefined ? " — written " + minsText(d.age) + " ago" : ""));
+      setTextIfChanged("log-live", d.lines.join("\n"));
+    }
   });
+}
+
+function minsText(secs) {
+  return secs < 60 ? secs + " s" : Math.floor(secs / 60) + " min";
+}
+
+// #8: long steps (permission pass, PostgreSQL upgrade, boot) can be silent for
+// many minutes; show how long the step has run and how long the trace is quiet.
+function stepTiming(p) {
+  if (p.step_secs === null || p.step_secs === undefined) return "";
+  var t = " — running " + minsText(p.step_secs);
+  if (p.trace_idle_secs >= 120) t += " (no trace output for " + minsText(p.trace_idle_secs) +
+    "; see the live output on the Log tab)";
+  return t;
 }
 
 // WARN-and-worse lines from the finished install's trace (web GUI, license

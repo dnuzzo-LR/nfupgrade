@@ -751,3 +751,28 @@ class TestAfterSnapshotWait(unittest.TestCase):
     def test_continued_launch_message(self):
         self.assertIn("body.continued", self.js)
         self.assertIn("Continuing the interrupted upgrade from ", self.js)
+
+
+class TestLongStepProgress(unittest.TestCase):
+    """#8: step timer and quiet-trace note on the progress strip; the live box
+    names the log it shows and how long ago it was written."""
+
+    def setUp(self):
+        self.html = open(os.path.join(WEB, "index.html"), encoding="utf-8").read()
+        self.js = open(os.path.join(WEB, "app.js"), encoding="utf-8").read()
+
+    def fn(self, name):
+        return self.js.split("function %s(" % name, 1)[1].split("\nfunction ", 1)[0]
+
+    def test_step_timer(self):
+        t = self.fn("stepTiming")
+        self.assertIn("p.step_secs", t)
+        self.assertIn("p.trace_idle_secs >= 120", t)
+        self.assertIn("no trace output for ", t)
+        self.assertIn("stepTiming(p)", self.fn("refreshProgress"))
+
+    def test_live_box_names_file(self):
+        self.assertIn('id="log-live-file"', self.html)
+        f = self.fn("refreshLive")
+        self.assertIn("d.file", f)
+        self.assertIn("d.age", f)

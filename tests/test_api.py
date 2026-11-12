@@ -3,6 +3,7 @@ import datetime
 import json
 import os
 import tempfile
+import time
 import unittest
 from nfupgrader import api, checks, cnccnfg
 from nfupgrader import reports, snapjobs
@@ -376,6 +377,25 @@ class TestApi(unittest.TestCase):
         self.ctx.state["phase"] = "stage"
         self.ctx.host.responses[("readlink", "/usr/cnc_stage")] = RunResult(1, "", "")
         self.assertEqual(self._progress()["status"], "running")
+
+    def test_progress_running_has_step_timer_and_trace_idle(self):
+        # #8: how long the step has run and how long the trace has been quiet
+        st = os.path.join(self.tmp, ".h1_STATE")
+        with open(st, "w") as fh:
+            fh.write("swicopycnc\n")
+        now = time.time()
+        os.utime(st, (now - 720, now - 720))
+        os.utime(os.path.join(self.tmp, "trace"), (now - 480, now - 480))
+        self.ctx.state["phase"] = "upgrade"
+        self._set_running(True)
+        p = self._progress()
+        self.assertEqual(p["status"], "running")
+        self.assertTrue(715 <= p["step_secs"] <= 730, p["step_secs"])
+        self.assertTrue(475 <= p["trace_idle_secs"] <= 490, p["trace_idle_secs"])
+        self._set_running(False)
+        p = self._progress()
+        self.assertIsNone(p["step_secs"])
+        self.assertIsNone(p["trace_idle_secs"])
 
     def test_launch_needs_session(self):
         status, _, _ = api.dispatch(
@@ -1574,6 +1594,19 @@ class TestLiveLogApi(unittest.TestCase):
         self.assertEqual((st, d["running"]), (200, True))
         self.assertEqual(d["lines"], ["Installing nodejs", "Complete!"])
         self.assertTrue(d["file"].endswith(".nfrun.4242"))
+
+    def test_running_shows_newest_sub_log_with_age(self):
+        # #8: the copy pass writes <trace>.copy_cnc, not the trace
+        os.remove(os.path.join(self.tmp, ".nfrun.4242"))
+        ctx = make_ctx(self.tmp, running=True)
+        trace = os.path.join(self.tmp, "trace")
+        os.utime(trace, (1000, 1000))
+        sub = trace + ".copy_cnc"
+        with open(sub, "w") as fh:
+            fh.write("cmmperm\r10%\r90%\n")
+        st, d = self.get(ctx)
+        self.assertEqual((d["file"], d["lines"]), (sub, ["90%"]))
+        self.assertIsInstance(d["age"], int)
 
     def test_idle_shows_nothing(self):
         st, d = self.get(make_ctx(self.tmp, running=False))

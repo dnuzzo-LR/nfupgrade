@@ -2,6 +2,7 @@
 incrementally with an optional minimum-severity filter."""
 import os
 import re
+import time
 
 # Severities the fork emits, plus EXEC for sub-command output. Ordered for
 # min-severity filtering; EXEC is treated as below WARN (it is child output,
@@ -22,6 +23,19 @@ def parse_line(line):
     return {"ts": None, "severity": "INFO", "msg": line.rstrip("\n")}
 
 
+def terminal_lines(text):
+    """Split text into lines as a terminal shows them: on newlines only, each
+    keeping the text after its last carriage return. Progress bars (zstd, rpm)
+    redraw with \r, and splitting on \r too flooded the Log tab (#8)."""
+    out = []
+    for ln in text.split("\n"):
+        ln = ln.rstrip("\r")
+        out.append(ln.rsplit("\r", 1)[-1])
+    if out and out[-1] == "":
+        out.pop()
+    return out
+
+
 def _passes(entry, min_severity):
     if not min_severity:
         return True
@@ -32,8 +46,9 @@ def tail(path, min_severity=None, limit=None):
     """Return a list of parsed entries from the whole file, optionally filtered
     by minimum severity and truncated to the last `limit` entries."""
     try:
-        with open(path) as fh:
-            lines = fh.readlines()
+        # newline="": keep \r (text mode would turn each into a line break)
+        with open(path, newline="") as fh:
+            lines = terminal_lines(fh.read())
     except (IOError, OSError):
         return []
     entries = [parse_line(ln) for ln in lines]
@@ -101,11 +116,11 @@ def tail_since(path, offset, min_severity=None):
         return {"entries": [], "next_offset": 0}
     if offset > size:      # file rotated/truncated -> restart
         offset = 0
-    with open(path) as fh:
+    with open(path, newline="") as fh:
         fh.seek(offset)
         data = fh.read()
         new_offset = fh.tell()
-    entries = [parse_line(ln) for ln in data.splitlines()]
+    entries = [parse_line(ln) for ln in terminal_lines(data)]
     entries = [e for e in entries if _passes(e, min_severity)]
     return {"entries": entries, "next_offset": new_offset}
 
@@ -134,11 +149,64 @@ def live_step(logdir, max_lines=40):
             best, best_key = path, key
     if best is None:
         return None, []
+    lines = _tail_text(best, max_lines)
+    return (None, []) if lines is None else (best, lines)
+
+
+LIVE_DIRS = ("/usr/cnc/logs",)
+
+
+def _tail_text(path, max_lines):
     try:
-        with open(best, "rb") as fh:
+        with open(path, "rb") as fh:
             fh.seek(0, os.SEEK_END)
             fh.seek(max(0, fh.tell() - 65536))
             data = fh.read().decode("utf-8", "replace")
     except (IOError, OSError):
-        return None, []
-    return best, data.splitlines()[-max_lines:]
+        return None
+    return terminal_lines(data)[-max_lines:]
+
+
+def live_log(logdir, trace, extra_dirs=LIVE_DIRS, max_lines=40, now=None):
+    """{file, lines, age} of the newest log written since the main trace's last
+    line, while an engine runs (#8). Long steps write elsewhere: run_logged's
+    .nfrun.<pid> buffer, the trace's own sub-logs (<trace>.copy_cnc, .rpm,
+    .rpm_patch, .web, <trace>ATTEXT.rpm), or netFLEX's /usr/cnc/logs. Only
+    top-level regular files; age is seconds since it was written."""
+    empty = {"file": None, "lines": [], "age": None}
+    try:
+        floor = os.path.getmtime(trace) if trace else 0
+    except OSError:
+        floor = 0
+    base = os.path.basename(trace) if trace else None
+    cands = []
+    try:
+        for name in os.listdir(logdir):
+            if name.startswith(".nfrun.") or (base and name != base and name.startswith(base)
+                                               and name[len(base):][:1] in (".", "A")):
+                cands.append(os.path.join(logdir, name))
+    except OSError:
+        pass
+    for d in extra_dirs:
+        try:
+            cands.extend(os.path.join(d, n) for n in os.listdir(d))
+        except OSError:
+            continue
+    best, best_m = None, None
+    for c in cands:
+        try:
+            if not os.path.isfile(c):
+                continue
+            m = os.path.getmtime(c)
+        except OSError:
+            continue
+        live = m > floor or os.path.basename(c).startswith(".nfrun.")
+        if live and (best_m is None or m > best_m):
+            best, best_m = c, m
+    if best is None:
+        return empty
+    lines = _tail_text(best, max_lines)
+    if lines is None:
+        return empty
+    now = time.time() if now is None else now
+    return {"file": best, "lines": lines, "age": max(0, int(now - best_m))}

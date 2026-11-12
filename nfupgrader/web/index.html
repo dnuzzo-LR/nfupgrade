@@ -316,7 +316,10 @@
         <pre id="log"></pre>
         <div id="log-live-box" style="display:none">
           <h3>Current step &mdash; live output</h3>
-          <p class="muted">Shown while a step runs; it moves into the log above when the step finishes.</p>
+          <p class="muted">The newest log written since the trace's last line, while a step runs
+            (its own buffer, the trace's sub-logs such as <code>.copy_cnc</code>, or
+            <code>/usr/cnc/logs</code>).</p>
+          <p class="muted" id="log-live-file"></p>
           <pre id="log-live"></pre>
         </div>
       </div>

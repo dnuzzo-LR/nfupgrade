@@ -204,6 +204,22 @@ opening netFLEX's boot menu clears it. This rule drives the header badge,
 Overview and Site view, the License tab, the Patches tab, `nf_patch`, and the
 `post-app-up` post-flight check. If `ps` itself fails, the file is trusted.
 
+### Following a long step
+
+Some upgrade steps are silent in the trace for many minutes (the permission
+pass in *Copy CORE files (pass 2)*, the PostgreSQL upgrade, the boot). While
+an engine runs:
+
+- the progress strip shows how long the current step has run and, once the
+  trace has been quiet for 2 minutes, for how long;
+- the Log tab's **live output** box shows the newest log written since the
+  trace's last line: a `run_logged` buffer, the trace's own sub-logs
+  (`<trace>.copy_cnc`, `.rpm`, `.rpm_patch`, `.web`), or a file in
+  `/usr/cnc/logs`, with its path and how long ago it was written.
+
+Progress bars drawn with carriage returns (zstd during the RDB backup, rpm) show
+as one line, as a terminal would, instead of one line per redraw.
+
 ### Pre-flight and post-flight checks
 
 Pre-flight checks run only when you press **Run pre-flight checks** (they are

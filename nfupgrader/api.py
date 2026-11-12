@@ -194,6 +194,23 @@ def _stale_stage(ctx, rec, running, logdir):
             .format(os.path.join(logdir, progress.state_file(ctx.hostname)), current))
 
 
+def _step_timing(ctx, rec, logdir):
+    """(seconds the current step has run, seconds since the trace was last
+    written) while an engine runs, else (None, None) (#8). The state file is
+    rewritten as each step starts, so its mtime is the step's start."""
+    if rec.get("status") != "running":
+        return None, None
+    now = time.time()
+    out = []
+    for path in (os.path.join(logdir, progress.state_file(ctx.hostname, rec.get("phase") or "stage")),
+                 _active_tracefile(ctx, rec.get("phase"))):
+        try:
+            out.append(max(0, int(now - os.path.getmtime(path))))
+        except (OSError, TypeError):
+            out.append(None)
+    return out[0], out[1]
+
+
 def upgrade_record_path(ctx):
     """What the tool recorded at the last fresh Upgrade launch (whether netFLEX
     was up), for a later Resume; in the upgrade log directory."""
@@ -737,6 +754,7 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         logdir = upgrade_logdir(ctx)
         rec = progress.read_progress(ctx.hostname, _active_phase(ctx), logdir, running)
         rec["stale"] = _stale_stage(ctx, rec, running, logdir)
+        rec["step_secs"], rec["trace_idle_secs"] = _step_timing(ctx, rec, logdir)
         if rec["stale"]:
             rec["status"] = "stale"
         rec["logdir"] = logdir
@@ -758,8 +776,10 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
                                "file": previewdata.TRACE if lines else None, "lines": lines})
         if not (launcher.upgrader_running(ctx.host) or launcher.installer_running(ctx.host)):
             return _json(200, {"running": False, "file": None, "lines": []})
-        live, lines = logtail.live_step(upgrade_logdir(ctx))
-        return _json(200, {"running": True, "file": live, "lines": lines})
+        # #8: the newest log written since the trace's last line (a run_logged
+        # buffer, the trace's sub-logs, or /usr/cnc/logs)
+        live = logtail.live_log(upgrade_logdir(ctx), _active_tracefile(ctx, _active_phase(ctx)))
+        return _json(200, dict(live, running=True))
 
     if path == "/api/log" and method == "GET":
         offset = int((query.get("offset") or ["0"])[0])
