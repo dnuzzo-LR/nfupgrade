@@ -98,6 +98,27 @@
     "params": {}
   },
   {
+    "name": "target-newer",
+    "category": "NETFLEX",
+    "description": "The target release is newer than the release the stage upgrades from",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "stage",
+    "hard": true,
+    "kind": "target_newer",
+    "params": {}
+  },
+  {
+    "name": "rpm-matches-load",
+    "category": "NETFLEX",
+    "description": "The netFLEX-CORE RPM record is the running load (none left from an earlier stage)",
+    "fail_text": "ERROR",
+    "when": "preflight",
+    "phase": "stage",
+    "kind": "rpm_matches_load",
+    "params": {}
+  },
+  {
     "name": "post-dbcheck",
     "category": "NETFLEX",
     "description": "Database check clean after upgrade",

@@ -152,6 +152,64 @@ class TestApi(unittest.TestCase):
             "GET", "/auth", {"token": ["NOPE"]}, b"", {}, "127.0.0.1", self.ctx)
         self.assertEqual(status, 401)
 
+    def _stage_version_ctx(self, core=("5.4.0.29",), target=("5.4.1", "28")):
+        """#1/#11: a check list holding only target-newer, a box whose rpm
+        records are `core`, and (unless target is None) a saved config."""
+        path = os.path.join(self.tmp, "checks.tn.json")
+        with open(path, "w") as fh:
+            json.dump([{"name": "target-newer", "fail_text": "ERROR", "when": "preflight",
+                        "phase": "stage", "hard": True, "kind": "target_newer", "params": {}}], fh)
+        self.ctx = self.ctx._replace(checks_path=path)
+        r = self.ctx.host.responses
+        r[("rpm", "-qi", "netFLEX-CORE")] = RunResult(
+            0, "".join("Version     : {}\nRelease     : 1\n".format(v) for v in core), "")
+        r[("test", "-f", "/usr/cnc/features/netFLEX")] = RunResult(0, "", "")
+        if target:
+            saved = os.path.join(self.tmp, "stage.cfg")
+            with open(saved, "w") as fh:
+                fh.write("NEW_GENERIC={}\nNEW_LOAD={}\n".format(*target))
+            self.ctx.state["user_config"] = saved
+
+    def _stage_checks(self):
+        status, _, body = api.dispatch(
+            "GET", "/api/checks", {"when": ["preflight"], "phase": ["stage"]}, b"",
+            {"nfu_sid": self._session()}, "127.0.0.1", self.ctx)
+        self.assertEqual(status, 200)
+        return json.loads(body.decode())["results"][0]
+
+    def test_checks_target_newer_uses_saved_config(self):
+        self._stage_version_ctx()
+        r = self._stage_checks()
+        self.assertTrue(r["passed"], r)
+        self.assertEqual(r["detail"], "stage upgrades from 5.4.0.29 to 5.4.1.28")
+        self.assertTrue(r["hard"])
+
+    def test_checks_target_newer_without_config(self):
+        self._stage_version_ctx(target=None)
+        self.ctx.state.pop("user_config", None)
+        r = self._stage_checks()
+        self.assertFalse(r["passed"])
+        self.assertIn("save the stage configuration", r["detail"])
+
+    def test_launch_stage_refused_when_target_not_newer(self):
+        # the 2026-11-11 retry: a leftover 5.4.1.28 record; never overridable
+        self._set_running(False)
+        self._stage_version_ctx(core=("5.4.0.29", "5.4.1.28"))
+        for payload in ({"mode": "stage"},
+                        {"mode": "stage", "overrides": ["target-newer"], "reason": "go"}):
+            status, _, body = api.dispatch(
+                "POST", "/api/launch", {}, json.dumps(payload).encode(),
+                {"nfu_sid": self._session()}, "127.0.0.1", self.ctx)
+            data = json.loads(body.decode())
+            self.assertEqual(status, 409, payload)
+            self.assertEqual([h["name"] for h in data["hard"]], ["target-newer"])
+            self.assertEqual(data["error"], "a pre-flight check that cannot be overridden failed")
+        audit = os.path.join(self.tmp, "audit.jsonl")
+        events = ([json.loads(l)["event"] for l in open(audit).read().splitlines()]
+                  if os.path.exists(audit) else [])
+        self.assertNotIn("launch", events)
+        self.assertNotIn("override", events)
+
     def test_launch_needs_session(self):
         status, _, _ = api.dispatch(
             "POST", "/api/launch", {}, json.dumps({"mode": "stage"}).encode(),

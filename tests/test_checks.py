@@ -948,3 +948,130 @@ class TestKernelParamMin(unittest.TestCase):
                                        "compare": "min"})
         self.assertEqual(checks.describe_fix(c),
                          "sysctl -w kernel.msgmnb=4194304 (persisted in {})".format(checks.SYSCTL_CONF))
+
+
+def rpm_qi(*versions):
+    """`rpm -qi netFLEX-CORE` output listing one record per version."""
+    return "".join("Name        : netFLEX-CORE\nVersion     : {}\nRelease     : 1\n"
+                   "Description : netFLEX core\n".format(v) for v in versions)
+
+
+class TestStageVersion(unittest.TestCase):
+    """#1/#11 (2026-11-11 full-upgrade test): a retried stage computed its "from"
+    version from a leftover new CORE rpm record and skipped the DB retrofits.
+    target-newer predicts nf_upgrade's own from-version; rpm-matches-load spots
+    a CORE record that is not the running load."""
+
+    TARGET = {"generic": "5.4.1", "load": "28"}
+
+    def host(self, core=("5.4.0.29",), patch=None, link="/usr4/inc5.4.0.29", netflex=True):
+        r = {("rpm", "-qi", "netFLEX-CORE"): RunResult(0 if core else 1, rpm_qi(*core) if core
+                                                       else "package netFLEX-CORE is not installed\n", ""),
+             ("rpm", "-qi", "netFLEX-CORE-PATCH"): RunResult(0 if patch else 1,
+                                                             rpm_qi(patch) if patch else "", ""),
+             ("rpm", "-qi", "netFLEX-CORE-IPATCH"): RunResult(1, "", ""),
+             ("rpm", "-q", "--qf", "%{VERSION}-%{RELEASE}\\n", "netFLEX-CORE"):
+                 RunResult(0, "".join(v + "-1\n" for v in core), ""),
+             ("readlink", "/usr/cnc"): RunResult(0, link + "\n", ""),
+             ("test", "-f", "/usr/cnc/features/netFLEX"): RunResult(0 if netflex else 1, "", "")}
+        return FakeHost(r)
+
+    def newer(self, h, target=TARGET):
+        return checks.KINDS["target_newer"](h, {"target": target})
+
+    def matches(self, h):
+        return checks.KINDS["rpm_matches_load"](h, {})
+
+    def test_from_version_mirrors_nf_upgrade(self):
+        # last Version line; a PATCH of the same generic raises the load
+        self.assertEqual(checks.upgrade_from_version(self.host(patch="5.4.0.36")), ("5.4.0", "36"))
+        self.assertEqual(checks.upgrade_from_version(self.host()), ("5.4.0", "29"))
+        # PATCH of another generic is ignored (nf_upgrade: REVGEN != OLD_GENERIC)
+        self.assertEqual(checks.upgrade_from_version(self.host(core=("5.4.1.28",), patch="5.4.0.36")),
+                         ("5.4.1", "28"))
+        # two CORE records: nf_upgrade's `tail -1` takes the last
+        self.assertEqual(checks.upgrade_from_version(self.host(core=("5.4.0.29", "5.4.1.28"))),
+                         ("5.4.1", "28"))
+        # INC product: cut -c1-4 / -c6-7
+        self.assertEqual(checks.upgrade_from_version(self.host(core=("25.1.07",), netflex=False)),
+                         ("25.1", "07"))
+        self.assertIsNone(checks.upgrade_from_version(self.host(core=())))
+
+    def test_target_newer_passes(self):
+        ok, detail = self.newer(self.host(patch="5.4.0.36"))
+        self.assertTrue(ok)
+        self.assertEqual(detail, "stage upgrades from 5.4.0.36 to 5.4.1.28")
+        # same generic, higher load
+        self.assertTrue(self.newer(self.host(patch="5.4.0.36"), {"generic": "5.4.0", "load": "40"})[0])
+        # numeric, not string, compare: 5.4.10 > 5.4.9
+        self.assertTrue(self.newer(self.host(core=("5.4.9.01",)), {"generic": "5.4.10", "load": "01"})[0])
+
+    def test_retried_stage_refused(self):
+        # the test's exact case: a leftover 5.4.1.28 record makes from == to
+        ok, detail = self.newer(self.host(core=("5.4.0.29", "5.4.1.28"), patch="5.4.0.36"))
+        self.assertFalse(ok)
+        self.assertIn("stage would upgrade from 5.4.1.28 to 5.4.1.28", detail)
+        self.assertIn("skip the database retrofits", detail)
+        self.assertIn("netFLEX-CORE in the RPM database: 5.4.0.29, 5.4.1.28", detail)
+
+    def test_older_or_equal_target_refused(self):
+        self.assertFalse(self.newer(self.host(patch="5.4.0.36"), {"generic": "5.4.0", "load": "36"})[0])
+        self.assertFalse(self.newer(self.host(patch="5.4.0.36"), {"generic": "5.4.0", "load": "30"})[0])
+        self.assertFalse(self.newer(self.host(core=("5.4.1.28",)), {"generic": "5.4.0", "load": "40"})[0])
+
+    def test_target_newer_cannot_judge(self):
+        ok, detail = self.newer(self.host(), None)
+        self.assertFalse(ok)
+        self.assertIn("save the stage configuration", detail)
+        ok, detail = self.newer(self.host(), {"generic": "", "load": ""})
+        self.assertFalse(ok)
+        self.assertIn("save the stage configuration", detail)
+        ok, detail = self.newer(self.host(core=()))
+        self.assertFalse(ok)
+        self.assertIn("cannot read the installed netFLEX-CORE version", detail)
+        ok, detail = self.newer(self.host(), {"generic": "5.4.x", "load": "28"})
+        self.assertFalse(ok)
+        self.assertIn("cannot compare", detail)
+
+    def test_rpm_matches_load(self):
+        self.assertTrue(self.matches(self.host())[0])                                   # inc5.4.0.29
+        self.assertTrue(self.matches(self.host(core=("5.4.1.28",), link="/usr4/inc5.4.128"))[0])
+        self.assertTrue(self.matches(self.host(patch="5.4.0.36"))[0])   # PATCH does not rename the load
+
+    def test_rpm_matches_load_leftover_record(self):
+        ok, detail = self.matches(self.host(core=("5.4.0.29", "5.4.1.28")))
+        self.assertFalse(ok)
+        self.assertIn("2 netFLEX-CORE records (5.4.0.29, 5.4.1.28)", detail)
+        self.assertIn("netFLEX-CORE 5.4.1.28 is not the running load /usr4/inc5.4.0.29", detail)
+        self.assertIn("rpm -e --justdb --noscripts netFLEX-CORE-5.4.1.28-1", detail)
+        self.assertNotIn("netFLEX-CORE-5.4.0.29-1", detail)
+
+    def test_rpm_matches_load_older_leftover(self):
+        # a stale 5.4.1 record alone (old record already erased), box still on 5.4.0
+        ok, detail = self.matches(self.host(core=("5.4.1.28",)))
+        self.assertFalse(ok)
+        self.assertIn("netFLEX-CORE 5.4.1.28 is not the running load /usr4/inc5.4.0.29", detail)
+
+    def test_rpm_matches_load_no_record(self):
+        ok, detail = self.matches(self.host(core=()))
+        self.assertFalse(ok)
+        self.assertIn("no netFLEX-CORE", detail)
+
+    def test_evaluate_passes_target_fact(self):
+        c = {"name": "target-newer", "kind": "target_newer", "hard": True, "params": {}}
+        r = checks.evaluate(self.host(patch="5.4.0.36"), c, "preflight", facts={"target": self.TARGET})
+        self.assertTrue(r["passed"])
+        r = checks.evaluate(self.host(patch="5.4.0.36"), c, "preflight")
+        self.assertFalse(r["passed"])
+        rs = checks.run_checks(self.host(patch="5.4.0.36"), [dict(c, when="preflight", phase="stage")],
+                               "preflight", "stage", facts={"target": self.TARGET})
+        self.assertTrue(rs[0]["passed"])
+
+    def test_shipped_checks(self):
+        lst = checks.load_checks(os.path.join(os.path.dirname(checks.__file__), "checks.default.json"))
+        by = dict((c["name"], c) for c in lst)
+        t, m = by["target-newer"], by["rpm-matches-load"]
+        self.assertEqual((t["kind"], t["when"], t["phase"], t["fail_text"], t.get("hard")),
+                         ("target_newer", "preflight", "stage", "ERROR", True))
+        self.assertEqual((m["kind"], m["when"], m["phase"], m["fail_text"], m.get("hard", False)),
+                         ("rpm_matches_load", "preflight", "stage", "ERROR", False))

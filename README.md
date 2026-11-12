@@ -199,6 +199,20 @@ completed (state `swidone`); before that the area says *Runs after an upgrade
 completes on this host.* (A failed upgrade stops short of `swidone`: see the
 progress strip and the Log tab.)
 
+Two Stage checks guard the version the stage upgrades from. `nf_upgrade` takes
+it from the last `netFLEX-CORE` record in the RPM database (raised by a PATCH of
+the same generic), so a record left by a failed or cleaned-up stage makes it
+upgrade "from" the target and silently skip the database retrofits.
+
+- **target-newer** (hard: never overridable) computes that version exactly as
+  `nf_upgrade` will and requires the saved config's `NEW_GENERIC`.`NEW_LOAD` to
+  be newer.
+- **rpm-matches-load** (overridable with a reason) requires a single
+  `netFLEX-CORE` record matching the load `/usr/cnc` points to (`inc5.4.0.29` or
+  `inc5.4.029` style names). On failure it prints the
+  `rpm -e --justdb --noscripts netFLEX-CORE-…` command for the leftover record;
+  the tool never edits the RPM database itself.
+
 ### Pre-flight Fix buttons and EPEL packages
 
 A failed pre-flight check whose problem the tool knows how to correct gets a

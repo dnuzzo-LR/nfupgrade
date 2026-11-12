@@ -107,6 +107,111 @@ def _staged_present(host, p):
     return (r.rc == 0 and bool(r.out.strip())), r.out.strip() or "no staged load"
 
 
+def _rpm_qi_versions(host, pkg):
+    """Each value `rpm -qi <pkg> | grep Version | cut -d':' -f2 | xargs` yields,
+    in order (nf_upgrade then takes `tail -1`)."""
+    out = []
+    for line in host.run(["rpm", "-qi", pkg]).out.splitlines():
+        if "Version" in line:
+            parts = line.split(":")
+            out.append(" ".join((parts[1] if len(parts) > 1 else line).split()))
+    return out
+
+
+def _is_netflex(host):
+    return host.run(["test", "-f", "/usr/cnc/features/netFLEX"]).rc == 0
+
+
+def _cut_generic_load(rev, netflex):
+    """nf_upgrade's cuts: netFLEX -c1-5 / -c7-8, INC -c1-4 / -c6-7."""
+    if netflex:
+        return rev[0:5], rev[6:8]
+    return rev[0:4], rev[5:7]
+
+
+def upgrade_from_version(host):
+    """The (generic, load) nf_upgrade's process_current_release will upgrade
+    from, computed the same way: the last netFLEX-CORE rpm record, its load
+    raised by a PATCH/IPATCH of the same generic. None if no CORE record.
+    nf_upgrade must stay identical to netFLEX's, so the tool predicts it here
+    rather than fixing it there (2026-11-11 test, finding #1)."""
+    core = _rpm_qi_versions(host, "netFLEX-CORE")
+    if not core:
+        return None
+    netflex = _is_netflex(host)
+    gen, load = _cut_generic_load(core[-1], netflex)
+    for pkg in ("netFLEX-CORE-PATCH", "netFLEX-CORE-IPATCH"):
+        revs = _rpm_qi_versions(host, pkg)
+        if not revs:
+            continue
+        rgen, rload = _cut_generic_load(revs[-1], netflex)
+        try:
+            if rgen == gen and int(rload) > int(load):
+                load = rload
+        except ValueError:                 # ksh's -gt errors and leaves OLD_LOAD
+            pass
+    return gen, load
+
+
+def _version_key(gen, load):
+    return tuple(int(x) for x in gen.split(".")) + (int(load),)
+
+
+def _target_newer(host, p):
+    """Stage pre-flight (hard): the target must be newer than the version
+    nf_upgrade will upgrade from. Equal means it would skip the retrofits."""
+    t = p.get("target") or {}
+    ngen, nload = (t.get("generic") or "").strip(), (t.get("load") or "").strip()
+    if not ngen or not nload:
+        return False, "no target version: save the stage configuration (NEW_GENERIC, NEW_LOAD) first"
+    cur = upgrade_from_version(host)
+    if cur is None:
+        return False, "cannot read the installed netFLEX-CORE version (rpm -qi netFLEX-CORE)"
+    ogen, oload = cur
+    old, new = "{}.{}".format(ogen, oload), "{}.{}".format(ngen, nload)
+    try:
+        newer = _version_key(ngen, nload) > _version_key(ogen, oload)
+    except ValueError:
+        return False, "cannot compare installed {} with target {}".format(old, new)
+    if newer:
+        return True, "stage upgrades from {} to {}".format(old, new)
+    return False, ("stage would upgrade from {} to {}: the target is not newer, and nf_upgrade "
+                   "would skip the database retrofits. netFLEX-CORE in the RPM database: {}"
+                   .format(old, new, ", ".join(_rpm_qi_versions(host, "netFLEX-CORE"))))
+
+
+def _rpm_matches_load(host, p):
+    """Stage pre-flight: the netFLEX-CORE rpm record(s) must be the running
+    load /usr/cnc points to. A record left by a failed or cleaned-up stage
+    makes nf_upgrade compute the wrong from-version and skip retrofits.
+    Overridable: load directory names are matched by convention only."""
+    recs = [l.strip() for l in host.run(
+        ["rpm", "-q", "--qf", "%{VERSION}-%{RELEASE}\\n", "netFLEX-CORE"]).out.splitlines() if l.strip()]
+    core = _rpm_qi_versions(host, "netFLEX-CORE")
+    if not core or not recs:
+        return False, "no netFLEX-CORE in the RPM database"
+    link = host.run(["readlink", "/usr/cnc"]).out.strip()
+    name = link.rstrip("/").rsplit("/", 1)[-1]
+    netflex = _is_netflex(host)
+
+    def is_running(ver):
+        g, l = _cut_generic_load(ver, netflex)
+        return bool(link) and name in ("inc" + g + l, "inc" + g + "." + l)
+
+    problems = []
+    if len(core) > 1:
+        problems.append("the RPM database lists {} netFLEX-CORE records ({}); nf_upgrade reads "
+                        "the last".format(len(core), ", ".join(core)))
+    if not is_running(core[-1]):
+        problems.append("netFLEX-CORE {} is not the running load {}".format(core[-1], link or "(no /usr/cnc link)"))
+    if not problems:
+        return True, "netFLEX-CORE {} = {}".format(core[-1], link)
+    stale = [r for r in recs if not is_running(r.rsplit("-", 1)[0])]
+    hint = ("if left from an earlier stage, remove the record: " +
+            "; ".join("rpm -e --justdb --noscripts netFLEX-CORE-" + r for r in stale)) if stale else ""
+    return False, "; ".join(problems + ([hint] if hint else []))
+
+
 def _touchfile_name_ok(name):
     """A touchfile is a plain name directly under /usr/cnc/features."""
     return bool(name) and "/" not in name and name not in (".", "..")
@@ -358,7 +463,13 @@ KINDS = {
     "netflex_absent": _netflex_absent,
     "mountpoint": _mountpoint,
     "path_mode": _path_mode,
+    "target_newer": _target_newer,
+    "rpm_matches_load": _rpm_matches_load,
 }
+
+# Kinds that read facts the API supplies (the saved config's target version)
+# rather than anything on the box; evaluate() merges facts into their params.
+FACT_KINDS = ("target_newer",)
 
 
 # --- fixes (ported from nf-install system_checks fix_*; the service runs as root) ---
@@ -702,17 +813,21 @@ def _captured_output(runs):
     return text
 
 
-def evaluate(host, c, when):
+def evaluate(host, c, when, facts=None):
     """Run one check definition; returns its result dict:
     {name, category, description, severity, passed, detail, blocking, fix, output}.
-    output is the captured command output, filled only when the check failed."""
+    output is the captured command output, filled only when the check failed.
+    facts (e.g. {"target": {"generic", "load"}}) reach FACT_KINDS only."""
     rec = _RecordingHost(host)
     kind = KINDS.get(c["kind"])
+    params = c.get("params", {})
+    if c["kind"] in FACT_KINDS:
+        params = dict(params, **(facts or {}))
     if kind is None:
         passed, detail = False, "unknown kind: {}".format(c["kind"])
     else:
         try:
-            passed, detail = kind(rec, c.get("params", {}))
+            passed, detail = kind(rec, params)
         except Exception as e:                       # a check must never crash the run
             passed, detail = False, "check error: {}".format(e)
     severity = c.get("fail_text", "ERROR")
@@ -731,9 +846,10 @@ def evaluate(host, c, when):
     }
 
 
-def run_checks(host, check_list, when, phase, machtype=None):
+def run_checks(host, check_list, when, phase, machtype=None, facts=None):
     """Evaluate every check bound to (when, phase, machtype)."""
-    return [evaluate(host, c, when) for c in check_list if _applies(c, when, phase, machtype)]
+    return [evaluate(host, c, when, facts) for c in check_list
+            if _applies(c, when, phase, machtype)]
 
 
 def find_check(check_list, name, when, phase, machtype=None):

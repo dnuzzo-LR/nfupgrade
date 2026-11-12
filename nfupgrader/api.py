@@ -117,6 +117,21 @@ def upgrade_logdir(ctx):
     return ctx.inclogdir
 
 
+def check_facts(ctx):
+    """Facts the checks cannot read off the box: the target version from the
+    active config (target-newer). target is None without a readable config."""
+    path = active_config(ctx)
+    if path:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                values = cfg.parse_cfg(fh.read())
+            return {"target": {"generic": values.get("NEW_GENERIC", "").strip(),
+                               "load": values.get("NEW_LOAD", "").strip()}}
+        except (IOError, OSError):
+            pass
+    return {"target": None}
+
+
 def _plain_abs_path(value):
     """True for an absolute path the shell would not expand ($VAR, `cmd`)."""
     return value.startswith("/") and "$" not in value and "`" not in value
@@ -785,7 +800,8 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
             # post-install (no "upgrade just finished" style re-checks exist yet).
             results = checks.install_postflight(ctx.host, _load_checks(ctx))
         else:
-            results = checks.run_checks(ctx.host, _load_checks(ctx), when, phase, _machtype(ctx))
+            results = checks.run_checks(ctx.host, _load_checks(ctx), when, phase, _machtype(ctx),
+                                        facts=check_facts(ctx))
         return _json(200, {"results": results, "blocking": checks.blocking_failures(results)})
 
     if path == "/api/config/fields" and method == "GET":
@@ -1026,7 +1042,8 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         if mode == "install":
             action = ("resume" if installstate.unfinished(ctx.hostname, upgrade_logdir(ctx))
                       else "install")
-        results = checks.run_checks(ctx.host, _load_checks(ctx), "preflight", mode, _machtype(ctx))
+        results = checks.run_checks(ctx.host, _load_checks(ctx), "preflight", mode, _machtype(ctx),
+                                    facts=check_facts(ctx))
         if action == "resume":
             # Resuming skips the fresh-install-only hard preconditions (e.g.
             # "netFLEX not already installed" -- resuming an install that got
@@ -1036,7 +1053,9 @@ def dispatch(method, path, query, body, cookies, client_ip, ctx):
         if hard:
             # Hard failures are a stop, not a blocking check: never
             # overridable, regardless of what the caller passed.
-            return _json(409, {"error": "fresh-install precondition failed", "hard": hard})
+            return _json(409, {"error": ("fresh-install precondition failed" if mode == "install"
+                                         else "a pre-flight check that cannot be overridden failed"),
+                               "hard": hard})
         blocking = checks.blocking_failures(results)
         # Every blocking failure must be overridden by name; names for checks
         # that now pass (or never existed) are simply ignored.

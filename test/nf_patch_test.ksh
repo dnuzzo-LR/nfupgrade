@@ -467,7 +467,12 @@ assert_eq    "web ok: rpm ran" 1 "$(uvh_calls)"
 # trace before finishing.
 LWEB_LIVE='echo "step one"
 echo "   indented"
-if grep "EXEC  \[lwebsetup\] step one" "${NFT_SB}"/logs/patch_inc_h1.* > /dev/null; then echo "seen live"; else echo "not live"; fi
+i=0; seen="not live"
+while [ $i -lt 50 ]; do
+  if grep "EXEC  \[lwebsetup\] step one" "${NFT_SB}"/logs/patch_inc_h1.* > /dev/null; then seen="seen live"; break; fi
+  sleep 0.1; i=$((i+1))
+done
+echo "${seen}"
 '"${LWEB_OK}"
 setup; websetup
 f29=$(patchfile 5.4.1.29)
